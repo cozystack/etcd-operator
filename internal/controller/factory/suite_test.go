@@ -45,7 +45,10 @@ import (
 
 var cfg *rest.Config
 var k8sClient client.Client
+<<<<<<< HEAD
 
+=======
+>>>>>>> 641ff74 (move reconcileOwnedResource to reconcile utils)
 // var clientWithEmptyScheme client.Client
 var testEnv *envtest.Environment
 

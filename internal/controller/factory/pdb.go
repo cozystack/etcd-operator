@@ -37,10 +37,13 @@ func GetPdb(
 ) (*v1.PodDisruptionBudget, error) {
 	var err error
 
+<<<<<<< HEAD
 	if cluster.Spec.PodDisruptionBudgetTemplate == nil {
 		return nil, fmt.Errorf("can't get pdb - PodDisruptionBudgetTemplate is nil")
 	}
 
+=======
+>>>>>>> 641ff74 (move reconcileOwnedResource to reconcile utils)
 	pdb := &v1.PodDisruptionBudget{
 		ObjectMeta: metav1.ObjectMeta{
 			Namespace: cluster.Namespace,

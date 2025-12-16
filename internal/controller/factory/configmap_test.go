@@ -63,6 +63,7 @@ var _ = Describe("ClusterStateConfigMap factory", func() {
 			Eventually(Get(&etcdcluster)).Should(Succeed())
 			DeferCleanup(k8sClient.Delete, &etcdcluster)
 		})
+<<<<<<< HEAD
 
 		It("should successfully create the configmap object", func() {
 			By("processing new etcd cluster", func() {
@@ -112,6 +113,16 @@ var _ = Describe("ClusterStateConfigMap factory", func() {
 			Expect(err).ShouldNot(HaveOccurred())
 			Expect(configMapObj).NotTo(BeNil())
 			Expect(configMapObj.Data["ETCD_INITIAL_CLUSTER_STATE"]).To(Equal("existing"))
+=======
+
+		It("should successfully create the configmap object", func() {
+			By("processing new etcd cluster", func() {
+			 	configMapObj, err := GetClusterStateConfigMap(ctx, &etcdcluster, k8sClient)
+				Expect(err).ShouldNot(HaveOccurred())
+				Expect(configMapObj).NotTo(BeNil())
+				Expect(configMapObj.Data["ETCD_INITIAL_CLUSTER_STATE"]).To(Equal("new"))
+			})
+>>>>>>> 641ff74 (move reconcileOwnedResource to reconcile utils)
 		})
 	})
 })

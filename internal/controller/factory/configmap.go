@@ -72,9 +72,13 @@ func TemplateClusterStateConfigMap(
 
 	initialClusterMembers := make([]string, replicas)
 	clusterService := fmt.Sprintf(
+<<<<<<< HEAD
 		"%s.%s.svc:2380",
 		GetHeadlessServiceName(cluster), cluster.Namespace)
 
+=======
+		"%s.%s.svc:2380", GetHeadlessServiceName(cluster), cluster.Namespace)
+>>>>>>> 641ff74 (move reconcileOwnedResource to reconcile utils)
 	for i := 0; i < replicas; i++ {
 		podName := fmt.Sprintf("%s-%d", cluster.Name, i)
 		initialClusterMembers[i] = fmt.Sprintf("%s=https://%s.%s",
