@@ -112,7 +112,12 @@ func CreateOrUpdateClientService(
 	return reconcileOwnedResource(ctx, rclient, svc)
 }
 
-func PVCs(ctx context.Context, cluster *etcdaenixiov1alpha1.EtcdCluster, cli client.Client) ([]corev1.PersistentVolumeClaim, error) {
+//nolint:unused
+func GetPersistentVolumeClaims(
+	ctx context.Context,
+	cluster *etcdaenixiov1alpha1.EtcdCluster,
+	cli client.Client,
+) ([]corev1.PersistentVolumeClaim, error) {
 	labels := factory.PVCLabels(cluster)
 	pvcs := corev1.PersistentVolumeClaimList{}
 	err := cli.List(ctx, &pvcs, client.MatchingLabels(labels))
