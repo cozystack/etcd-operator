@@ -308,9 +308,9 @@ var _ = Describe("Create services handlers", func() {
 					SessionAffinity: corev1.ServiceAffinityClientIP,
 					Ports: []corev1.ServicePort{
 						{
-							Name:       "client",
-							Port:       12379,
-							TargetPort: intstr.FromInt32(2379),
+							Name:     "customport",
+							Port:     1234,
+							Protocol: corev1.ProtocolUDP,
 						},
 					},
 				},
@@ -320,8 +320,27 @@ var _ = Describe("Create services handlers", func() {
 			svc, err := GetClientService(ctx, &etcdcluster, k8sClient)
 			Expect(err).ShouldNot(HaveOccurred())
 
-			Expect(svc.Spec.SessionAffinity).To(Equal(corev1.ServiceAffinityClientIP))
-			Expect(svc.Spec.Ports).To(HaveLen(2))
+			Eventually(Object(svc)).Should(SatisfyAll(
+				HaveField("Spec.Type", Equal(corev1.ServiceTypeLoadBalancer)),
+				HaveField("Spec.LoadBalancerClass", Equal(ptr.To("someClass"))),
+				HaveField("Spec.Ports", SatisfyAll(
+					ContainElements(SatisfyAll(
+						HaveField("Name", Equal("client")),
+						HaveField("Port", Equal(int32(2379))),
+						HaveField("Protocol", Equal(corev1.ProtocolTCP)),
+					)),
+					ContainElements(SatisfyAll(
+						HaveField("Name", Equal("metrics")),
+						HaveField("Port", Equal(int32(2381))),
+						HaveField("Protocol", Equal(corev1.ProtocolTCP)),
+					)),
+					ContainElements(SatisfyAll(
+						HaveField("Name", Equal("customport")),
+						HaveField("Port", Equal(int32(1234))),
+						HaveField("Protocol", Equal(corev1.ProtocolUDP)),
+					)),
+				)),
+			))
 		})
 
 		It("should use cluster name when template has empty name", func() {
