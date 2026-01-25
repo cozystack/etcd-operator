@@ -17,26 +17,19 @@ limitations under the License.
 package factory
 
 import (
+	appsv1 "k8s.io/api/apps/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/utils/ptr"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
-	. "sigs.k8s.io/controller-runtime/pkg/envtest/komega"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-<<<<<<< HEAD
 	. "sigs.k8s.io/controller-runtime/pkg/envtest/komega"
 
 	etcdaenixiov1alpha1 "github.com/aenix-io/etcd-operator/api/v1alpha1"
 	"github.com/google/uuid"
 	"k8s.io/apimachinery/pkg/types"
-=======
-
-	etcdaenixiov1alpha1 "github.com/aenix-io/etcd-operator/api/v1alpha1"
-	"k8s.io/apimachinery/pkg/types"
-	"github.com/google/uuid"
->>>>>>> 641ff74 (move reconcileOwnedResource to reconcile utils)
 )
 
 var _ = Describe("StatefulSet factory", func() {
@@ -52,23 +45,14 @@ var _ = Describe("StatefulSet factory", func() {
 		DeferCleanup(k8sClient.Delete, ns)
 	})
 
-<<<<<<< HEAD
 	Context("PodLabels", func() {
 		It("should return base labels with custom labels merged", func() {
 			cluster := &etcdaenixiov1alpha1.EtcdCluster{
-=======
-	Context("when create statefulSet", func() {
-		var etcdcluster etcdaenixiov1alpha1.EtcdCluster
-
-		BeforeEach(func() {
-			etcdcluster = etcdaenixiov1alpha1.EtcdCluster{
->>>>>>> 641ff74 (move reconcileOwnedResource to reconcile utils)
 				ObjectMeta: metav1.ObjectMeta{
 					Name: "test-cluster",
 				},
 				Spec: etcdaenixiov1alpha1.EtcdClusterSpec{},
 			}
-<<<<<<< HEAD
 
 			cluster.Spec.PodTemplate.Labels = map[string]string{
 				"custom-label":           "value",
@@ -89,19 +73,6 @@ var _ = Describe("StatefulSet factory", func() {
 			labels := PodLabels(cluster)
 			Expect(labels).Should(HaveLen(3))
 		})
-=======
-			Expect(k8sClient.Create(ctx, &etcdcluster)).Should(Succeed())
-			Eventually(Get(&etcdcluster)).Should(Succeed())
-			DeferCleanup(k8sClient.Delete, &etcdcluster)
-	
-		})
-		It("should successfully create statefulSet object with empty spec", func (){
-			statefulSetObj, err := GetStatefulSet(ctx, &etcdcluster, k8sClient)
-			Expect(err).ShouldNot(HaveOccurred())
-			Expect(statefulSetObj).ShouldNot(BeNil())
-		})
-
->>>>>>> 641ff74 (move reconcileOwnedResource to reconcile utils)
 	})
 
 	Context("GenerateEtcdArgs", func() {

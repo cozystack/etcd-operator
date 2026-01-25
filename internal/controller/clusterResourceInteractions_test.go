@@ -701,13 +701,18 @@ var _ = Describe("CreateOrUpdateConditionalClusterObjects handlers", func() {
 				HaveField("Spec.Type", Equal(corev1.ServiceTypeLoadBalancer)),
 				HaveField("Spec.LoadBalancerClass", Equal(ptr.To("someClass"))),
 				HaveField("Spec.Ports", SatisfyAll(
-					HaveLen(1),
-					HaveEach(SatisfyAll(
-						HaveField("Name", Equal("client")),
-						HaveField("Port", Equal(int32(2379))),
-						HaveField("Protocol", Equal(corev1.ProtocolUDP)),
-					)),
-				)),
+					HaveLen(2),
+					ContainElements(
+						SatisfyAll(
+							HaveField("Name", Equal("client")),
+							HaveField("Port", Equal(int32(2379))),
+							HaveField("Protocol", Equal(corev1.ProtocolUDP))),
+						SatisfyAll(
+							HaveField("Name", Equal("metrics")),
+							HaveField("Port", Equal(int32(2381))),
+							HaveField("Protocol", Equal(corev1.ProtocolTCP)),
+						),
+					))),
 			))
 		})
 

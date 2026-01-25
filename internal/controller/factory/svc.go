@@ -98,11 +98,7 @@ func GetClientService(
 	ctx context.Context,
 	cluster *etcdaenixiov1alpha1.EtcdCluster,
 	rclient client.Client,
-<<<<<<< HEAD
 ) (*corev1.Service, error) {
-=======
-) (*corev1.Service, error)  {
->>>>>>> 641ff74 (move reconcileOwnedResource to reconcile utils)
 	var err error
 
 	svc := corev1.Service{
@@ -141,9 +137,5 @@ func GetClientService(
 		return nil, fmt.Errorf("cannot set controller reference: %w", err)
 	}
 
-<<<<<<< HEAD
 	return &svc, nil
-=======
-	return &svc, nil 
->>>>>>> 641ff74 (move reconcileOwnedResource to reconcile utils)
 }

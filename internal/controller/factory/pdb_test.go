@@ -96,7 +96,6 @@ var _ = Describe("Pdb factory", func() {
 			pdbObj, err := GetPdb(ctx, &etcdcluster, k8sClient)
 			Expect(err).ShouldNot(HaveOccurred())
 			Expect(pdbObj).ShouldNot(BeNil())
-<<<<<<< HEAD
 		})
 	})
 
@@ -235,8 +234,6 @@ var _ = Describe("Pdb factory", func() {
 			pdbObj, err := GetPdb(ctx, &etcdcluster, k8sClient)
 			Expect(err).ShouldNot(HaveOccurred())
 			Expect(pdbObj.Spec.MinAvailable).To(Equal(ptr.To(intstr.FromInt32(1))))
-=======
->>>>>>> 641ff74 (move reconcileOwnedResource to reconcile utils)
 		})
 	})
 })

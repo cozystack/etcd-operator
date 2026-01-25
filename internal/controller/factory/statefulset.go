@@ -46,21 +46,6 @@ func TemplateStatefulSet() *appsv1.StatefulSet {
 	panic("not yet implemented")
 }
 
-<<<<<<< HEAD
-=======
-func PodLabels(cluster *etcdaenixiov1alpha1.EtcdCluster) map[string]string {
-	labels := NewLabelsBuilder().WithName().WithInstance(cluster.Name).WithManagedBy()
-
-	if cluster.Spec.PodTemplate.Labels != nil {
-		for key, value := range cluster.Spec.PodTemplate.Labels {
-			labels[key] = value
-		}
-	}
-
-	return labels
-}
-
->>>>>>> 641ff74 (move reconcileOwnedResource to reconcile utils)
 func GetStatefulSet(
 	ctx context.Context,
 	cluster *etcdaenixiov1alpha1.EtcdCluster,
@@ -147,58 +132,6 @@ func PodLabels(cluster *etcdaenixiov1alpha1.EtcdCluster) map[string]string {
 	return labels
 }
 
-<<<<<<< HEAD
-=======
-func generateVolumeMounts(cluster *etcdaenixiov1alpha1.EtcdCluster) []corev1.VolumeMount {
-
-	volumeMounts := []corev1.VolumeMount{}
-
-	volumeMounts = append(volumeMounts, corev1.VolumeMount{
-		Name:      "data",
-		ReadOnly:  false,
-		MountPath: "/var/run/etcd",
-	})
-
-	if cluster.Spec.Security != nil && cluster.Spec.Security.TLS.PeerSecret != "" {
-		volumeMounts = append(volumeMounts, []corev1.VolumeMount{
-			{
-				Name:      "peer-trusted-ca-certificate",
-				ReadOnly:  true,
-				MountPath: "/etc/etcd/pki/peer/ca",
-			},
-			{
-				Name:      "peer-certificate",
-				ReadOnly:  true,
-				MountPath: "/etc/etcd/pki/peer/cert",
-			},
-		}...)
-	}
-
-	if cluster.Spec.Security != nil && cluster.Spec.Security.TLS.ServerSecret != "" {
-		volumeMounts = append(volumeMounts, []corev1.VolumeMount{
-			{
-				Name:      "server-certificate",
-				ReadOnly:  true,
-				MountPath: "/etc/etcd/pki/server/cert",
-			},
-		}...)
-	}
-
-	if cluster.Spec.Security != nil && cluster.Spec.Security.TLS.ClientSecret != "" {
-
-		volumeMounts = append(volumeMounts, []corev1.VolumeMount{
-			{
-				Name:      "client-trusted-ca-certificate",
-				ReadOnly:  true,
-				MountPath: "/etc/etcd/pki/client/ca",
-			},
-		}...)
-	}
-
-	return volumeMounts
-}
-
->>>>>>> 641ff74 (move reconcileOwnedResource to reconcile utils)
 func GenerateEtcdCommand() []string {
 	return []string{
 		"etcd",

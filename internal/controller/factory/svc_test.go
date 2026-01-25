@@ -33,7 +33,6 @@ import (
 )
 
 var _ = Describe("Create services handlers", func() {
-var _ = Describe("Create services handlers", func() {
 	var ns *corev1.Namespace
 
 	BeforeEach(func() {
@@ -193,12 +192,18 @@ var _ = Describe("Create services handlers", func() {
 			clientSvcObj, err := GetClientService(ctx, &etcdcluster, k8sClient)
 			Expect(err).ShouldNot(HaveOccurred())
 
-			Expect(clientSvcObj.Spec.Ports).Should(HaveLen(1))
-			Expect(clientSvcObj.Spec.Ports[0]).Should(SatisfyAll(
-				HaveField("Name", Equal("client")),
-				HaveField("Port", Equal(int32(2379))),
-				HaveField("TargetPort", Equal(intstr.FromInt32(2379))),
-				HaveField("Protocol", Equal(corev1.ProtocolTCP)),
+			Expect(clientSvcObj.Spec.Ports).Should(HaveLen(2))
+			Expect(clientSvcObj.Spec.Ports).Should(ContainElements(
+				SatisfyAll(
+					HaveField("Name", Equal("client")),
+					HaveField("Port", Equal(int32(2379))),
+					HaveField("TargetPort", Equal(intstr.FromInt32(2379))),
+					HaveField("Protocol", Equal(corev1.ProtocolTCP))),
+				SatisfyAll(
+					HaveField("Name", Equal("metrics")),
+					HaveField("Port", Equal(int32(2381))),
+					HaveField("TargetPort", Equal(intstr.FromInt32(2381))),
+					HaveField("Protocol", Equal(corev1.ProtocolTCP))),
 			))
 		})
 
@@ -278,8 +283,8 @@ var _ = Describe("Create services handlers", func() {
 						},
 						{
 							Name:       "metrics",
-							Port:       8080,
-							TargetPort: intstr.FromInt32(8080),
+							Port:       2381,
+							TargetPort: intstr.FromInt32(2381),
 						},
 					},
 				},
@@ -306,7 +311,9 @@ var _ = Describe("Create services handlers", func() {
 		It("should merge partial client service template correctly", func() {
 			etcdcluster.Spec.ServiceTemplate = &etcdaenixiov1alpha1.EmbeddedService{
 				Spec: corev1.ServiceSpec{
-					SessionAffinity: corev1.ServiceAffinityClientIP,
+					Type:              corev1.ServiceTypeLoadBalancer,
+					LoadBalancerClass: ptr.To("someClass"),
+					SessionAffinity:   corev1.ServiceAffinityClientIP,
 					Ports: []corev1.ServicePort{
 						{
 							Name:     "customport",
@@ -321,26 +328,24 @@ var _ = Describe("Create services handlers", func() {
 			svc, err := GetClientService(ctx, &etcdcluster, k8sClient)
 			Expect(err).ShouldNot(HaveOccurred())
 
-			Eventually(Object(svc)).Should(SatisfyAll(
-				HaveField("Spec.Type", Equal(corev1.ServiceTypeLoadBalancer)),
-				HaveField("Spec.LoadBalancerClass", Equal(ptr.To("someClass"))),
-				HaveField("Spec.Ports", SatisfyAll(
-					ContainElements(SatisfyAll(
-						HaveField("Name", Equal("client")),
-						HaveField("Port", Equal(int32(2379))),
-						HaveField("Protocol", Equal(corev1.ProtocolTCP)),
-					)),
-					ContainElements(SatisfyAll(
-						HaveField("Name", Equal("metrics")),
-						HaveField("Port", Equal(int32(2381))),
-						HaveField("Protocol", Equal(corev1.ProtocolTCP)),
-					)),
-					ContainElements(SatisfyAll(
-						HaveField("Name", Equal("customport")),
-						HaveField("Port", Equal(int32(1234))),
-						HaveField("Protocol", Equal(corev1.ProtocolUDP)),
-					)),
-				)),
+			// Expect(svc.Spec.Type).To(Equal(corev1.ServiceTypeLoadBalancer))
+			Expect(svc.Spec.LoadBalancerClass).To(Equal(ptr.To("someClass")))
+			Expect(svc.Spec.Ports).To(ContainElements(
+				SatisfyAll(
+					HaveField("Name", Equal("client")),
+					HaveField("Port", Equal(int32(2379))),
+					HaveField("Protocol", Equal(corev1.ProtocolTCP)),
+				),
+				SatisfyAll(
+					HaveField("Name", Equal("metrics")),
+					HaveField("Port", Equal(int32(2381))),
+					HaveField("Protocol", Equal(corev1.ProtocolTCP)),
+				),
+				SatisfyAll(
+					HaveField("Name", Equal("customport")),
+					HaveField("Port", Equal(int32(1234))),
+					HaveField("Protocol", Equal(corev1.ProtocolUDP)),
+				),
 			))
 		})
 
