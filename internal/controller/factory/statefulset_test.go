@@ -375,7 +375,7 @@ var _ = Describe("StatefulSet factory", func() {
 				},
 			}
 			Expect(k8sClient.Create(ctx, cluster)).Should(Succeed())
-			defer k8sClient.Delete(ctx, cluster)
+			DeferCleanup(k8sClient.Delete, cluster)
 
 			statefulSet, err := GetStatefulSet(ctx, cluster, k8sClient)
 			Expect(err).ShouldNot(HaveOccurred())
