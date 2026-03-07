@@ -112,6 +112,7 @@ helm-crd-copy: yq kustomize ## Copy CRDs from kustomize to helm-chart
 	@$(eval TMP := $(shell mktemp -d))
 	@$(KUSTOMIZE) build config/default > $(TMP)/manifest.yaml && cd $(TMP) && $(YQ) -s '.kind + "-" + .metadata.name' --no-doc manifest.yaml && cd $(OLDPWD)
 	@mv $(TMP)/CustomResourceDefinition-etcdclusters.etcd.aenix.io charts/etcd-operator/crds/etcd-cluster.yaml
+	@mv $(TMP)/CustomResourceDefinition-etcdbackups.etcd.aenix.io charts/etcd-operator/crds/etcd-backup.yaml
 	@rm -rf $(TMP)
 
 ##@ Build
@@ -119,6 +120,11 @@ helm-crd-copy: yq kustomize ## Copy CRDs from kustomize to helm-chart
 .PHONY: build
 build: manifests generate fmt vet ## Build manager binary.
 	go build -o bin/manager cmd/manager/main.go
+	go build -o bin/backup-agent cmd/backup-agent/main.go
+
+.PHONY: build-backup-agent
+build-backup-agent: ## Build backup-agent binary.
+	go build -o bin/backup-agent cmd/backup-agent/main.go
 
 build-plugin:
 	go build -o bin/kubectl-etcd cmd/kubectl-etcd/main.go
