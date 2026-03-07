@@ -115,9 +115,21 @@ func main() {
 		log.Error(ctx, err, "unable to create controller", "controller", "EtcdCluster")
 		os.Exit(1)
 	}
+	if err = (&controller.EtcdBackupReconciler{
+		Client:        mgr.GetClient(),
+		Scheme:        mgr.GetScheme(),
+		OperatorImage: os.Getenv("OPERATOR_IMAGE"),
+	}).SetupWithManager(mgr); err != nil {
+		log.Error(ctx, err, "unable to create controller", "controller", "EtcdBackup")
+		os.Exit(1)
+	}
 	if !flags.DisableWebhooks {
 		if err = (&etcdaenixiov1alpha1.EtcdCluster{}).SetupWebhookWithManager(mgr); err != nil {
 			log.Error(ctx, err, "unable to create webhook", "webhook", "EtcdCluster")
+			os.Exit(1)
+		}
+		if err = (&etcdaenixiov1alpha1.EtcdBackup{}).SetupWebhookWithManager(mgr); err != nil {
+			log.Error(ctx, err, "unable to create webhook", "webhook", "EtcdBackup")
 			os.Exit(1)
 		}
 	}
