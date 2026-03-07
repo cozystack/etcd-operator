@@ -145,15 +145,14 @@ func uploadToS3(ctx context.Context, reader io.Reader) error {
 		Credentials: credentials.NewStaticCredentialsProvider(accessKey, secretKey, ""),
 	}
 
-	var s3Client *s3.Client
-	if endpoint != "" {
-		s3Client = s3.NewFromConfig(cfg, func(o *s3.Options) {
+	s3Client := s3.NewFromConfig(cfg, func(o *s3.Options) {
+		if endpoint != "" {
 			o.BaseEndpoint = aws.String(endpoint)
+		}
+		if os.Getenv("S3_FORCE_PATH_STYLE") == "true" {
 			o.UsePathStyle = true
-		})
-	} else {
-		s3Client = s3.NewFromConfig(cfg)
-	}
+		}
+	})
 
 	fmt.Printf("uploading snapshot to s3://%s/%s\n", bucket, key)
 	_, err := s3Client.PutObject(ctx, &s3.PutObjectInput{

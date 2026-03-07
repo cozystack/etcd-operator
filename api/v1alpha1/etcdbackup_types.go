@@ -58,6 +58,11 @@ type S3BackupDestination struct {
 	// Region is the AWS region for the S3 bucket.
 	// +optional
 	Region string `json:"region,omitempty"`
+	// ForcePathStyle forces path-style S3 URLs (e.g., endpoint/bucket/key)
+	// instead of virtual-hosted-style (e.g., bucket.endpoint/key).
+	// Most S3-compatible providers (MinIO, Ceph) require path style.
+	// +optional
+	ForcePathStyle bool `json:"forcePathStyle,omitempty"`
 }
 
 // PVCBackupDestination defines a PersistentVolumeClaim as the backup target.

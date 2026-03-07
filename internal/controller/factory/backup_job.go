@@ -101,12 +101,17 @@ func CreateBackupJob(
 	}
 
 	if s3 := backup.Spec.Destination.S3; s3 != nil {
+		forcePathStyle := "false"
+		if s3.ForcePathStyle {
+			forcePathStyle = "true"
+		}
 		envVars = append(envVars,
 			corev1.EnvVar{Name: "BACKUP_DESTINATION", Value: "s3"},
 			corev1.EnvVar{Name: "S3_ENDPOINT", Value: s3.Endpoint},
 			corev1.EnvVar{Name: "S3_BUCKET", Value: s3.Bucket},
 			corev1.EnvVar{Name: "S3_KEY", Value: s3.Key},
 			corev1.EnvVar{Name: "S3_REGION", Value: s3.Region},
+			corev1.EnvVar{Name: "S3_FORCE_PATH_STYLE", Value: forcePathStyle},
 			corev1.EnvVar{
 				Name: "AWS_ACCESS_KEY_ID",
 				ValueFrom: &corev1.EnvVarSource{
@@ -129,7 +134,7 @@ func CreateBackupJob(
 	}
 
 	if pvc := backup.Spec.Destination.PVC; pvc != nil {
-		backupPath := "/backup/data/snapshot.db"
+		backupPath := fmt.Sprintf("/backup/data/%s.db", backup.Name)
 		if pvc.SubPath != "" {
 			backupPath = fmt.Sprintf("/backup/data/%s", pvc.SubPath)
 		}

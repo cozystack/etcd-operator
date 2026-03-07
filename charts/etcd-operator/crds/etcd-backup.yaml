@@ -106,6 +106,12 @@ spec:
                         description: Endpoint is the S3-compatible endpoint URL (e.g.,
                           "https://s3.amazonaws.com").
                         type: string
+                      forcePathStyle:
+                        description: |-
+                          ForcePathStyle forces path-style S3 URLs (e.g., endpoint/bucket/key)
+                          instead of virtual-hosted-style (e.g., bucket.endpoint/key).
+                          Most S3-compatible providers (MinIO, Ceph) require path style.
+                        type: boolean
                       key:
                         description: Key is the object key (path) within the bucket.
                         type: string
