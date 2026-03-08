@@ -45,6 +45,7 @@ func CreateBackupJob(
 	labels["etcd.aenix.io/etcdbackup-name"] = backup.Name
 
 	var backoffLimit int32
+	var ttl int32 = 600
 	container, volumes := buildBackupContainer(backup.Name, backup.Spec.Destination, cluster, operatorImage)
 
 	job := &batchv1.Job{
@@ -54,7 +55,8 @@ func CreateBackupJob(
 			Labels:    labels,
 		},
 		Spec: batchv1.JobSpec{
-			BackoffLimit: &backoffLimit,
+			BackoffLimit:            &backoffLimit,
+			TTLSecondsAfterFinished: &ttl,
 			Template: corev1.PodTemplateSpec{
 				ObjectMeta: metav1.ObjectMeta{
 					Labels: labels,

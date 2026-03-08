@@ -75,6 +75,9 @@ func TestCreateBackupJob_PVC(t *testing.T) {
 	if *job.Spec.BackoffLimit != 0 {
 		t.Errorf("expected backoffLimit 0, got %d", *job.Spec.BackoffLimit)
 	}
+	if job.Spec.TTLSecondsAfterFinished == nil || *job.Spec.TTLSecondsAfterFinished != 600 {
+		t.Errorf("expected TTLSecondsAfterFinished 600, got %v", job.Spec.TTLSecondsAfterFinished)
+	}
 	if job.Spec.Template.Spec.RestartPolicy != corev1.RestartPolicyNever {
 		t.Errorf("expected RestartPolicyNever, got %s", job.Spec.Template.Spec.RestartPolicy)
 	}

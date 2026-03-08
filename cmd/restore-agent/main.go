@@ -172,6 +172,10 @@ func writeSnapshot(reader io.Reader) error {
 		return fmt.Errorf("failed to close snapshot file: %w", err)
 	}
 
+	if written == 0 {
+		return fmt.Errorf("downloaded snapshot is empty (0 bytes)")
+	}
+
 	fmt.Printf("snapshot downloaded successfully (%d bytes) to %s\n", written, snapshotPath)
 	return nil
 }

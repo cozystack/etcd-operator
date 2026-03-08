@@ -19,6 +19,7 @@ package main
 import (
 	"context"
 	"crypto/tls"
+	"fmt"
 	"os"
 	"syscall"
 
@@ -110,7 +111,7 @@ func main() {
 
 	operatorImage := os.Getenv("OPERATOR_IMAGE")
 	if operatorImage == "" {
-		log.Error(ctx, nil, "OPERATOR_IMAGE environment variable is required but not set")
+		log.Error(ctx, fmt.Errorf("OPERATOR_IMAGE is not set"), "OPERATOR_IMAGE environment variable is required")
 		os.Exit(1)
 	}
 
