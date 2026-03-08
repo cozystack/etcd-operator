@@ -27,7 +27,10 @@ import (
 func TestGetTimeout_Default(t *testing.T) {
 	t.Setenv("RESTORE_TIMEOUT_MINUTES", "")
 
-	d := getTimeout()
+	d, err := getTimeout()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 	if d != 10*time.Minute {
 		t.Errorf("expected 10m default, got %v", d)
 	}
@@ -36,7 +39,10 @@ func TestGetTimeout_Default(t *testing.T) {
 func TestGetTimeout_Custom(t *testing.T) {
 	t.Setenv("RESTORE_TIMEOUT_MINUTES", "30")
 
-	d := getTimeout()
+	d, err := getTimeout()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 	if d != 30*time.Minute {
 		t.Errorf("expected 30m, got %v", d)
 	}
@@ -45,18 +51,18 @@ func TestGetTimeout_Custom(t *testing.T) {
 func TestGetTimeout_Invalid(t *testing.T) {
 	t.Setenv("RESTORE_TIMEOUT_MINUTES", "abc")
 
-	d := getTimeout()
-	if d != 10*time.Minute {
-		t.Errorf("expected 10m fallback for invalid value, got %v", d)
+	_, err := getTimeout()
+	if err == nil {
+		t.Error("expected error for invalid value")
 	}
 }
 
 func TestGetTimeout_Zero(t *testing.T) {
 	t.Setenv("RESTORE_TIMEOUT_MINUTES", "0")
 
-	d := getTimeout()
-	if d != 10*time.Minute {
-		t.Errorf("expected 10m fallback for zero, got %v", d)
+	_, err := getTimeout()
+	if err == nil {
+		t.Error("expected error for zero value")
 	}
 }
 

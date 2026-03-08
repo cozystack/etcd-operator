@@ -68,17 +68,24 @@ func run() error {
 	}
 }
 
-func getTimeout() time.Duration {
-	if v := os.Getenv("RESTORE_TIMEOUT_MINUTES"); v != "" {
-		if mins, err := strconv.Atoi(v); err == nil && mins > 0 {
-			return time.Duration(mins) * time.Minute
-		}
+func getTimeout() (time.Duration, error) {
+	v := os.Getenv("RESTORE_TIMEOUT_MINUTES")
+	if v == "" {
+		return 10 * time.Minute, nil
 	}
-	return 10 * time.Minute
+	mins, err := strconv.Atoi(v)
+	if err != nil || mins <= 0 {
+		return 0, fmt.Errorf("RESTORE_TIMEOUT_MINUTES must be a positive integer, got %q", v)
+	}
+	return time.Duration(mins) * time.Minute, nil
 }
 
 func downloadFromS3() error {
-	ctx, cancel := context.WithTimeout(context.Background(), getTimeout())
+	timeout, err := getTimeout()
+	if err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
 	endpoint := os.Getenv("S3_ENDPOINT")

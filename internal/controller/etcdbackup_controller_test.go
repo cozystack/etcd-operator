@@ -307,6 +307,37 @@ var _ = Describe("EtcdBackup Controller", func() {
 			Expect(volumeNames).To(ContainElement("server-trusted-ca-certificate"))
 		})
 	})
+
+	Context("When OperatorImage is empty", func() {
+		It("Should set Failed condition instead of creating Job", func() {
+			emptyImageReconciler := &EtcdBackupReconciler{
+				Client:        k8sClient,
+				Scheme:        k8sClient.Scheme(),
+				OperatorImage: "",
+			}
+
+			cluster := createTestCluster(ctx, "test-cluster-noimage", nil)
+			backup := createTestPVCBackup(ctx, "test-backup-noimage", cluster.Name)
+
+			result, err := emptyImageReconciler.Reconcile(ctx, ctrl.Request{
+				NamespacedName: types.NamespacedName{Name: backup.Name, Namespace: backup.Namespace},
+			})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.Requeue).To(BeFalse())
+
+			// Verify no Job was created
+			jobName := factory.GetBackupJobName(backup)
+			job := &batchv1.Job{}
+			err = k8sClient.Get(ctx, types.NamespacedName{Name: jobName, Namespace: backup.Namespace}, job)
+			Expect(errors.IsNotFound(err)).To(BeTrue())
+
+			// Verify Failed condition was set
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: backup.Name, Namespace: backup.Namespace}, backup)).To(Succeed())
+			failedCond := meta.FindStatusCondition(backup.Status.Conditions, etcdaenixiov1alpha1.EtcdBackupConditionFailed)
+			Expect(failedCond).NotTo(BeNil())
+			Expect(failedCond.Reason).To(Equal("ConfigurationError"))
+		})
+	})
 })
 
 func createTestCluster(ctx context.Context, name string, security *etcdaenixiov1alpha1.SecuritySpec) *etcdaenixiov1alpha1.EtcdCluster {
