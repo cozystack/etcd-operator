@@ -212,6 +212,43 @@ var _ = Describe("EtcdBackupSchedule Webhook", func() {
 			Expect(err).To(Succeed())
 			Expect(w).To(BeEmpty())
 		})
+		It("Should reject name exceeding 35 characters", func() {
+			schedule := &EtcdBackupSchedule{
+				Spec: EtcdBackupScheduleSpec{
+					ClusterRef: corev1.LocalObjectReference{Name: "my-cluster"},
+					Schedule:   "0 0 * * *",
+					Destination: BackupDestination{
+						PVC: &PVCBackupDestination{
+							ClaimName: "backup-pvc",
+						},
+					},
+				},
+			}
+			schedule.Name = "this-name-is-way-too-long-for-cronjob-suffix"
+			_, err := schedule.ValidateCreate()
+			if Expect(err).To(HaveOccurred()) {
+				statusErr := err.(*errors.StatusError)
+				Expect(statusErr.ErrStatus.Message).To(ContainSubstring("name must be at most 35 characters"))
+			}
+		})
+
+		It("Should admit name at exactly 35 characters", func() {
+			schedule := &EtcdBackupSchedule{
+				Spec: EtcdBackupScheduleSpec{
+					ClusterRef: corev1.LocalObjectReference{Name: "my-cluster"},
+					Schedule:   "0 0 * * *",
+					Destination: BackupDestination{
+						PVC: &PVCBackupDestination{
+							ClaimName: "backup-pvc",
+						},
+					},
+				},
+			}
+			schedule.Name = "abcdefghijklmnopqrstuvwxyz123456789" // exactly 35 chars
+			w, err := schedule.ValidateCreate()
+			Expect(err).To(Succeed())
+			Expect(w).To(BeEmpty())
+		})
 	})
 
 	Context("When updating EtcdBackupSchedule under Validating Webhook", func() {
@@ -225,6 +262,24 @@ var _ = Describe("EtcdBackupSchedule Webhook", func() {
 					},
 				},
 			}
+			oldSchedule := schedule.DeepCopy()
+			schedule.Spec.Schedule = "0 */12 * * *"
+			w, err := schedule.ValidateUpdate(oldSchedule)
+			Expect(err).To(Succeed())
+			Expect(w).To(BeEmpty())
+		})
+
+		It("Should allow update of existing resource with long name", func() {
+			schedule := &EtcdBackupSchedule{
+				Spec: EtcdBackupScheduleSpec{
+					ClusterRef: corev1.LocalObjectReference{Name: "my-cluster"},
+					Schedule:   "0 0 * * *",
+					Destination: BackupDestination{
+						PVC: &PVCBackupDestination{ClaimName: "backup-pvc"},
+					},
+				},
+			}
+			schedule.Name = "this-name-is-way-too-long-for-cronjob-suffix"
 			oldSchedule := schedule.DeepCopy()
 			schedule.Spec.Schedule = "0 */12 * * *"
 			w, err := schedule.ValidateUpdate(oldSchedule)

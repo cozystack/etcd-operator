@@ -52,6 +52,61 @@ func (r *EtcdBackupSchedule) ValidateCreate() (admission.Warnings, error) {
 
 	var allErrors field.ErrorList
 
+	// CronJob name = "{name}-scheduled-backup" (17 char suffix).
+	// CronJob names must be <= 52 chars (63 max Pod name - 11 for Job/Pod suffixes).
+	const cronJobSuffix = "-scheduled-backup"
+	const maxCronJobNameLen = 52
+	maxNameLen := maxCronJobNameLen - len(cronJobSuffix)
+	if len(r.Name) > maxNameLen {
+		allErrors = append(allErrors, field.Invalid(
+			field.NewPath("metadata", "name"),
+			r.Name,
+			fmt.Sprintf("name must be at most %d characters (CronJob name limit is %d, suffix %q is %d characters)",
+				maxNameLen, maxCronJobNameLen, cronJobSuffix, len(cronJobSuffix)),
+		))
+	}
+
+	allErrors = append(allErrors, r.validateSpec()...)
+
+	if len(allErrors) > 0 {
+		return nil, errors.NewInvalid(
+			schema.GroupKind{Group: GroupVersion.Group, Kind: "EtcdBackupSchedule"},
+			r.Name, allErrors)
+	}
+
+	return nil, nil
+}
+
+// ValidateUpdate implements webhook.Validator so a webhook will be registered for the type
+func (r *EtcdBackupSchedule) ValidateUpdate(_ runtime.Object) (admission.Warnings, error) {
+	etcdbackupschedulelog.Info("validate update", "name", r.Name)
+
+	// Schedules are mutable, so re-validate the spec.
+	// Name length is NOT checked here because Kubernetes does not allow
+	// renaming resources, and existing resources with long names (created
+	// before this webhook) must remain updatable.
+	var allErrors field.ErrorList
+	allErrors = append(allErrors, r.validateSpec()...)
+
+	if len(allErrors) > 0 {
+		return nil, errors.NewInvalid(
+			schema.GroupKind{Group: GroupVersion.Group, Kind: "EtcdBackupSchedule"},
+			r.Name, allErrors)
+	}
+
+	return nil, nil
+}
+
+// ValidateDelete implements webhook.Validator so a webhook will be registered for the type
+func (r *EtcdBackupSchedule) ValidateDelete() (admission.Warnings, error) {
+	etcdbackupschedulelog.Info("validate delete", "name", r.Name)
+	return nil, nil
+}
+
+// validateSpec validates the spec fields without checking the resource name.
+func (r *EtcdBackupSchedule) validateSpec() field.ErrorList {
+	var allErrors field.ErrorList
+
 	if r.Spec.ClusterRef.Name == "" {
 		allErrors = append(allErrors, field.Required(
 			field.NewPath("spec", "clusterRef", "name"),
@@ -72,44 +127,8 @@ func (r *EtcdBackupSchedule) ValidateCreate() (admission.Warnings, error) {
 		))
 	}
 
-	// CronJob name = "{name}-scheduled-backup" (17 char suffix).
-	// CronJob names must be <= 52 chars (63 max Pod name - 11 for Job/Pod suffixes).
-	const cronJobSuffix = "-scheduled-backup"
-	const maxCronJobNameLen = 52
-	maxNameLen := maxCronJobNameLen - len(cronJobSuffix)
-	if len(r.Name) > maxNameLen {
-		allErrors = append(allErrors, field.Invalid(
-			field.NewPath("metadata", "name"),
-			r.Name,
-			fmt.Sprintf("name must be at most %d characters (CronJob name limit is %d, suffix %q is %d characters)",
-				maxNameLen, maxCronJobNameLen, cronJobSuffix, len(cronJobSuffix)),
-		))
-	}
-
-	destErrors := r.validateDestination()
-	allErrors = append(allErrors, destErrors...)
-
-	if len(allErrors) > 0 {
-		return nil, errors.NewInvalid(
-			schema.GroupKind{Group: GroupVersion.Group, Kind: "EtcdBackupSchedule"},
-			r.Name, allErrors)
-	}
-
-	return nil, nil
-}
-
-// ValidateUpdate implements webhook.Validator so a webhook will be registered for the type
-func (r *EtcdBackupSchedule) ValidateUpdate(_ runtime.Object) (admission.Warnings, error) {
-	etcdbackupschedulelog.Info("validate update", "name", r.Name)
-
-	// Schedules are mutable, so re-validate the full spec
-	return r.ValidateCreate()
-}
-
-// ValidateDelete implements webhook.Validator so a webhook will be registered for the type
-func (r *EtcdBackupSchedule) ValidateDelete() (admission.Warnings, error) {
-	etcdbackupschedulelog.Info("validate delete", "name", r.Name)
-	return nil, nil
+	allErrors = append(allErrors, r.validateDestination()...)
+	return allErrors
 }
 
 func (r *EtcdBackupSchedule) validateDestination() field.ErrorList {

@@ -203,6 +203,47 @@ var _ = Describe("EtcdBackupSchedule Controller", func() {
 		})
 	})
 
+	Context("When OperatorImage is empty", func() {
+		It("Should set Failed and Ready=false conditions", func() {
+			emptyImageReconciler := &EtcdBackupScheduleReconciler{
+				Client:        k8sClient,
+				Scheme:        k8sClient.Scheme(),
+				OperatorImage: "",
+			}
+
+			cluster := createTestCluster(ctx, scheduleClusterName+"-noimage", nil)
+			schedule := createTestPVCSchedule(ctx, scheduleName+"-noimage", cluster.Name)
+
+			result, err := emptyImageReconciler.Reconcile(ctx, ctrl.Request{
+				NamespacedName: types.NamespacedName{Name: schedule.Name, Namespace: schedule.Namespace},
+			})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.Requeue).To(BeFalse())
+
+			updatedSchedule := &etcdaenixiov1alpha1.EtcdBackupSchedule{}
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: schedule.Name, Namespace: testNamespace}, updatedSchedule)).To(Succeed())
+
+			failedCond := meta.FindStatusCondition(updatedSchedule.Status.Conditions, etcdaenixiov1alpha1.EtcdBackupScheduleConditionFailed)
+			Expect(failedCond).NotTo(BeNil())
+			Expect(failedCond.Status).To(Equal(metav1.ConditionTrue))
+			Expect(failedCond.Reason).To(Equal("ConfigurationError"))
+			Expect(failedCond.Message).To(ContainSubstring("OPERATOR_IMAGE"))
+
+			readyCond := meta.FindStatusCondition(updatedSchedule.Status.Conditions, etcdaenixiov1alpha1.EtcdBackupScheduleConditionReady)
+			Expect(readyCond).NotTo(BeNil())
+			Expect(readyCond.Status).To(Equal(metav1.ConditionFalse))
+
+			// Verify no CronJob was created
+			cronJobList := &batchv1.CronJobList{}
+			Expect(k8sClient.List(ctx, cronJobList, client.InNamespace(testNamespace))).To(Succeed())
+			for _, cj := range cronJobList.Items {
+				Expect(cj.OwnerReferences).NotTo(ContainElement(
+					HaveField("Name", schedule.Name),
+				))
+			}
+		})
+	})
+
 	Context("With TLS-enabled cluster", func() {
 		It("Should create CronJob with TLS volume mounts", func() {
 			security := &etcdaenixiov1alpha1.SecuritySpec{
