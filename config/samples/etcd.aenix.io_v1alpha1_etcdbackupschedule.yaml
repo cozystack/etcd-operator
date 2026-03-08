@@ -1,0 +1,17 @@
+apiVersion: etcd.aenix.io/v1alpha1
+kind: EtcdBackupSchedule
+metadata:
+  labels:
+    app.kubernetes.io/name: etcdbackupschedule
+    app.kubernetes.io/instance: etcdbackupschedule-sample
+    app.kubernetes.io/part-of: etcd-operator
+    app.kubernetes.io/managed-by: kustomize
+    app.kubernetes.io/created-by: etcd-operator
+  name: etcdbackupschedule-sample
+spec:
+  clusterRef:
+    name: etcdcluster-sample
+  schedule: "0 */6 * * *"
+  destination:
+    pvc:
+      claimName: etcd-backup-pvc

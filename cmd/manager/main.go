@@ -123,6 +123,14 @@ func main() {
 		log.Error(ctx, err, "unable to create controller", "controller", "EtcdBackup")
 		os.Exit(1)
 	}
+	if err = (&controller.EtcdBackupScheduleReconciler{
+		Client:        mgr.GetClient(),
+		Scheme:        mgr.GetScheme(),
+		OperatorImage: os.Getenv("OPERATOR_IMAGE"),
+	}).SetupWithManager(mgr); err != nil {
+		log.Error(ctx, err, "unable to create controller", "controller", "EtcdBackupSchedule")
+		os.Exit(1)
+	}
 	if !flags.DisableWebhooks {
 		if err = (&etcdaenixiov1alpha1.EtcdCluster{}).SetupWebhookWithManager(mgr); err != nil {
 			log.Error(ctx, err, "unable to create webhook", "webhook", "EtcdCluster")
@@ -130,6 +138,10 @@ func main() {
 		}
 		if err = (&etcdaenixiov1alpha1.EtcdBackup{}).SetupWebhookWithManager(mgr); err != nil {
 			log.Error(ctx, err, "unable to create webhook", "webhook", "EtcdBackup")
+			os.Exit(1)
+		}
+		if err = (&etcdaenixiov1alpha1.EtcdBackupSchedule{}).SetupWebhookWithManager(mgr); err != nil {
+			log.Error(ctx, err, "unable to create webhook", "webhook", "EtcdBackupSchedule")
 			os.Exit(1)
 		}
 	}

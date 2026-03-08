@@ -119,6 +119,9 @@ var _ = BeforeSuite(func() {
 	err = (&EtcdBackup{}).SetupWebhookWithManager(mgr)
 	Expect(err).NotTo(HaveOccurred())
 
+	err = (&EtcdBackupSchedule{}).SetupWebhookWithManager(mgr)
+	Expect(err).NotTo(HaveOccurred())
+
 	//+kubebuilder:scaffold:webhook
 
 	go func() {

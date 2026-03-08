@@ -45,6 +45,44 @@ func CreateBackupJob(
 	labels["etcd.aenix.io/etcdbackup-name"] = backup.Name
 
 	var backoffLimit int32
+	container, volumes := buildBackupContainer(backup.Name, backup.Spec.Destination, cluster, operatorImage)
+
+	job := &batchv1.Job{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      GetBackupJobName(backup),
+			Namespace: backup.Namespace,
+			Labels:    labels,
+		},
+		Spec: batchv1.JobSpec{
+			BackoffLimit: &backoffLimit,
+			Template: corev1.PodTemplateSpec{
+				ObjectMeta: metav1.ObjectMeta{
+					Labels: labels,
+				},
+				Spec: corev1.PodSpec{
+					RestartPolicy: corev1.RestartPolicyNever,
+					Containers:    []corev1.Container{container},
+					Volumes:       volumes,
+				},
+			},
+		},
+	}
+
+	if err := ctrl.SetControllerReference(backup, job, scheme); err != nil {
+		return nil, fmt.Errorf("cannot set controller reference: %w", err)
+	}
+
+	return job, nil
+}
+
+// buildBackupContainer constructs the backup-agent container and associated volumes
+// for a given backup destination and cluster. This is shared between Job and CronJob creation.
+func buildBackupContainer(
+	backupName string,
+	destination etcdaenixiov1alpha1.BackupDestination,
+	cluster *etcdaenixiov1alpha1.EtcdCluster,
+	operatorImage string,
+) (corev1.Container, []corev1.Volume) {
 	endpoints := buildEndpoints(cluster)
 
 	envVars := []corev1.EnvVar{
@@ -79,9 +117,6 @@ func CreateBackupJob(
 	}
 
 	if cluster.IsServerSecurityEnabled() {
-		// ServerSecret contains ca.crt alongside tls.crt and tls.key.
-		// This matches the convention in etcd_client.go (configFromCluster)
-		// where Root CA is extracted from ServerSecret via parseTLSSecretCA.
 		envVars = append(envVars,
 			corev1.EnvVar{Name: "ETCD_TLS_CA_PATH", Value: "/etc/etcd/pki/server/cert/ca.crt"},
 		)
@@ -100,7 +135,7 @@ func CreateBackupJob(
 		})
 	}
 
-	if s3 := backup.Spec.Destination.S3; s3 != nil {
+	if s3 := destination.S3; s3 != nil {
 		forcePathStyle := "false"
 		if s3.ForcePathStyle {
 			forcePathStyle = "true"
@@ -133,8 +168,8 @@ func CreateBackupJob(
 		)
 	}
 
-	if pvc := backup.Spec.Destination.PVC; pvc != nil {
-		backupPath := fmt.Sprintf("/backup/data/%s.db", backup.Name)
+	if pvc := destination.PVC; pvc != nil {
+		backupPath := fmt.Sprintf("/backup/data/%s.db", backupName)
 		if pvc.SubPath != "" {
 			backupPath = fmt.Sprintf("/backup/data/%s", pvc.SubPath)
 		}
@@ -156,40 +191,15 @@ func CreateBackupJob(
 		})
 	}
 
-	job := &batchv1.Job{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      GetBackupJobName(backup),
-			Namespace: backup.Namespace,
-			Labels:    labels,
-		},
-		Spec: batchv1.JobSpec{
-			BackoffLimit: &backoffLimit,
-			Template: corev1.PodTemplateSpec{
-				ObjectMeta: metav1.ObjectMeta{
-					Labels: labels,
-				},
-				Spec: corev1.PodSpec{
-					RestartPolicy: corev1.RestartPolicyNever,
-					Containers: []corev1.Container{
-						{
-							Name:         "backup-agent",
-							Image:        operatorImage,
-							Command:      []string{"/backup-agent"},
-							Env:          envVars,
-							VolumeMounts: volumeMounts,
-						},
-					},
-					Volumes: volumes,
-				},
-			},
-		},
+	container := corev1.Container{
+		Name:         "backup-agent",
+		Image:        operatorImage,
+		Command:      []string{"/backup-agent"},
+		Env:          envVars,
+		VolumeMounts: volumeMounts,
 	}
 
-	if err := ctrl.SetControllerReference(backup, job, scheme); err != nil {
-		return nil, fmt.Errorf("cannot set controller reference: %w", err)
-	}
-
-	return job, nil
+	return container, volumes
 }
 
 func buildEndpoints(cluster *etcdaenixiov1alpha1.EtcdCluster) string {

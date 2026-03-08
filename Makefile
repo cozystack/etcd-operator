@@ -113,6 +113,7 @@ helm-crd-copy: yq kustomize ## Copy CRDs from kustomize to helm-chart
 	@$(KUSTOMIZE) build config/default > $(TMP)/manifest.yaml && cd $(TMP) && $(YQ) -s '.kind + "-" + .metadata.name' --no-doc manifest.yaml && cd $(OLDPWD)
 	@mv $(TMP)/CustomResourceDefinition-etcdclusters.etcd.aenix.io charts/etcd-operator/crds/etcd-cluster.yaml
 	@mv $(TMP)/CustomResourceDefinition-etcdbackups.etcd.aenix.io charts/etcd-operator/crds/etcd-backup.yaml
+	@mv $(TMP)/CustomResourceDefinition-etcdbackupschedules.etcd.aenix.io charts/etcd-operator/crds/etcd-backup-schedule.yaml
 	@rm -rf $(TMP)
 
 ##@ Build

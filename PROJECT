@@ -33,4 +33,16 @@ resources:
   webhooks:
     validation: true
     webhookVersion: v1
+- api:
+    crdVersion: v1
+    namespaced: true
+  controller: true
+  domain: etcd.aenix.io
+  group: etcd.aenix.io
+  kind: EtcdBackupSchedule
+  path: github.com/aenix-io/etcd-operator/api/v1alpha1
+  version: v1alpha1
+  webhooks:
+    validation: true
+    webhookVersion: v1
 version: "3"
