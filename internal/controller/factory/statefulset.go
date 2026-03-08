@@ -566,7 +566,8 @@ func generateRestoreInitContainers(
 	}
 
 	// Init container 2: restore-datadir (runs etcdutl snapshot restore)
-	restoreScript := fmt.Sprintf(`if [ -d /var/run/etcd/default.etcd/member ]; then
+	restoreScript := fmt.Sprintf(`set -e
+if [ -d /var/run/etcd/default.etcd/member ]; then
   echo "data directory exists, skipping restore";
   exit 0;
 fi;
