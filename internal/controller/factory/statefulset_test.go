@@ -95,7 +95,7 @@ var _ = Describe("CreateOrUpdateStatefulSet handler", func() {
 		})
 
 		It("should successfully ensure the statefulSet with empty spec", func() {
-			Expect(CreateOrUpdateStatefulSet(ctx, &etcdcluster, k8sClient)).To(Succeed())
+			Expect(CreateOrUpdateStatefulSet(ctx, &etcdcluster, k8sClient, "")).To(Succeed())
 			Eventually(Object(&statefulSet)).Should(
 				HaveField("Spec.Replicas", Equal(etcdcluster.Spec.Replicas)),
 			)
@@ -159,7 +159,7 @@ var _ = Describe("CreateOrUpdateStatefulSet handler", func() {
 					ClientSecret:          "client-secret",
 				},
 			}
-			Expect(CreateOrUpdateStatefulSet(ctx, &etcdcluster, k8sClient)).To(Succeed())
+			Expect(CreateOrUpdateStatefulSet(ctx, &etcdcluster, k8sClient, "")).To(Succeed())
 			Eventually(Get(&statefulSet)).Should(Succeed())
 
 			By("Checking the resources", func() {
@@ -321,7 +321,7 @@ var _ = Describe("CreateOrUpdateStatefulSet handler", func() {
 					},
 				},
 			}
-			Expect(CreateOrUpdateStatefulSet(ctx, &etcdcluster, k8sClient)).To(Succeed())
+			Expect(CreateOrUpdateStatefulSet(ctx, &etcdcluster, k8sClient, "")).To(Succeed())
 			Eventually(Get(&statefulSet)).Should(Succeed())
 
 			By("Checking the updated startup probe", func() {
@@ -381,7 +381,7 @@ var _ = Describe("CreateOrUpdateStatefulSet handler", func() {
 					SizeLimit: ptr.To(size),
 				},
 			}
-			Expect(CreateOrUpdateStatefulSet(ctx, &etcdcluster, k8sClient)).To(Succeed())
+			Expect(CreateOrUpdateStatefulSet(ctx, &etcdcluster, k8sClient, "")).To(Succeed())
 			Eventually(Get(&statefulSet)).Should(Succeed())
 
 			By("Checking the emptyDir", func() {
@@ -390,7 +390,7 @@ var _ = Describe("CreateOrUpdateStatefulSet handler", func() {
 		})
 
 		It("should fail on creating the statefulset with invalid owner reference", func() {
-			Expect(CreateOrUpdateStatefulSet(ctx, &etcdcluster, clientWithEmptyScheme)).NotTo(Succeed())
+			Expect(CreateOrUpdateStatefulSet(ctx, &etcdcluster, clientWithEmptyScheme, "")).NotTo(Succeed())
 		})
 	})
 

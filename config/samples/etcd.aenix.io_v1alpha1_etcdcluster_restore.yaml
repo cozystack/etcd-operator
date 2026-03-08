@@ -1,0 +1,18 @@
+apiVersion: etcd.aenix.io/v1alpha1
+kind: EtcdCluster
+metadata:
+  name: restored-cluster
+spec:
+  replicas: 3
+  bootstrap:
+    restore:
+      source:
+        pvc:
+          claimName: my-backup-pvc
+          subPath: my-backup.db
+  storage:
+    volumeClaimTemplate:
+      spec:
+        resources:
+          requests:
+            storage: 4Gi

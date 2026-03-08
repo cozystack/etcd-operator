@@ -62,6 +62,7 @@ func CreateOrUpdateStatefulSet(
 	ctx context.Context,
 	cluster *etcdaenixiov1alpha1.EtcdCluster,
 	rclient client.Client,
+	operatorImage string,
 ) error {
 	podMetadata := metav1.ObjectMeta{
 		Labels: PodLabels(cluster),
@@ -86,9 +87,17 @@ func CreateOrUpdateStatefulSet(
 
 	volumes := generateVolumes(cluster)
 
+	var initContainers []corev1.Container
+	if cluster.Spec.Bootstrap != nil && cluster.Spec.Bootstrap.Restore != nil {
+		restoreInitContainers, restoreVolumes := generateRestoreInitContainers(cluster, operatorImage)
+		initContainers = restoreInitContainers
+		volumes = append(volumes, restoreVolumes...)
+	}
+
 	basePodSpec := corev1.PodSpec{
-		Containers: []corev1.Container{generateContainer(cluster)},
-		Volumes:    volumes,
+		InitContainers: initContainers,
+		Containers:     []corev1.Container{generateContainer(cluster)},
+		Volumes:        volumes,
 	}
 	if cluster.Spec.PodTemplate.Spec.Containers == nil {
 		cluster.Spec.PodTemplate.Spec.Containers = make([]corev1.Container, 0)
@@ -437,6 +446,148 @@ func getLivenessProbe() *corev1.Probe {
 		},
 		PeriodSeconds: 5,
 	}
+}
+
+func generateRestoreInitContainers(
+	cluster *etcdaenixiov1alpha1.EtcdCluster,
+	operatorImage string,
+) ([]corev1.Container, []corev1.Volume) {
+	restore := cluster.Spec.Bootstrap.Restore
+	headlessSvc := GetHeadlessServiceName(cluster)
+
+	podEnv := []corev1.EnvVar{
+		{
+			Name: "POD_NAME",
+			ValueFrom: &corev1.EnvVarSource{
+				FieldRef: &corev1.ObjectFieldSelector{FieldPath: "metadata.name"},
+			},
+		},
+		{
+			Name: "POD_NAMESPACE",
+			ValueFrom: &corev1.EnvVarSource{
+				FieldRef: &corev1.ObjectFieldSelector{FieldPath: "metadata.namespace"},
+			},
+		},
+	}
+
+	// Env vars for the restore-agent init container
+	restoreAgentEnv := []corev1.EnvVar{
+		{Name: "ETCD_DATA_DIR", Value: "/var/run/etcd/default.etcd"},
+	}
+	restoreAgentVolumeMounts := []corev1.VolumeMount{
+		{Name: "data", MountPath: "/var/run/etcd"},
+		{Name: "restore-data", MountPath: "/restore"},
+	}
+
+	var extraVolumes []corev1.Volume
+
+	if s3 := restore.Source.S3; s3 != nil {
+		forcePathStyle := "false"
+		if s3.ForcePathStyle {
+			forcePathStyle = "true"
+		}
+		restoreAgentEnv = append(restoreAgentEnv,
+			corev1.EnvVar{Name: "RESTORE_SOURCE", Value: "s3"},
+			corev1.EnvVar{Name: "S3_ENDPOINT", Value: s3.Endpoint},
+			corev1.EnvVar{Name: "S3_BUCKET", Value: s3.Bucket},
+			corev1.EnvVar{Name: "S3_KEY", Value: s3.Key},
+			corev1.EnvVar{Name: "S3_REGION", Value: s3.Region},
+			corev1.EnvVar{Name: "S3_FORCE_PATH_STYLE", Value: forcePathStyle},
+			corev1.EnvVar{
+				Name: "AWS_ACCESS_KEY_ID",
+				ValueFrom: &corev1.EnvVarSource{
+					SecretKeyRef: &corev1.SecretKeySelector{
+						LocalObjectReference: corev1.LocalObjectReference{Name: s3.CredentialsSecretRef.Name},
+						Key:                  "AWS_ACCESS_KEY_ID",
+					},
+				},
+			},
+			corev1.EnvVar{
+				Name: "AWS_SECRET_ACCESS_KEY",
+				ValueFrom: &corev1.EnvVarSource{
+					SecretKeyRef: &corev1.SecretKeySelector{
+						LocalObjectReference: corev1.LocalObjectReference{Name: s3.CredentialsSecretRef.Name},
+						Key:                  "AWS_SECRET_ACCESS_KEY",
+					},
+				},
+			},
+		)
+	}
+
+	if pvc := restore.Source.PVC; pvc != nil {
+		backupPath := "/backup/data/snapshot.db"
+		if pvc.SubPath != "" {
+			backupPath = fmt.Sprintf("/backup/data/%s", pvc.SubPath)
+		}
+		restoreAgentEnv = append(restoreAgentEnv,
+			corev1.EnvVar{Name: "RESTORE_SOURCE", Value: "pvc"},
+			corev1.EnvVar{Name: "PVC_BACKUP_PATH", Value: backupPath},
+		)
+		extraVolumes = append(extraVolumes, corev1.Volume{
+			Name: "backup-source",
+			VolumeSource: corev1.VolumeSource{
+				PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
+					ClaimName: pvc.ClaimName,
+				},
+			},
+		})
+		restoreAgentVolumeMounts = append(restoreAgentVolumeMounts, corev1.VolumeMount{
+			Name:      "backup-source",
+			ReadOnly:  true,
+			MountPath: "/backup/data",
+		})
+	}
+
+	// restore-data emptyDir shared between the two init containers
+	extraVolumes = append(extraVolumes, corev1.Volume{
+		Name:         "restore-data",
+		VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}},
+	})
+
+	// Init container 1: restore-agent (downloads the snapshot)
+	restoreAgentContainer := corev1.Container{
+		Name:         "restore-agent",
+		Image:        operatorImage,
+		Command:      []string{"/restore-agent"},
+		Env:          restoreAgentEnv,
+		VolumeMounts: restoreAgentVolumeMounts,
+	}
+
+	// Init container 2: restore-datadir (runs etcdutl snapshot restore)
+	restoreScript := fmt.Sprintf(`if [ -d /var/run/etcd/default.etcd/member ]; then
+  echo "data directory exists, skipping restore";
+  exit 0;
+fi;
+etcdutl snapshot restore /restore/snapshot.db \
+  --data-dir=/var/run/etcd/default.etcd \
+  --name=$(POD_NAME) \
+  --initial-cluster=$(ETCD_INITIAL_CLUSTER) \
+  --initial-cluster-token=$(ETCD_INITIAL_CLUSTER_TOKEN) \
+  --initial-advertise-peer-urls=https://$(POD_NAME).%s.$(POD_NAMESPACE).svc:2380`, headlessSvc)
+
+	clusterStateConfigMapName := GetClusterStateConfigMapName(cluster)
+	restoreDatadirContainer := corev1.Container{
+		Name:    "restore-datadir",
+		Image:   etcdaenixiov1alpha1.DefaultEtcdImage,
+		Command: []string{"/bin/sh", "-c"},
+		Args:    []string{restoreScript},
+		Env:     podEnv,
+		EnvFrom: []corev1.EnvFromSource{
+			{
+				ConfigMapRef: &corev1.ConfigMapEnvSource{
+					LocalObjectReference: corev1.LocalObjectReference{
+						Name: clusterStateConfigMapName,
+					},
+				},
+			},
+		},
+		VolumeMounts: []corev1.VolumeMount{
+			{Name: "data", MountPath: "/var/run/etcd"},
+			{Name: "restore-data", MountPath: "/restore"},
+		},
+	}
+
+	return []corev1.Container{restoreAgentContainer, restoreDatadirContainer}, extraVolumes
 }
 
 func GetServerProtocol(cluster *etcdaenixiov1alpha1.EtcdCluster) string {

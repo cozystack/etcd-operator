@@ -57,7 +57,8 @@ const (
 // EtcdClusterReconciler reconciles a EtcdCluster object
 type EtcdClusterReconciler struct {
 	client.Client
-	Scheme *runtime.Scheme
+	Scheme        *runtime.Scheme
+	OperatorImage string
 }
 
 // +kubebuilder:rbac:groups=etcd.aenix.io,resources=etcdclusters,verbs=get;list;watch;create;update;patch;delete
@@ -283,7 +284,7 @@ func (r *EtcdClusterReconciler) ensureConditionalClusterObjects(
 	}
 	log.Debug(ctx, "cluster state configmap reconciled")
 
-	if err := factory.CreateOrUpdateStatefulSet(ctx, cluster, r.Client); err != nil {
+	if err := factory.CreateOrUpdateStatefulSet(ctx, cluster, r.Client, r.OperatorImage); err != nil {
 		log.Error(ctx, err, "reconcile statefulset failed")
 		return err
 	}
