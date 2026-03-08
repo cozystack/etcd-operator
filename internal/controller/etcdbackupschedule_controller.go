@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 	"reflect"
+	"time"
 
 	batchv1 "k8s.io/api/batch/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
@@ -126,20 +127,20 @@ func (r *EtcdBackupScheduleReconciler) Reconcile(ctx context.Context, req ctrl.R
 	if err := r.Get(ctx, clusterKey, cluster); err != nil {
 		if errors.IsNotFound(err) {
 			meta.SetStatusCondition(&schedule.Status.Conditions, metav1.Condition{
-				Type:               etcdaenixiov1alpha1.EtcdBackupScheduleConditionFailed,
-				Status:             metav1.ConditionTrue,
-				Reason:             "ClusterNotFound",
-				Message:            fmt.Sprintf("EtcdCluster %q not found", schedule.Spec.ClusterRef.Name),
-				ObservedGeneration: schedule.Generation,
-			})
-			meta.SetStatusCondition(&schedule.Status.Conditions, metav1.Condition{
 				Type:               etcdaenixiov1alpha1.EtcdBackupScheduleConditionReady,
 				Status:             metav1.ConditionFalse,
 				Reason:             "ClusterNotFound",
-				Message:            fmt.Sprintf("EtcdCluster %q not found", schedule.Spec.ClusterRef.Name),
+				Message:            fmt.Sprintf("EtcdCluster %q not found, will retry", schedule.Spec.ClusterRef.Name),
 				ObservedGeneration: schedule.Generation,
 			})
-			return r.updateStatus(ctx, schedule)
+			// Requeue to retry when the cluster may have been created.
+			// The schedule controller does not watch EtcdCluster resources,
+			// so periodic requeue is needed to recover from this state.
+			result, updateErr := r.updateStatus(ctx, schedule)
+			if updateErr != nil {
+				return result, updateErr
+			}
+			return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 		}
 		return ctrl.Result{}, fmt.Errorf("failed to get EtcdCluster: %w", err)
 	}

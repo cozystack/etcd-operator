@@ -21,6 +21,7 @@ import (
 	"fmt"
 
 	batchv1 "k8s.io/api/batch/v1"
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -147,7 +148,7 @@ func (r *EtcdBackupReconciler) reconcileJobStatus(
 	}
 
 	for _, c := range job.Status.Conditions {
-		if c.Type == batchv1.JobFailed && c.Status == "True" {
+		if c.Type == batchv1.JobFailed && c.Status == corev1.ConditionTrue {
 			meta.SetStatusCondition(&backup.Status.Conditions, metav1.Condition{
 				Type:               etcdaenixiov1alpha1.EtcdBackupConditionFailed,
 				Status:             metav1.ConditionTrue,

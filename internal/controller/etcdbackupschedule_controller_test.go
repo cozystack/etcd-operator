@@ -108,21 +108,21 @@ var _ = Describe("EtcdBackupSchedule Controller", func() {
 	})
 
 	Context("When EtcdCluster is not found", func() {
-		It("Should set Failed condition", func() {
+		It("Should set Ready=false and requeue", func() {
 			schedule := createTestPVCSchedule(ctx, scheduleName+"-nocluster", "nonexistent-cluster")
 
 			result, err := reconciler.Reconcile(ctx, ctrl.Request{
 				NamespacedName: types.NamespacedName{Name: schedule.Name, Namespace: schedule.Namespace},
 			})
 			Expect(err).NotTo(HaveOccurred())
-			Expect(result.Requeue).To(BeFalse())
+			Expect(result.RequeueAfter).To(BeNumerically(">", 0))
 
 			updatedSchedule := &etcdaenixiov1alpha1.EtcdBackupSchedule{}
 			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: schedule.Name, Namespace: testNamespace}, updatedSchedule)).To(Succeed())
-			failedCond := meta.FindStatusCondition(updatedSchedule.Status.Conditions, etcdaenixiov1alpha1.EtcdBackupScheduleConditionFailed)
-			Expect(failedCond).NotTo(BeNil())
-			Expect(failedCond.Status).To(Equal(metav1.ConditionTrue))
-			Expect(failedCond.Reason).To(Equal("ClusterNotFound"))
+			readyCond := meta.FindStatusCondition(updatedSchedule.Status.Conditions, etcdaenixiov1alpha1.EtcdBackupScheduleConditionReady)
+			Expect(readyCond).NotTo(BeNil())
+			Expect(readyCond.Status).To(Equal(metav1.ConditionFalse))
+			Expect(readyCond.Reason).To(Equal("ClusterNotFound"))
 		})
 	})
 
