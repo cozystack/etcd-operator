@@ -92,7 +92,7 @@ func buildBackupContainer(
 	var volumes []corev1.Volume
 	var volumeMounts []corev1.VolumeMount
 
-	if cluster.IsClientSecurityEnabled() || cluster.IsServerSecurityEnabled() {
+	if cluster.IsClientSecurityEnabled() || cluster.IsServerSecurityEnabled() || cluster.IsServerTrustedCADefined() {
 		envVars = append(envVars, corev1.EnvVar{Name: "ETCD_TLS_ENABLED", Value: "true"})
 	}
 
@@ -116,22 +116,22 @@ func buildBackupContainer(
 		})
 	}
 
-	if cluster.IsServerSecurityEnabled() {
+	if cluster.IsServerTrustedCADefined() {
 		envVars = append(envVars,
-			corev1.EnvVar{Name: "ETCD_TLS_CA_PATH", Value: "/etc/etcd/pki/server/cert/ca.crt"},
+			corev1.EnvVar{Name: "ETCD_TLS_CA_PATH", Value: "/etc/etcd/pki/server/ca/ca.crt"},
 		)
 		volumes = append(volumes, corev1.Volume{
-			Name: "server-certificate",
+			Name: "server-trusted-ca-certificate",
 			VolumeSource: corev1.VolumeSource{
 				Secret: &corev1.SecretVolumeSource{
-					SecretName: cluster.Spec.Security.TLS.ServerSecret,
+					SecretName: cluster.Spec.Security.TLS.ServerTrustedCASecret,
 				},
 			},
 		})
 		volumeMounts = append(volumeMounts, corev1.VolumeMount{
-			Name:      "server-certificate",
+			Name:      "server-trusted-ca-certificate",
 			ReadOnly:  true,
-			MountPath: "/etc/etcd/pki/server/cert",
+			MountPath: "/etc/etcd/pki/server/ca",
 		})
 	}
 

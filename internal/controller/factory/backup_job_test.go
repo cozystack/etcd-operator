@@ -264,7 +264,7 @@ func TestCreateBackupJob_WithTLS(t *testing.T) {
 	if envMap["ETCD_TLS_KEY_PATH"].Value != "/etc/etcd/pki/client/cert/tls.key" {
 		t.Errorf("unexpected ETCD_TLS_KEY_PATH: %q", envMap["ETCD_TLS_KEY_PATH"].Value)
 	}
-	if envMap["ETCD_TLS_CA_PATH"].Value != "/etc/etcd/pki/server/cert/ca.crt" {
+	if envMap["ETCD_TLS_CA_PATH"].Value != "/etc/etcd/pki/server/ca/ca.crt" {
 		t.Errorf("unexpected ETCD_TLS_CA_PATH: %q", envMap["ETCD_TLS_CA_PATH"].Value)
 	}
 
@@ -278,10 +278,10 @@ func TestCreateBackupJob_WithTLS(t *testing.T) {
 	} else if v.VolumeSource.Secret.SecretName != "client-cert" {
 		t.Errorf("expected secret 'client-cert', got %q", v.VolumeSource.Secret.SecretName)
 	}
-	if v, ok := volumeMap["server-certificate"]; !ok {
-		t.Error("server-certificate volume not found")
-	} else if v.VolumeSource.Secret.SecretName != "server-cert" {
-		t.Errorf("expected secret 'server-cert', got %q", v.VolumeSource.Secret.SecretName)
+	if v, ok := volumeMap["server-trusted-ca-certificate"]; !ok {
+		t.Error("server-trusted-ca-certificate volume not found")
+	} else if v.VolumeSource.Secret.SecretName != "server-ca" {
+		t.Errorf("expected secret 'server-ca', got %q", v.VolumeSource.Secret.SecretName)
 	}
 
 	// Check volume mounts
@@ -292,8 +292,8 @@ func TestCreateBackupJob_WithTLS(t *testing.T) {
 	if _, ok := mountMap["client-certificate"]; !ok {
 		t.Error("client-certificate volume mount not found")
 	}
-	if _, ok := mountMap["server-certificate"]; !ok {
-		t.Error("server-certificate volume mount not found")
+	if _, ok := mountMap["server-trusted-ca-certificate"]; !ok {
+		t.Error("server-trusted-ca-certificate volume mount not found")
 	}
 
 	// Endpoints should use https

@@ -100,10 +100,15 @@ func (r *EtcdBackup) ValidateDelete() (admission.Warnings, error) {
 }
 
 func (r *EtcdBackup) validateDestination() field.ErrorList {
-	var allErrors field.ErrorList
-	destPath := field.NewPath("spec", "destination")
+	return validateBackupDestination(r.Spec.Destination, field.NewPath("spec", "destination"))
+}
 
-	if r.Spec.Destination.S3 == nil && r.Spec.Destination.PVC == nil {
+// validateBackupDestination validates a BackupDestination at the given field path.
+// This is shared between EtcdBackup and EtcdCluster (bootstrap restore source) webhooks.
+func validateBackupDestination(dest BackupDestination, destPath *field.Path) field.ErrorList {
+	var allErrors field.ErrorList
+
+	if dest.S3 == nil && dest.PVC == nil {
 		allErrors = append(allErrors, field.Required(
 			destPath,
 			"exactly one of s3 or pvc must be specified",
@@ -111,7 +116,7 @@ func (r *EtcdBackup) validateDestination() field.ErrorList {
 		return allErrors
 	}
 
-	if r.Spec.Destination.S3 != nil && r.Spec.Destination.PVC != nil {
+	if dest.S3 != nil && dest.PVC != nil {
 		allErrors = append(allErrors, field.Invalid(
 			destPath,
 			"both s3 and pvc",
@@ -120,7 +125,7 @@ func (r *EtcdBackup) validateDestination() field.ErrorList {
 		return allErrors
 	}
 
-	if s3 := r.Spec.Destination.S3; s3 != nil {
+	if s3 := dest.S3; s3 != nil {
 		s3Path := destPath.Child("s3")
 		if s3.Endpoint == "" {
 			allErrors = append(allErrors, field.Required(s3Path.Child("endpoint"), "endpoint is required"))
@@ -136,7 +141,7 @@ func (r *EtcdBackup) validateDestination() field.ErrorList {
 		}
 	}
 
-	if pvc := r.Spec.Destination.PVC; pvc != nil {
+	if pvc := dest.PVC; pvc != nil {
 		pvcPath := destPath.Child("pvc")
 		if pvc.ClaimName == "" {
 			allErrors = append(allErrors, field.Required(pvcPath.Child("claimName"), "claimName is required"))

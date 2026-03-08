@@ -91,7 +91,9 @@ func buildTLSConfig() (*tls.Config, error) {
 		return nil, nil
 	}
 
-	tlsConfig := &tls.Config{}
+	tlsConfig := &tls.Config{
+		MinVersion: tls.VersionTLS12,
+	}
 
 	certPath := os.Getenv("ETCD_TLS_CERT_PATH")
 	keyPath := os.Getenv("ETCD_TLS_KEY_PATH")
@@ -120,10 +122,22 @@ func buildTLSConfig() (*tls.Config, error) {
 	return tlsConfig, nil
 }
 
+// injectTimestamp inserts a timestamp before the file extension in a path.
+// For example: "backups/snap.db" -> "backups/snap-20060102-150405.db"
+func injectTimestamp(path string) string {
+	ts := time.Now().UTC().Format("20060102-150405")
+	ext := filepath.Ext(path)
+	base := strings.TrimSuffix(path, ext)
+	return fmt.Sprintf("%s-%s%s", base, ts, ext)
+}
+
 func uploadToS3(ctx context.Context, reader io.Reader) error {
 	endpoint := os.Getenv("S3_ENDPOINT")
 	bucket := os.Getenv("S3_BUCKET")
 	key := os.Getenv("S3_KEY")
+	if os.Getenv("BACKUP_TIMESTAMP") == "true" {
+		key = injectTimestamp(key)
+	}
 	region := os.Getenv("S3_REGION")
 
 	if bucket == "" || key == "" {
@@ -140,6 +154,28 @@ func uploadToS3(ctx context.Context, reader io.Reader) error {
 		return fmt.Errorf("AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY are required")
 	}
 
+	// Write snapshot to a temp file so we can provide Content-Length to S3.
+	// Without Content-Length, PutObject fails for objects > 5 GiB and some
+	// S3-compatible providers don't support chunked transfer encoding.
+	tmpFile, err := os.CreateTemp("", "etcd-snapshot-*.db")
+	if err != nil {
+		return fmt.Errorf("failed to create temp file: %w", err)
+	}
+	defer func() {
+		_ = os.Remove(tmpFile.Name())
+	}()
+
+	written, err := io.Copy(tmpFile, reader)
+	if err != nil {
+		_ = tmpFile.Close()
+		return fmt.Errorf("failed to write snapshot to temp file: %w", err)
+	}
+
+	if _, err := tmpFile.Seek(0, io.SeekStart); err != nil {
+		_ = tmpFile.Close()
+		return fmt.Errorf("failed to seek temp file: %w", err)
+	}
+
 	cfg := aws.Config{
 		Region:      region,
 		Credentials: credentials.NewStaticCredentialsProvider(accessKey, secretKey, ""),
@@ -154,12 +190,16 @@ func uploadToS3(ctx context.Context, reader io.Reader) error {
 		}
 	})
 
-	fmt.Printf("uploading snapshot to s3://%s/%s\n", bucket, key)
-	_, err := s3Client.PutObject(ctx, &s3.PutObjectInput{
-		Bucket: aws.String(bucket),
-		Key:    aws.String(key),
-		Body:   reader,
+	fmt.Printf("uploading snapshot to s3://%s/%s (%d bytes)\n", bucket, key, written)
+	_, err = s3Client.PutObject(ctx, &s3.PutObjectInput{
+		Bucket:        aws.String(bucket),
+		Key:           aws.String(key),
+		Body:          tmpFile,
+		ContentLength: &written,
 	})
+
+	_ = tmpFile.Close()
+
 	if err != nil {
 		return fmt.Errorf("failed to upload to S3: %w", err)
 	}
@@ -172,6 +212,9 @@ func writeToPVC(reader io.Reader) error {
 	backupPath := os.Getenv("PVC_BACKUP_PATH")
 	if backupPath == "" {
 		return fmt.Errorf("PVC_BACKUP_PATH is required")
+	}
+	if os.Getenv("BACKUP_TIMESTAMP") == "true" {
+		backupPath = injectTimestamp(backupPath)
 	}
 
 	if err := os.MkdirAll(filepath.Dir(backupPath), 0755); err != nil {

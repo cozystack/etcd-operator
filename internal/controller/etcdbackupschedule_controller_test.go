@@ -243,7 +243,7 @@ var _ = Describe("EtcdBackupSchedule Controller", func() {
 				volumeNames[i] = v.Name
 			}
 			Expect(volumeNames).To(ContainElement("client-certificate"))
-			Expect(volumeNames).To(ContainElement("server-certificate"))
+			Expect(volumeNames).To(ContainElement("server-trusted-ca-certificate"))
 		})
 	})
 })

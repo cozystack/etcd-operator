@@ -17,6 +17,7 @@ limitations under the License.
 package v1alpha1
 
 import (
+	"fmt"
 	"regexp"
 
 	"k8s.io/apimachinery/pkg/api/errors"
@@ -71,6 +72,20 @@ func (r *EtcdBackupSchedule) ValidateCreate() (admission.Warnings, error) {
 		))
 	}
 
+	// CronJob name = "{name}-scheduled-backup" (17 char suffix).
+	// CronJob names must be <= 52 chars (63 max Pod name - 11 for Job/Pod suffixes).
+	const cronJobSuffix = "-scheduled-backup"
+	const maxCronJobNameLen = 52
+	maxNameLen := maxCronJobNameLen - len(cronJobSuffix)
+	if len(r.Name) > maxNameLen {
+		allErrors = append(allErrors, field.Invalid(
+			field.NewPath("metadata", "name"),
+			r.Name,
+			fmt.Sprintf("name must be at most %d characters (CronJob name limit is %d, suffix %q is %d characters)",
+				maxNameLen, maxCronJobNameLen, cronJobSuffix, len(cronJobSuffix)),
+		))
+	}
+
 	destErrors := r.validateDestination()
 	allErrors = append(allErrors, destErrors...)
 
@@ -98,13 +113,6 @@ func (r *EtcdBackupSchedule) ValidateDelete() (admission.Warnings, error) {
 }
 
 func (r *EtcdBackupSchedule) validateDestination() field.ErrorList {
-	// Reuse the same destination validation logic as EtcdBackup
-	tmp := &EtcdBackup{
-		Spec: EtcdBackupSpec{
-			Destination: r.Spec.Destination,
-		},
-	}
-	tmp.Name = r.Name
-	return tmp.validateDestination()
+	return validateBackupDestination(r.Spec.Destination, field.NewPath("spec", "destination"))
 }
 

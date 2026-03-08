@@ -35,6 +35,34 @@ import (
 	"github.com/aenix-io/etcd-operator/internal/log"
 )
 
+// cronJobNeedsUpdate compares only the fields that the operator controls,
+// avoiding false positives from API Server-defaulted fields.
+func cronJobNeedsUpdate(existing, desired *batchv1.CronJob) bool {
+	if existing.Spec.Schedule != desired.Spec.Schedule {
+		return true
+	}
+	if !reflect.DeepEqual(existing.Spec.SuccessfulJobsHistoryLimit, desired.Spec.SuccessfulJobsHistoryLimit) {
+		return true
+	}
+	if !reflect.DeepEqual(existing.Spec.FailedJobsHistoryLimit, desired.Spec.FailedJobsHistoryLimit) {
+		return true
+	}
+	if !reflect.DeepEqual(existing.Labels, desired.Labels) {
+		return true
+	}
+	existingContainers := existing.Spec.JobTemplate.Spec.Template.Spec.Containers
+	desiredContainers := desired.Spec.JobTemplate.Spec.Template.Spec.Containers
+	if !reflect.DeepEqual(existingContainers, desiredContainers) {
+		return true
+	}
+	existingVolumes := existing.Spec.JobTemplate.Spec.Template.Spec.Volumes
+	desiredVolumes := desired.Spec.JobTemplate.Spec.Template.Spec.Volumes
+	if !reflect.DeepEqual(existingVolumes, desiredVolumes) {
+		return true
+	}
+	return false
+}
+
 // EtcdBackupScheduleReconciler reconciles a EtcdBackupSchedule object
 type EtcdBackupScheduleReconciler struct {
 	client.Client
@@ -136,8 +164,8 @@ func (r *EtcdBackupScheduleReconciler) reconcileExistingCronJob(
 		return ctrl.Result{}, fmt.Errorf("failed to build desired CronJob: %w", err)
 	}
 
-	// Update CronJob if spec changed
-	if !reflect.DeepEqual(existingCronJob.Spec, desiredCronJob.Spec) {
+	// Update CronJob if meaningful fields changed
+	if cronJobNeedsUpdate(existingCronJob, desiredCronJob) {
 		existingCronJob.Spec = desiredCronJob.Spec
 		existingCronJob.Labels = desiredCronJob.Labels
 		if err := r.Update(ctx, existingCronJob); err != nil {

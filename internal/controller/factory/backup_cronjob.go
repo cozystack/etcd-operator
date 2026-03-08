@@ -43,6 +43,8 @@ func CreateBackupCronJob(
 	labels["etcd.aenix.io/etcdbackupschedule-name"] = schedule.Name
 
 	container, volumes := buildBackupContainer(schedule.Name, schedule.Spec.Destination, cluster, operatorImage)
+	// Enable timestamp injection so each scheduled backup gets a unique filename.
+	container.Env = append(container.Env, corev1.EnvVar{Name: "BACKUP_TIMESTAMP", Value: "true"})
 
 	var backoffLimit int32
 	cronJob := &batchv1.CronJob{
