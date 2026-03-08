@@ -43,6 +43,9 @@ func cronJobNeedsUpdate(existing, desired *batchv1.CronJob) bool {
 	if existing.Spec.Schedule != desired.Spec.Schedule {
 		return true
 	}
+	if existing.Spec.ConcurrencyPolicy != desired.Spec.ConcurrencyPolicy {
+		return true
+	}
 	if !reflect.DeepEqual(existing.Spec.SuccessfulJobsHistoryLimit, desired.Spec.SuccessfulJobsHistoryLimit) {
 		return true
 	}

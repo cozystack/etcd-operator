@@ -93,6 +93,16 @@ func (r *EtcdBackupReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	existingJob := &batchv1.Job{}
 	err := r.Get(ctx, types.NamespacedName{Name: jobName, Namespace: backup.Namespace}, existingJob)
 	if err == nil {
+		if !metav1.IsControlledBy(existingJob, backup) {
+			meta.SetStatusCondition(&backup.Status.Conditions, metav1.Condition{
+				Type:               etcdaenixiov1alpha1.EtcdBackupConditionFailed,
+				Status:             metav1.ConditionTrue,
+				Reason:             "JobNameConflict",
+				Message:            fmt.Sprintf("Job %q already exists and is not controlled by this EtcdBackup", jobName),
+				ObservedGeneration: backup.Generation,
+			})
+			return r.updateStatus(ctx, backup)
+		}
 		return r.reconcileJobStatus(ctx, backup, existingJob)
 	}
 	if !errors.IsNotFound(err) {

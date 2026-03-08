@@ -3,13 +3,19 @@ kind: EtcdCluster
 metadata:
   name: restored-cluster
 spec:
-  replicas: 3
+  # Start with 1 replica for restore, then scale up after data is loaded.
+  # PVC-based restore with ReadWriteOnce requires all pods on the same node;
+  # S3-based restore avoids this limitation.
+  replicas: 1
   bootstrap:
     restore:
       source:
-        pvc:
-          claimName: my-backup-pvc
-          subPath: my-backup.db
+        s3:
+          endpoint: https://s3.amazonaws.com
+          bucket: my-etcd-backups
+          key: backups/snapshot.db
+          credentialsSecretRef:
+            name: s3-credentials
   storage:
     volumeClaimTemplate:
       spec:

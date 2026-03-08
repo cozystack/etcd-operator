@@ -48,6 +48,7 @@ func CreateBackupJob(
 
 	var backoffLimit int32
 	var ttl int32 = 600
+	var activeDeadline int64 = 900 // 15 minutes; safety net if backup-agent hangs
 	container, volumes := buildBackupContainer(backup.Name, backup.Spec.Destination, cluster, operatorImage)
 
 	job := &batchv1.Job{
@@ -59,6 +60,7 @@ func CreateBackupJob(
 		Spec: batchv1.JobSpec{
 			BackoffLimit:            &backoffLimit,
 			TTLSecondsAfterFinished: &ttl,
+			ActiveDeadlineSeconds:   &activeDeadline,
 			Template: corev1.PodTemplateSpec{
 				ObjectMeta: metav1.ObjectMeta{
 					Labels: labels,
@@ -69,6 +71,7 @@ func CreateBackupJob(
 						RunAsNonRoot: ptr.To(true),
 						RunAsUser:    ptr.To(int64(65532)),
 						RunAsGroup:   ptr.To(int64(65532)),
+						FSGroup:      ptr.To(int64(65532)),
 					},
 					Containers:    []corev1.Container{container},
 					Volumes:       volumes,

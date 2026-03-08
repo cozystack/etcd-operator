@@ -211,7 +211,7 @@ var _ = Describe("EtcdBackup Webhook", func() {
 			}
 		})
 
-		It("Should reject name exceeding 45 characters", func() {
+		It("Should reject name exceeding 56 characters", func() {
 			backup := &EtcdBackup{
 				Spec: EtcdBackupSpec{
 					ClusterRef: corev1.LocalObjectReference{Name: "my-cluster"},
@@ -222,15 +222,15 @@ var _ = Describe("EtcdBackup Webhook", func() {
 					},
 				},
 			}
-			backup.Name = "this-name-is-way-too-long-for-a-backup-job-name-suffix"
+			backup.Name = "this-name-is-way-too-long-for-a-backup-job-name-suffix-exceeds"
 			_, err := backup.ValidateCreate()
 			if Expect(err).To(HaveOccurred()) {
 				statusErr := err.(*errors.StatusError)
-				Expect(statusErr.ErrStatus.Message).To(ContainSubstring("name must be at most 45 characters"))
+				Expect(statusErr.ErrStatus.Message).To(ContainSubstring("name must be at most 56 characters"))
 			}
 		})
 
-		It("Should admit name at exactly 45 characters", func() {
+		It("Should admit name at exactly 56 characters", func() {
 			backup := &EtcdBackup{
 				Spec: EtcdBackupSpec{
 					ClusterRef: corev1.LocalObjectReference{Name: "my-cluster"},
@@ -241,7 +241,7 @@ var _ = Describe("EtcdBackup Webhook", func() {
 					},
 				},
 			}
-			backup.Name = "abcdefghijklmnopqrstuvwxyz1234567890123456789" // exactly 45 chars
+			backup.Name = "abcdefghijklmnopqrstuvwxyz12345678901234567890123456" // exactly 56 chars
 			w, err := backup.ValidateCreate()
 			Expect(err).To(Succeed())
 			Expect(w).To(BeEmpty())
