@@ -36,7 +36,8 @@ import (
 )
 
 // cronJobNeedsUpdate compares only the fields that the operator controls,
-// avoiding false positives from API Server-defaulted fields.
+// avoiding false positives from API Server-defaulted fields like
+// TerminationMessagePath, ImagePullPolicy, etc.
 func cronJobNeedsUpdate(existing, desired *batchv1.CronJob) bool {
 	if existing.Spec.Schedule != desired.Spec.Schedule {
 		return true
@@ -50,15 +51,39 @@ func cronJobNeedsUpdate(existing, desired *batchv1.CronJob) bool {
 	if !reflect.DeepEqual(existing.Labels, desired.Labels) {
 		return true
 	}
+
 	existingContainers := existing.Spec.JobTemplate.Spec.Template.Spec.Containers
 	desiredContainers := desired.Spec.JobTemplate.Spec.Template.Spec.Containers
-	if !reflect.DeepEqual(existingContainers, desiredContainers) {
+	if len(existingContainers) != len(desiredContainers) {
 		return true
 	}
+	for i := range desiredContainers {
+		if existingContainers[i].Image != desiredContainers[i].Image {
+			return true
+		}
+		if !reflect.DeepEqual(existingContainers[i].Command, desiredContainers[i].Command) {
+			return true
+		}
+		if !reflect.DeepEqual(existingContainers[i].Env, desiredContainers[i].Env) {
+			return true
+		}
+		if !reflect.DeepEqual(existingContainers[i].VolumeMounts, desiredContainers[i].VolumeMounts) {
+			return true
+		}
+	}
+
 	existingVolumes := existing.Spec.JobTemplate.Spec.Template.Spec.Volumes
 	desiredVolumes := desired.Spec.JobTemplate.Spec.Template.Spec.Volumes
-	if !reflect.DeepEqual(existingVolumes, desiredVolumes) {
+	if len(existingVolumes) != len(desiredVolumes) {
 		return true
+	}
+	for i := range desiredVolumes {
+		if existingVolumes[i].Name != desiredVolumes[i].Name {
+			return true
+		}
+		if !reflect.DeepEqual(existingVolumes[i].VolumeSource, desiredVolumes[i].VolumeSource) {
+			return true
+		}
 	}
 	return false
 }
