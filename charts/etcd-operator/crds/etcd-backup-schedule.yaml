@@ -4,7 +4,7 @@ metadata:
   annotations:
     cert-manager.io/inject-ca-from: etcd-operator-system/etcd-operator-serving-cert
     controller-gen.kubebuilder.io/version: v0.16.5
-  name: etcdbackups.etcd.aenix.io
+  name: etcdbackupschedules.etcd.aenix.io
 spec:
   conversion:
     strategy: Webhook
@@ -18,26 +18,29 @@ spec:
         - v1
   group: etcd.aenix.io
   names:
-    kind: EtcdBackup
-    listKind: EtcdBackupList
-    plural: etcdbackups
-    singular: etcdbackup
+    kind: EtcdBackupSchedule
+    listKind: EtcdBackupScheduleList
+    plural: etcdbackupschedules
+    singular: etcdbackupschedule
   scope: Namespaced
   versions:
     - additionalPrinterColumns:
         - jsonPath: .spec.clusterRef.name
           name: Cluster
           type: string
-        - jsonPath: .status.conditions[?(@.type=="Complete")].status
-          name: Status
+        - jsonPath: .spec.schedule
+          name: Schedule
           type: string
+        - jsonPath: .status.lastSuccessfulBackupTime
+          name: Last Backup
+          type: date
         - jsonPath: .metadata.creationTimestamp
           name: Age
           type: date
       name: v1alpha1
       schema:
         openAPIV3Schema:
-          description: EtcdBackup is the Schema for the etcdbackups API
+          description: EtcdBackupSchedule is the Schema for the etcdbackupschedules API
           properties:
             apiVersion:
               description: |-
@@ -57,7 +60,7 @@ spec:
             metadata:
               type: object
             spec:
-              description: EtcdBackupSpec defines the desired state of EtcdBackup
+              description: EtcdBackupScheduleSpec defines the desired state of EtcdBackupSchedule
               properties:
                 clusterRef:
                   description: ClusterRef references the EtcdCluster to back up.
@@ -130,12 +133,24 @@ spec:
                         - key
                       type: object
                   type: object
+                failedJobsHistoryLimit:
+                  description: FailedJobsHistoryLimit is the number of failed finished CronJob children to retain.
+                  format: int32
+                  type: integer
+                schedule:
+                  description: Schedule is a cron expression defining when backups should be taken.
+                  type: string
+                successfulJobsHistoryLimit:
+                  description: SuccessfulJobsHistoryLimit is the number of successful finished CronJob children to retain.
+                  format: int32
+                  type: integer
               required:
                 - clusterRef
                 - destination
+                - schedule
               type: object
             status:
-              description: EtcdBackupStatus defines the observed state of EtcdBackup
+              description: EtcdBackupScheduleStatus defines the observed state of EtcdBackupSchedule
               properties:
                 conditions:
                   items:
@@ -192,6 +207,12 @@ spec:
                       - type
                     type: object
                   type: array
+                lastScheduleTime:
+                  format: date-time
+                  type: string
+                lastSuccessfulBackupTime:
+                  format: date-time
+                  type: string
               type: object
           type: object
       served: true

@@ -24,6 +24,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -41,7 +42,15 @@ func main() {
 }
 
 func run() error {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	timeout := 10 * time.Minute
+	if v := os.Getenv("BACKUP_TIMEOUT_MINUTES"); v != "" {
+		mins, err := strconv.Atoi(v)
+		if err != nil || mins <= 0 {
+			return fmt.Errorf("BACKUP_TIMEOUT_MINUTES must be a positive integer, got %q", v)
+		}
+		timeout = time.Duration(mins) * time.Minute
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
 	endpoints := os.Getenv("ETCD_ENDPOINTS")

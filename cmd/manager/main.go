@@ -108,10 +108,16 @@ func main() {
 		os.Exit(1)
 	}
 
+	operatorImage := os.Getenv("OPERATOR_IMAGE")
+	if operatorImage == "" {
+		log.Error(ctx, nil, "OPERATOR_IMAGE environment variable is required but not set")
+		os.Exit(1)
+	}
+
 	if err = (&controller.EtcdClusterReconciler{
 		Client:        mgr.GetClient(),
 		Scheme:        mgr.GetScheme(),
-		OperatorImage: os.Getenv("OPERATOR_IMAGE"),
+		OperatorImage: operatorImage,
 	}).SetupWithManager(mgr); err != nil {
 		log.Error(ctx, err, "unable to create controller", "controller", "EtcdCluster")
 		os.Exit(1)
@@ -119,7 +125,7 @@ func main() {
 	if err = (&controller.EtcdBackupReconciler{
 		Client:        mgr.GetClient(),
 		Scheme:        mgr.GetScheme(),
-		OperatorImage: os.Getenv("OPERATOR_IMAGE"),
+		OperatorImage: operatorImage,
 	}).SetupWithManager(mgr); err != nil {
 		log.Error(ctx, err, "unable to create controller", "controller", "EtcdBackup")
 		os.Exit(1)
@@ -127,7 +133,7 @@ func main() {
 	if err = (&controller.EtcdBackupScheduleReconciler{
 		Client:        mgr.GetClient(),
 		Scheme:        mgr.GetScheme(),
-		OperatorImage: os.Getenv("OPERATOR_IMAGE"),
+		OperatorImage: operatorImage,
 	}).SetupWithManager(mgr); err != nil {
 		log.Error(ctx, err, "unable to create controller", "controller", "EtcdBackupSchedule")
 		os.Exit(1)

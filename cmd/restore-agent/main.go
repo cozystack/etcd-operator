@@ -22,6 +22,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -65,8 +66,17 @@ func run() error {
 	}
 }
 
+func getTimeout() time.Duration {
+	if v := os.Getenv("RESTORE_TIMEOUT_MINUTES"); v != "" {
+		if mins, err := strconv.Atoi(v); err == nil && mins > 0 {
+			return time.Duration(mins) * time.Minute
+		}
+	}
+	return 10 * time.Minute
+}
+
 func downloadFromS3() error {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), getTimeout())
 	defer cancel()
 
 	endpoint := os.Getenv("S3_ENDPOINT")

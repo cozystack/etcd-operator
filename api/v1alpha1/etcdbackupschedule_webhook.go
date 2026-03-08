@@ -18,8 +18,8 @@ package v1alpha1
 
 import (
 	"fmt"
-	"regexp"
 
+	"github.com/robfig/cron/v3"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -32,8 +32,8 @@ import (
 
 var etcdbackupschedulelog = logf.Log.WithName("etcdbackupschedule-resource")
 
-// cronRegexp validates standard 5-field cron expressions (minute hour day-of-month month day-of-week).
-var cronRegexp = regexp.MustCompile(`^(@(annually|yearly|monthly|weekly|daily|hourly)|((\*|[0-9,/\-*]+)\s+){4}(\*|[0-9,/\-*]+))$`)
+// cronParser is a standard 5-field cron parser matching Kubernetes CronJob behavior.
+var cronParser = cron.NewParser(cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow | cron.Descriptor)
 
 // SetupWebhookWithManager will setup the manager to manage the webhooks
 func (r *EtcdBackupSchedule) SetupWebhookWithManager(mgr ctrl.Manager) error {
@@ -64,11 +64,11 @@ func (r *EtcdBackupSchedule) ValidateCreate() (admission.Warnings, error) {
 			field.NewPath("spec", "schedule"),
 			"schedule is required",
 		))
-	} else if !cronRegexp.MatchString(r.Spec.Schedule) {
+	} else if _, err := cronParser.Parse(r.Spec.Schedule); err != nil {
 		allErrors = append(allErrors, field.Invalid(
 			field.NewPath("spec", "schedule"),
 			r.Spec.Schedule,
-			"schedule must be a valid cron expression",
+			fmt.Sprintf("invalid cron expression: %v", err),
 		))
 	}
 

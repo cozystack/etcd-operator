@@ -180,6 +180,22 @@ var _ = Describe("EtcdBackupSchedule Webhook", func() {
 			}
 		})
 
+		It("Should reject cron expression with too many fields", func() {
+			schedule := &EtcdBackupSchedule{
+				Spec: EtcdBackupScheduleSpec{
+					ClusterRef: corev1.LocalObjectReference{Name: "my-cluster"},
+					Schedule:   "* * * * * * * *",
+					Destination: BackupDestination{
+						PVC: &PVCBackupDestination{
+							ClaimName: "backup-pvc",
+						},
+					},
+				},
+			}
+			_, err := schedule.ValidateCreate()
+			Expect(err).To(HaveOccurred())
+		})
+
 		It("Should admit cron shorthand @hourly", func() {
 			schedule := &EtcdBackupSchedule{
 				Spec: EtcdBackupScheduleSpec{
