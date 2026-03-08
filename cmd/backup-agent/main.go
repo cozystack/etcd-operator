@@ -236,7 +236,7 @@ func writeToPVC(reader io.Reader) error {
 	}
 
 	fmt.Printf("writing snapshot to %s\n", backupPath)
-	f, err := os.Create(backupPath)
+	f, err := os.OpenFile(backupPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
 	if err != nil {
 		return fmt.Errorf("failed to create file %s: %w", backupPath, err)
 	}

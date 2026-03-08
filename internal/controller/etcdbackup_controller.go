@@ -146,15 +146,17 @@ func (r *EtcdBackupReconciler) reconcileJobStatus(
 		return r.updateStatus(ctx, backup)
 	}
 
-	if job.Status.Failed > 0 {
-		meta.SetStatusCondition(&backup.Status.Conditions, metav1.Condition{
-			Type:               etcdaenixiov1alpha1.EtcdBackupConditionFailed,
-			Status:             metav1.ConditionTrue,
-			Reason:             "JobFailed",
-			Message:            "Backup Job failed",
-			ObservedGeneration: backup.Generation,
-		})
-		return r.updateStatus(ctx, backup)
+	for _, c := range job.Status.Conditions {
+		if c.Type == batchv1.JobFailed && c.Status == "True" {
+			meta.SetStatusCondition(&backup.Status.Conditions, metav1.Condition{
+				Type:               etcdaenixiov1alpha1.EtcdBackupConditionFailed,
+				Status:             metav1.ConditionTrue,
+				Reason:             "JobFailed",
+				Message:            c.Message,
+				ObservedGeneration: backup.Generation,
+			})
+			return r.updateStatus(ctx, backup)
+		}
 	}
 
 	if !meta.IsStatusConditionTrue(backup.Status.Conditions, etcdaenixiov1alpha1.EtcdBackupConditionStarted) {

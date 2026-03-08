@@ -208,6 +208,12 @@ var _ = Describe("EtcdBackup Controller", func() {
 				Namespace: testNamespace,
 			}, job)).To(Succeed())
 			job.Status.Failed = 1
+			job.Status.Conditions = append(job.Status.Conditions, batchv1.JobCondition{
+				Type:    batchv1.JobFailed,
+				Status:  "True",
+				Reason:  "BackoffLimitExceeded",
+				Message: "Job has reached the specified backoff limit",
+			})
 			Expect(k8sClient.Status().Update(ctx, job)).To(Succeed())
 
 			// Second reconcile: should set Failed

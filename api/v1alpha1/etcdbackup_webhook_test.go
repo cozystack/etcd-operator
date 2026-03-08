@@ -189,6 +189,42 @@ var _ = Describe("EtcdBackup Webhook", func() {
 				Expect(statusErr.ErrStatus.Message).To(ContainSubstring("claimName"))
 			}
 		})
+
+		It("Should reject name exceeding 45 characters", func() {
+			backup := &EtcdBackup{
+				Spec: EtcdBackupSpec{
+					ClusterRef: corev1.LocalObjectReference{Name: "my-cluster"},
+					Destination: BackupDestination{
+						PVC: &PVCBackupDestination{
+							ClaimName: "backup-pvc",
+						},
+					},
+				},
+			}
+			backup.Name = "this-name-is-way-too-long-for-a-backup-job-name-suffix"
+			_, err := backup.ValidateCreate()
+			if Expect(err).To(HaveOccurred()) {
+				statusErr := err.(*errors.StatusError)
+				Expect(statusErr.ErrStatus.Message).To(ContainSubstring("name must be at most 45 characters"))
+			}
+		})
+
+		It("Should admit name at exactly 45 characters", func() {
+			backup := &EtcdBackup{
+				Spec: EtcdBackupSpec{
+					ClusterRef: corev1.LocalObjectReference{Name: "my-cluster"},
+					Destination: BackupDestination{
+						PVC: &PVCBackupDestination{
+							ClaimName: "backup-pvc",
+						},
+					},
+				},
+			}
+			backup.Name = "abcdefghijklmnopqrstuvwxyz1234567890123456789" // exactly 45 chars
+			w, err := backup.ValidateCreate()
+			Expect(err).To(Succeed())
+			Expect(w).To(BeEmpty())
+		})
 	})
 
 	Context("When updating EtcdBackup under Validating Webhook", func() {

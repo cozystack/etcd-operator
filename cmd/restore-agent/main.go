@@ -161,7 +161,7 @@ func writeSnapshot(reader io.Reader) error {
 		return fmt.Errorf("failed to create restore directory: %w", err)
 	}
 
-	f, err := os.Create(snapshotPath)
+	f, err := os.OpenFile(snapshotPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
 	if err != nil {
 		return fmt.Errorf("failed to create snapshot file %s: %w", snapshotPath, err)
 	}
