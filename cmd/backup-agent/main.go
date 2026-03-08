@@ -171,22 +171,20 @@ func uploadToS3(ctx context.Context, reader io.Reader) error {
 		return fmt.Errorf("failed to create temp file: %w", err)
 	}
 	defer func() {
+		_ = tmpFile.Close()
 		_ = os.Remove(tmpFile.Name())
 	}()
 
 	written, err := io.Copy(tmpFile, reader)
 	if err != nil {
-		_ = tmpFile.Close()
 		return fmt.Errorf("failed to write snapshot to temp file: %w", err)
 	}
 
 	if written == 0 {
-		_ = tmpFile.Close()
 		return fmt.Errorf("etcd snapshot is empty (0 bytes), aborting upload")
 	}
 
 	if _, err := tmpFile.Seek(0, io.SeekStart); err != nil {
-		_ = tmpFile.Close()
 		return fmt.Errorf("failed to seek temp file: %w", err)
 	}
 
@@ -211,9 +209,6 @@ func uploadToS3(ctx context.Context, reader io.Reader) error {
 		Body:          tmpFile,
 		ContentLength: &written,
 	})
-
-	_ = tmpFile.Close()
-
 	if err != nil {
 		return fmt.Errorf("failed to upload to S3: %w", err)
 	}
@@ -231,7 +226,7 @@ func writeToPVC(reader io.Reader) error {
 		backupPath = injectTimestamp(backupPath)
 	}
 
-	if err := os.MkdirAll(filepath.Dir(backupPath), 0755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(backupPath), 0700); err != nil {
 		return fmt.Errorf("failed to create parent directories for %s: %w", backupPath, err)
 	}
 

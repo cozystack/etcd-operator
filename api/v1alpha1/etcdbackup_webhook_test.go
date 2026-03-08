@@ -117,6 +117,27 @@ var _ = Describe("EtcdBackup Webhook", func() {
 			}
 		})
 
+		It("Should reject S3 with invalid endpoint URL", func() {
+			backup := &EtcdBackup{
+				Spec: EtcdBackupSpec{
+					ClusterRef: corev1.LocalObjectReference{Name: "my-cluster"},
+					Destination: BackupDestination{
+						S3: &S3BackupDestination{
+							Endpoint:             "not-a-url",
+							Bucket:               "my-bucket",
+							Key:                  "backups/snapshot.db",
+							CredentialsSecretRef: corev1.LocalObjectReference{Name: "s3-creds"},
+						},
+					},
+				},
+			}
+			_, err := backup.ValidateCreate()
+			if Expect(err).To(HaveOccurred()) {
+				statusErr := err.(*errors.StatusError)
+				Expect(statusErr.ErrStatus.Message).To(ContainSubstring("endpoint must start with http:// or https://"))
+			}
+		})
+
 		It("Should reject S3 with empty required fields", func() {
 			backup := &EtcdBackup{
 				Spec: EtcdBackupSpec{

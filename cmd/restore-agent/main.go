@@ -157,7 +157,7 @@ func copyFromPVC() error {
 func writeSnapshot(reader io.Reader) error {
 	snapshotPath := filepath.Join(restoreSnapshotDir, snapshotFilename)
 
-	if err := os.MkdirAll(restoreSnapshotDir, 0755); err != nil {
+	if err := os.MkdirAll(restoreSnapshotDir, 0700); err != nil {
 		return fmt.Errorf("failed to create restore directory: %w", err)
 	}
 

@@ -143,6 +143,9 @@ func validateBackupDestination(dest BackupDestination, destPath *field.Path) fie
 		s3Path := destPath.Child("s3")
 		if s3.Endpoint == "" {
 			allErrors = append(allErrors, field.Required(s3Path.Child("endpoint"), "endpoint is required"))
+		} else if !strings.HasPrefix(s3.Endpoint, "http://") && !strings.HasPrefix(s3.Endpoint, "https://") {
+			allErrors = append(allErrors, field.Invalid(s3Path.Child("endpoint"), s3.Endpoint,
+				"endpoint must start with http:// or https://"))
 		}
 		if s3.Bucket == "" {
 			allErrors = append(allErrors, field.Required(s3Path.Child("bucket"), "bucket is required"))

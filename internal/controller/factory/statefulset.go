@@ -554,6 +554,15 @@ func generateRestoreInitContainers(
 		Command:      []string{"/restore-agent"},
 		Env:          restoreAgentEnv,
 		VolumeMounts: restoreAgentVolumeMounts,
+		Resources: corev1.ResourceRequirements{
+			Requests: corev1.ResourceList{
+				corev1.ResourceCPU:    resource.MustParse("100m"),
+				corev1.ResourceMemory: resource.MustParse("128Mi"),
+			},
+			Limits: corev1.ResourceList{
+				corev1.ResourceMemory: resource.MustParse("512Mi"),
+			},
+		},
 	}
 
 	// Init container 2: restore-datadir (runs etcdutl snapshot restore)
@@ -587,6 +596,15 @@ etcdutl snapshot restore /restore/snapshot.db \
 		VolumeMounts: []corev1.VolumeMount{
 			{Name: "data", MountPath: "/var/run/etcd"},
 			{Name: "restore-data", MountPath: "/restore"},
+		},
+		Resources: corev1.ResourceRequirements{
+			Requests: corev1.ResourceList{
+				corev1.ResourceCPU:    resource.MustParse("100m"),
+				corev1.ResourceMemory: resource.MustParse("128Mi"),
+			},
+			Limits: corev1.ResourceList{
+				corev1.ResourceMemory: resource.MustParse("512Mi"),
+			},
 		},
 	}
 
