@@ -244,20 +244,24 @@ func writeToPVC(reader io.Reader) error {
 	written, err := io.Copy(f, reader)
 	if err != nil {
 		_ = f.Close()
+		_ = os.Remove(backupPath)
 		return fmt.Errorf("failed to write snapshot: %w", err)
 	}
 
 	if written == 0 {
 		_ = f.Close()
+		_ = os.Remove(backupPath)
 		return fmt.Errorf("etcd snapshot is empty (0 bytes), aborting write")
 	}
 
 	if err := f.Sync(); err != nil {
 		_ = f.Close()
+		_ = os.Remove(backupPath)
 		return fmt.Errorf("failed to sync snapshot to disk: %w", err)
 	}
 
 	if err := f.Close(); err != nil {
+		_ = os.Remove(backupPath)
 		return fmt.Errorf("failed to close snapshot file: %w", err)
 	}
 

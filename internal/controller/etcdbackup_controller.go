@@ -98,6 +98,17 @@ func (r *EtcdBackupReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		return ctrl.Result{}, fmt.Errorf("failed to get Job: %w", err)
 	}
 
+	if r.OperatorImage == "" {
+		meta.SetStatusCondition(&backup.Status.Conditions, metav1.Condition{
+			Type:               etcdaenixiov1alpha1.EtcdBackupConditionFailed,
+			Status:             metav1.ConditionTrue,
+			Reason:             "ConfigurationError",
+			Message:            "OPERATOR_IMAGE environment variable is not set; cannot create backup Job",
+			ObservedGeneration: backup.Generation,
+		})
+		return r.updateStatus(ctx, backup)
+	}
+
 	job, err := factory.CreateBackupJob(backup, cluster, r.OperatorImage, r.Scheme)
 	if err != nil {
 		return ctrl.Result{}, fmt.Errorf("failed to build backup Job: %w", err)

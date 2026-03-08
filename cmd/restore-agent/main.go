@@ -31,10 +31,12 @@ import (
 )
 
 const (
-	defaultDataDir     = "/var/run/etcd/default.etcd"
-	restoreSnapshotDir = "/restore"
-	snapshotFilename   = "snapshot.db"
+	defaultDataDir   = "/var/run/etcd/default.etcd"
+	snapshotFilename = "snapshot.db"
 )
+
+// restoreSnapshotDir is a package-level variable (not const) so tests can override it.
+var restoreSnapshotDir = "/restore"
 
 func main() {
 	if err := run(); err != nil {
@@ -160,20 +162,25 @@ func writeSnapshot(reader io.Reader) error {
 	written, err := io.Copy(f, reader)
 	if err != nil {
 		_ = f.Close()
+		_ = os.Remove(snapshotPath)
 		return fmt.Errorf("failed to write snapshot: %w", err)
+	}
+
+	if written == 0 {
+		_ = f.Close()
+		_ = os.Remove(snapshotPath)
+		return fmt.Errorf("downloaded snapshot is empty (0 bytes)")
 	}
 
 	if err := f.Sync(); err != nil {
 		_ = f.Close()
+		_ = os.Remove(snapshotPath)
 		return fmt.Errorf("failed to sync snapshot to disk: %w", err)
 	}
 
 	if err := f.Close(); err != nil {
+		_ = os.Remove(snapshotPath)
 		return fmt.Errorf("failed to close snapshot file: %w", err)
-	}
-
-	if written == 0 {
-		return fmt.Errorf("downloaded snapshot is empty (0 bytes)")
 	}
 
 	fmt.Printf("snapshot downloaded successfully (%d bytes) to %s\n", written, snapshotPath)

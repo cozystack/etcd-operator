@@ -89,6 +89,9 @@ func CreateOrUpdateStatefulSet(
 
 	var initContainers []corev1.Container
 	if cluster.Spec.Bootstrap != nil && cluster.Spec.Bootstrap.Restore != nil {
+		if operatorImage == "" {
+			return fmt.Errorf("OPERATOR_IMAGE is required for bootstrap restore but not set")
+		}
 		restoreInitContainers, restoreVolumes := generateRestoreInitContainers(cluster, operatorImage)
 		initContainers = restoreInitContainers
 		volumes = append(volumes, restoreVolumes...)

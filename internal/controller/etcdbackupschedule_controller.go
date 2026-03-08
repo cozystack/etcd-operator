@@ -144,6 +144,24 @@ func (r *EtcdBackupScheduleReconciler) Reconcile(ctx context.Context, req ctrl.R
 		return ctrl.Result{}, fmt.Errorf("failed to get EtcdCluster: %w", err)
 	}
 
+	if r.OperatorImage == "" {
+		meta.SetStatusCondition(&schedule.Status.Conditions, metav1.Condition{
+			Type:               etcdaenixiov1alpha1.EtcdBackupScheduleConditionFailed,
+			Status:             metav1.ConditionTrue,
+			Reason:             "ConfigurationError",
+			Message:            "OPERATOR_IMAGE environment variable is not set; cannot create backup CronJob",
+			ObservedGeneration: schedule.Generation,
+		})
+		meta.SetStatusCondition(&schedule.Status.Conditions, metav1.Condition{
+			Type:               etcdaenixiov1alpha1.EtcdBackupScheduleConditionReady,
+			Status:             metav1.ConditionFalse,
+			Reason:             "ConfigurationError",
+			Message:            "OPERATOR_IMAGE environment variable is not set",
+			ObservedGeneration: schedule.Generation,
+		})
+		return r.updateStatus(ctx, schedule)
+	}
+
 	cronJobName := factory.GetBackupCronJobName(schedule)
 	existingCronJob := &batchv1.CronJob{}
 	err := r.Get(ctx, types.NamespacedName{Name: cronJobName, Namespace: schedule.Namespace}, existingCronJob)

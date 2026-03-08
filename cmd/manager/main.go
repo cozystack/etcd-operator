@@ -19,7 +19,6 @@ package main
 import (
 	"context"
 	"crypto/tls"
-	"fmt"
 	"os"
 	"syscall"
 
@@ -111,8 +110,7 @@ func main() {
 
 	operatorImage := os.Getenv("OPERATOR_IMAGE")
 	if operatorImage == "" {
-		log.Error(ctx, fmt.Errorf("OPERATOR_IMAGE is not set"), "OPERATOR_IMAGE environment variable is required")
-		os.Exit(1)
+		log.Info(ctx, "OPERATOR_IMAGE not set; backup, restore, and scheduled backup features will be unavailable")
 	}
 
 	if err = (&controller.EtcdClusterReconciler{

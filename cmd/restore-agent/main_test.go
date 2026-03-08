@@ -60,47 +60,51 @@ func TestGetTimeout_Zero(t *testing.T) {
 	}
 }
 
-func TestWriteSnapshot_NonEmpty(t *testing.T) {
+func withTempRestoreDir(t *testing.T) string {
+	t.Helper()
 	tmpDir := t.TempDir()
-
 	origDir := restoreSnapshotDir
-	// We can't override the const, so test writeSnapshot indirectly
-	// by checking file creation. For now, test the empty check logic.
-	_ = tmpDir
-	_ = origDir
+	restoreSnapshotDir = tmpDir
+	t.Cleanup(func() { restoreSnapshotDir = origDir })
+	return tmpDir
+}
+
+func TestWriteSnapshot_NonEmpty(t *testing.T) {
+	tmpDir := withTempRestoreDir(t)
+
+	data := []byte("fake etcd snapshot data for testing")
+	err := writeSnapshot(bytes.NewReader(data))
+	if err != nil {
+		t.Fatalf("writeSnapshot failed: %v", err)
+	}
+
+	snapshotPath := filepath.Join(tmpDir, snapshotFilename)
+	info, err := os.Stat(snapshotPath)
+	if err != nil {
+		t.Fatalf("snapshot file not found: %v", err)
+	}
+	if info.Size() != int64(len(data)) {
+		t.Errorf("expected %d bytes, got %d", len(data), info.Size())
+	}
 }
 
 func TestWriteSnapshot_Empty(t *testing.T) {
-	// writeSnapshot should reject empty snapshots
-	// We need to override restoreSnapshotDir for testing, but it's a const.
-	// Instead, test the run() function with a temp dir setup.
-	tmpDir := t.TempDir()
-	dataDir := filepath.Join(tmpDir, "etcd-data")
-	restoreDir := filepath.Join(tmpDir, "restore")
+	tmpDir := withTempRestoreDir(t)
 
-	t.Setenv("ETCD_DATA_DIR", dataDir)
-	t.Setenv("RESTORE_SOURCE", "pvc")
+	err := writeSnapshot(bytes.NewReader(nil))
+	if err == nil {
+		t.Fatal("expected error for empty snapshot")
+	}
 
-	// Create an empty file to simulate empty snapshot
-	emptyFile := filepath.Join(tmpDir, "empty.db")
-	if err := os.WriteFile(emptyFile, []byte{}, 0644); err != nil {
-		t.Fatal(err)
+	// Verify the empty file was cleaned up
+	snapshotPath := filepath.Join(tmpDir, snapshotFilename)
+	if _, statErr := os.Stat(snapshotPath); !os.IsNotExist(statErr) {
+		t.Error("expected snapshot file to be removed after empty snapshot error")
 	}
-	t.Setenv("PVC_BACKUP_PATH", emptyFile)
-
-	// Can't easily test writeSnapshot directly due to const restoreSnapshotDir,
-	// but verify the empty file exists
-	info, err := os.Stat(emptyFile)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if info.Size() != 0 {
-		t.Errorf("expected empty file, got %d bytes", info.Size())
-	}
-	_ = restoreDir
 }
 
 func TestCopyFromPVC_FileNotFound(t *testing.T) {
+	withTempRestoreDir(t)
 	t.Setenv("PVC_BACKUP_PATH", "/nonexistent/backup.db")
 
 	err := copyFromPVC()
@@ -115,6 +119,57 @@ func TestCopyFromPVC_MissingEnv(t *testing.T) {
 	err := copyFromPVC()
 	if err == nil {
 		t.Error("expected error for missing PVC_BACKUP_PATH")
+	}
+}
+
+func TestCopyFromPVC_Success(t *testing.T) {
+	tmpDir := withTempRestoreDir(t)
+
+	// Create a source file to copy from
+	srcDir := t.TempDir()
+	srcPath := filepath.Join(srcDir, "backup.db")
+	data := []byte("fake etcd snapshot from PVC")
+	if err := os.WriteFile(srcPath, data, 0644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PVC_BACKUP_PATH", srcPath)
+
+	err := copyFromPVC()
+	if err != nil {
+		t.Fatalf("copyFromPVC failed: %v", err)
+	}
+
+	// Verify the snapshot was copied
+	snapshotPath := filepath.Join(tmpDir, snapshotFilename)
+	content, err := os.ReadFile(snapshotPath)
+	if err != nil {
+		t.Fatalf("failed to read copied snapshot: %v", err)
+	}
+	if !bytes.Equal(content, data) {
+		t.Errorf("snapshot content mismatch: got %q, want %q", content, data)
+	}
+}
+
+func TestCopyFromPVC_EmptyFile(t *testing.T) {
+	tmpDir := withTempRestoreDir(t)
+
+	// Create an empty source file
+	srcDir := t.TempDir()
+	srcPath := filepath.Join(srcDir, "empty.db")
+	if err := os.WriteFile(srcPath, []byte{}, 0644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PVC_BACKUP_PATH", srcPath)
+
+	err := copyFromPVC()
+	if err == nil {
+		t.Fatal("expected error for empty PVC backup file")
+	}
+
+	// Verify the empty file was cleaned up
+	snapshotPath := filepath.Join(tmpDir, snapshotFilename)
+	if _, statErr := os.Stat(snapshotPath); !os.IsNotExist(statErr) {
+		t.Error("expected snapshot file to be removed after empty snapshot error")
 	}
 }
 
@@ -142,9 +197,6 @@ func TestRun_InvalidRestoreSource(t *testing.T) {
 	if err == nil {
 		t.Error("expected error for invalid RESTORE_SOURCE")
 	}
-	if err.Error() == "" {
-		t.Error("expected non-empty error message")
-	}
 }
 
 func TestDownloadFromS3_MissingBucket(t *testing.T) {
@@ -167,14 +219,4 @@ func TestDownloadFromS3_MissingCredentials(t *testing.T) {
 	if err == nil {
 		t.Error("expected error for missing credentials")
 	}
-}
-
-// Verify writeSnapshot rejects zero-length content by using a bytes.Buffer
-func TestWriteSnapshotLogic_ZeroBytes(t *testing.T) {
-	// writeSnapshot writes to restoreSnapshotDir (const), so we can't override it in test.
-	// But we can verify the function rejects zero-length readers by calling it
-	// with a temp override approach: just test the bytes.Buffer path.
-	_ = bytes.NewBuffer(nil)
-	// The zero-byte check is in writeSnapshot: `if written == 0 { return error }`
-	// This is tested via integration through run().
 }
