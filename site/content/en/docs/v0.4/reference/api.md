@@ -31,7 +31,7 @@ _Appears in:_
 
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
-| `metadata` _[EmbeddedObjectMetadata](#embeddedobjectmetadata)_ | Refer to Kubernetes API documentation for fields of `metadata`. |  |  |
+| `metadata` _[EmbeddedObjectMetadata](#embeddedobjectmetadata)_ | Refer to Kubernetes API documentation for fields of `metadata`. |  | Optional: {} <br /> |
 
 
 #### EmbeddedObjectMetadata
@@ -52,9 +52,9 @@ _Appears in:_
 
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
-| `name` _string_ | Name must be unique within a namespace. Is required when creating resources, although<br />some resources may allow a client to request the generation of an appropriate name<br />automatically. Name is primarily intended for creation idempotence and configuration<br />definition.<br />Cannot be updated.<br />More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names#names |  |  |
-| `labels` _object (keys:string, values:string)_ | Labels Map of string keys and values that can be used to organize and categorize<br />(scope and select) objects. May match selectors of replication controllers<br />and services.<br />More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/labels |  |  |
-| `annotations` _object (keys:string, values:string)_ | Annotations is an unstructured key value map stored with a resource that may be<br />set by external tools to store and retrieve arbitrary metadata. They are not<br />queryable and should be preserved when modifying objects.<br />More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/annotations |  |  |
+| `name` _string_ | Name must be unique within a namespace. Is required when creating resources, although<br />some resources may allow a client to request the generation of an appropriate name<br />automatically. Name is primarily intended for creation idempotence and configuration<br />definition.<br />Cannot be updated.<br />More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names#names |  | Optional: {} <br /> |
+| `labels` _object (keys:string, values:string)_ | Labels Map of string keys and values that can be used to organize and categorize<br />(scope and select) objects. May match selectors of replication controllers<br />and services.<br />More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/labels |  | Optional: {} <br /> |
+| `annotations` _object (keys:string, values:string)_ | Annotations is an unstructured key value map stored with a resource that may be<br />set by external tools to store and retrieve arbitrary metadata. They are not<br />queryable and should be preserved when modifying objects.<br />More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/annotations |  | Optional: {} <br /> |
 
 
 #### EmbeddedPersistentVolumeClaim
@@ -71,8 +71,8 @@ _Appears in:_
 
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
-| `metadata` _[EmbeddedObjectMetadata](#embeddedobjectmetadata)_ | Refer to Kubernetes API documentation for fields of `metadata`. |  |  |
-| `spec` _[PersistentVolumeClaimSpec](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.30.0/#persistentvolumeclaimspec-v1-core)_ | Spec defines the desired characteristics of a volume requested by a pod author.<br />More info: https://kubernetes.io/docs/concepts/storage/persistent-volumes#persistentvolumeclaims |  |  |
+| `metadata` _[EmbeddedObjectMetadata](#embeddedobjectmetadata)_ | Refer to Kubernetes API documentation for fields of `metadata`. |  | Optional: {} <br /> |
+| `spec` _[PersistentVolumeClaimSpec](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.30.0/#persistentvolumeclaimspec-v1-core)_ | Spec defines the desired characteristics of a volume requested by a pod author.<br />More info: https://kubernetes.io/docs/concepts/storage/persistent-volumes#persistentvolumeclaims |  | Optional: {} <br /> |
 
 
 #### EmbeddedPodDisruptionBudget
@@ -88,8 +88,8 @@ _Appears in:_
 
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
-| `metadata` _[EmbeddedObjectMetadata](#embeddedobjectmetadata)_ | Refer to Kubernetes API documentation for fields of `metadata`. |  |  |
-| `spec` _[PodDisruptionBudgetSpec](#poddisruptionbudgetspec)_ | Spec defines the desired characteristics of a PDB.<br />More info: https://kubernetes.io/docs/concepts/workloads/pods/disruptions/#pod-disruption-budgets |  |  |
+| `metadata` _[EmbeddedObjectMetadata](#embeddedobjectmetadata)_ | Refer to Kubernetes API documentation for fields of `metadata`. |  | Optional: {} <br /> |
+| `spec` _[PodDisruptionBudgetSpec](#poddisruptionbudgetspec)_ | Spec defines the desired characteristics of a PDB.<br />More info: https://kubernetes.io/docs/concepts/workloads/pods/disruptions/#pod-disruption-budgets |  | Optional: {} <br /> |
 
 
 #### EmbeddedService
@@ -105,8 +105,8 @@ _Appears in:_
 
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
-| `metadata` _[EmbeddedObjectMetadata](#embeddedobjectmetadata)_ | Refer to Kubernetes API documentation for fields of `metadata`. |  |  |
-| `spec` _[ServiceSpec](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.30.0/#servicespec-v1-core)_ | Spec defines the behavior of the service. |  |  |
+| `metadata` _[EmbeddedObjectMetadata](#embeddedobjectmetadata)_ | Refer to Kubernetes API documentation for fields of `metadata`. |  | Optional: {} <br /> |
+| `spec` _[ServiceSpec](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.30.0/#servicespec-v1-core)_ | Spec defines the behavior of the service. |  | Optional: {} <br /> |
 
 
 #### EtcdCluster
@@ -140,14 +140,14 @@ _Appears in:_
 
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
-| `replicas` _integer_ | Replicas is the count of etcd instances in cluster. | 3 | Minimum: 0 <br /> |
-| `options` _object (keys:string, values:string)_ | Options are the extra arguments to pass to the etcd container. |  |  |
+| `replicas` _integer_ | Replicas is the count of etcd instances in cluster. | 3 | Minimum: 0 <br />Optional: {} <br /> |
+| `options` _object (keys:string, values:string)_ | Options are the extra arguments to pass to the etcd container. |  | Optional: {} <br /> |
 | `podTemplate` _[PodTemplate](#podtemplate)_ | PodTemplate defines the desired state of PodSpec for etcd members. If not specified, default values will be used. |  |  |
-| `serviceTemplate` _[EmbeddedService](#embeddedservice)_ | Service defines the desired state of Service for etcd members. If not specified, default values will be used. |  |  |
-| `headlessServiceTemplate` _[EmbeddedMetadataResource](#embeddedmetadataresource)_ | HeadlessService defines the desired state of HeadlessService for etcd members. If not specified, default values will be used. |  |  |
-| `podDisruptionBudgetTemplate` _[EmbeddedPodDisruptionBudget](#embeddedpoddisruptionbudget)_ | PodDisruptionBudgetTemplate describes PDB resource to create for etcd cluster members. Nil to disable. |  |  |
+| `serviceTemplate` _[EmbeddedService](#embeddedservice)_ | Service defines the desired state of Service for etcd members. If not specified, default values will be used. |  | Optional: {} <br /> |
+| `headlessServiceTemplate` _[EmbeddedMetadataResource](#embeddedmetadataresource)_ | HeadlessService defines the desired state of HeadlessService for etcd members. If not specified, default values will be used. |  | Optional: {} <br /> |
+| `podDisruptionBudgetTemplate` _[EmbeddedPodDisruptionBudget](#embeddedpoddisruptionbudget)_ | PodDisruptionBudgetTemplate describes PDB resource to create for etcd cluster members. Nil to disable. |  | Optional: {} <br /> |
 | `storage` _[StorageSpec](#storagespec)_ |  |  |  |
-| `security` _[SecuritySpec](#securityspec)_ | Security describes security settings of etcd (authentication, certificates, rbac) |  |  |
+| `security` _[SecuritySpec](#securityspec)_ | Security describes security settings of etcd (authentication, certificates, rbac) |  | Optional: {} <br /> |
 
 
 
@@ -167,8 +167,8 @@ _Appears in:_
 
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
-| `minAvailable` _[IntOrString](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.30.0/#intorstring-intstr-util)_ | MinAvailable describes minimum ready replicas. If both are empty, controller will implicitly<br />calculate MaxUnavailable based on number of replicas<br />Mutually exclusive with MaxUnavailable. |  |  |
-| `maxUnavailable` _[IntOrString](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.30.0/#intorstring-intstr-util)_ | MinAvailable describes maximum not ready replicas. If both are empty, controller will implicitly<br />calculate MaxUnavailable based on number of replicas<br />Mutually exclusive with MinAvailable |  |  |
+| `minAvailable` _[IntOrString](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.30.0/#intorstring-intstr-util)_ | MinAvailable describes minimum ready replicas. If both are empty, controller will implicitly<br />calculate MaxUnavailable based on number of replicas<br />Mutually exclusive with MaxUnavailable. |  | Optional: {} <br /> |
+| `maxUnavailable` _[IntOrString](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.30.0/#intorstring-intstr-util)_ | MinAvailable describes maximum not ready replicas. If both are empty, controller will implicitly<br />calculate MaxUnavailable based on number of replicas<br />Mutually exclusive with MinAvailable |  | Optional: {} <br /> |
 
 
 #### PodTemplate
@@ -184,8 +184,8 @@ _Appears in:_
 
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
-| `metadata` _[EmbeddedObjectMetadata](#embeddedobjectmetadata)_ | Refer to Kubernetes API documentation for fields of `metadata`. |  |  |
-| `spec` _[PodSpec](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.30.0/#podspec-v1-core)_ | Spec follows the structure of a regular Pod spec. Overrides defined here will be strategically merged with the default pod spec, generated by the operator. |  |  |
+| `metadata` _[EmbeddedObjectMetadata](#embeddedobjectmetadata)_ | Refer to Kubernetes API documentation for fields of `metadata`. |  | Optional: {} <br /> |
+| `spec` _[PodSpec](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.30.0/#podspec-v1-core)_ | Spec follows the structure of a regular Pod spec. Overrides defined here will be strategically merged with the default pod spec, generated by the operator. |  | Optional: {} <br /> |
 
 
 #### SecuritySpec
@@ -201,7 +201,7 @@ _Appears in:_
 
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
-| `tls` _[TLSSpec](#tlsspec)_ | Section for user-managed tls certificates |  |  |
+| `tls` _[TLSSpec](#tlsspec)_ | Section for user-managed tls certificates |  | Optional: {} <br /> |
 | `enableAuth` _boolean_ | Section to enable etcd auth |  |  |
 
 
@@ -219,8 +219,8 @@ _Appears in:_
 
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
-| `emptyDir` _[EmptyDirVolumeSource](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.30.0/#emptydirvolumesource-v1-core)_ | EmptyDirVolumeSource to be used by the StatefulSets. If specified, used in place of any volumeClaimTemplate. More<br />info: https://kubernetes.io/docs/concepts/storage/volumes/#emptydir |  |  |
-| `volumeClaimTemplate` _[EmbeddedPersistentVolumeClaim](#embeddedpersistentvolumeclaim)_ | A PVC spec to be used by the StatefulSets. |  |  |
+| `emptyDir` _[EmptyDirVolumeSource](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.30.0/#emptydirvolumesource-v1-core)_ | EmptyDirVolumeSource to be used by the StatefulSets. If specified, used in place of any volumeClaimTemplate. More<br />info: https://kubernetes.io/docs/concepts/storage/volumes/#emptydir |  | Optional: {} <br /> |
+| `volumeClaimTemplate` _[EmbeddedPersistentVolumeClaim](#embeddedpersistentvolumeclaim)_ | A PVC spec to be used by the StatefulSets. |  | Optional: {} <br /> |
 
 
 #### TLSSpec
@@ -236,11 +236,11 @@ _Appears in:_
 
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
-| `peerTrustedCASecret` _string_ | Trusted CA certificate secret to secure peer-to-peer communication between etcd nodes. It is expected to have ca.crt field in the secret.<br />This secret must be created in the namespace with etcdCluster CR. |  |  |
-| `peerSecret` _string_ | Certificate secret to secure peer-to-peer communication between etcd nodes. It is expected to have tls.crt and tls.key fields in the secret.<br />This secret must be created in the namespace with etcdCluster CR. |  |  |
-| `serverTrustedCASecret` _string_ | Trusted CA for etcd server certificates for client-server communication. Is necessary to set trust between operator and etcd.<br />It is expected to have ca.crt field in the secret. If it is not specified, then insecure communication will be used.<br />This secret must be created in the namespace with etcdCluster CR. |  |  |
-| `serverSecret` _string_ | Server certificate secret to secure client-server communication. Is provided to the client who connects to etcd by client port (2379 by default).<br />It is expected to have tls.crt and tls.key fields in the secret.<br />This secret must be created in the namespace with etcdCluster CR. |  |  |
-| `clientTrustedCASecret` _string_ | Trusted CA for client certificates that are provided by client to etcd. It is expected to have ca.crt field in the secret.<br />This secret must be created in the namespace with etcdCluster CR. |  |  |
-| `clientSecret` _string_ | Client certificate for etcd-operator to do maintenance. It is expected to have tls.crt and tls.key fields in the secret.<br />This secret must be created in the namespace with etcdCluster CR. |  |  |
+| `peerTrustedCASecret` _string_ | Trusted CA certificate secret to secure peer-to-peer communication between etcd nodes. It is expected to have ca.crt field in the secret.<br />This secret must be created in the namespace with etcdCluster CR. |  | Optional: {} <br /> |
+| `peerSecret` _string_ | Certificate secret to secure peer-to-peer communication between etcd nodes. It is expected to have tls.crt and tls.key fields in the secret.<br />This secret must be created in the namespace with etcdCluster CR. |  | Optional: {} <br /> |
+| `serverTrustedCASecret` _string_ | Trusted CA for etcd server certificates for client-server communication. Is necessary to set trust between operator and etcd.<br />It is expected to have ca.crt field in the secret. If it is not specified, then insecure communication will be used.<br />This secret must be created in the namespace with etcdCluster CR. |  | Optional: {} <br /> |
+| `serverSecret` _string_ | Server certificate secret to secure client-server communication. Is provided to the client who connects to etcd by client port (2379 by default).<br />It is expected to have tls.crt and tls.key fields in the secret.<br />This secret must be created in the namespace with etcdCluster CR. |  | Optional: {} <br /> |
+| `clientTrustedCASecret` _string_ | Trusted CA for client certificates that are provided by client to etcd. It is expected to have ca.crt field in the secret.<br />This secret must be created in the namespace with etcdCluster CR. |  | Optional: {} <br /> |
+| `clientSecret` _string_ | Client certificate for etcd-operator to do maintenance. It is expected to have tls.crt and tls.key fields in the secret.<br />This secret must be created in the namespace with etcdCluster CR. |  | Optional: {} <br /> |
 
 
