@@ -155,6 +155,13 @@ var _ = Describe("EtcdBackupSchedule Controller", func() {
 			}, cronJob)).To(Succeed())
 			Expect(cronJob.Spec.Schedule).To(Equal("0 */6 * * *"))
 
+			// Update schedule
+			Eventually(func(g Gomega) {
+				g.Expect(k8sClient.Get(ctx, types.NamespacedName{Name: schedule.Name, Namespace: schedule.Namespace}, schedule)).To(Succeed())
+				schedule.Spec.Schedule = "0 12 * * 0"
+				g.Expect(k8sClient.Update(ctx, schedule)).To(Succeed())
+			}).Should(Succeed())
+
 			// Second reconcile: CronJob already exists, should be Ready
 			_, err = reconciler.Reconcile(ctx, ctrl.Request{
 				NamespacedName: types.NamespacedName{Name: schedule.Name, Namespace: schedule.Namespace},

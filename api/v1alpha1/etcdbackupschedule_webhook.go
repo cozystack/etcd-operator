@@ -134,4 +134,3 @@ func (r *EtcdBackupSchedule) validateSpec() field.ErrorList {
 func (r *EtcdBackupSchedule) validateDestination() field.ErrorList {
 	return validateBackupDestination(r.Spec.Destination, field.NewPath("spec", "destination"))
 }
-

@@ -29,8 +29,8 @@ var _ = Describe("EtcdBackupSchedule Webhook", func() {
 		It("Should admit a valid schedule with PVC destination", func() {
 			schedule := &EtcdBackupSchedule{
 				Spec: EtcdBackupScheduleSpec{
-					ClusterRef:  corev1.LocalObjectReference{Name: "my-cluster"},
-					Schedule:    "0 */6 * * *",
+					ClusterRef: corev1.LocalObjectReference{Name: "my-cluster"},
+					Schedule:   "0 */6 * * *",
 					Destination: BackupDestination{
 						PVC: &PVCBackupDestination{
 							ClaimName: "backup-pvc",
