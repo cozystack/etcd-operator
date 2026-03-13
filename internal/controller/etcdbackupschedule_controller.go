@@ -19,10 +19,10 @@ package controller
 import (
 	"context"
 	"fmt"
-	"reflect"
 	"time"
 
 	batchv1 "k8s.io/api/batch/v1"
+	"k8s.io/apimachinery/pkg/api/equality"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -46,13 +46,13 @@ func cronJobNeedsUpdate(existing, desired *batchv1.CronJob) bool {
 	if existing.Spec.ConcurrencyPolicy != desired.Spec.ConcurrencyPolicy {
 		return true
 	}
-	if !reflect.DeepEqual(existing.Spec.SuccessfulJobsHistoryLimit, desired.Spec.SuccessfulJobsHistoryLimit) {
+	if !equality.Semantic.DeepEqual(existing.Spec.SuccessfulJobsHistoryLimit, desired.Spec.SuccessfulJobsHistoryLimit) {
 		return true
 	}
-	if !reflect.DeepEqual(existing.Spec.FailedJobsHistoryLimit, desired.Spec.FailedJobsHistoryLimit) {
+	if !equality.Semantic.DeepEqual(existing.Spec.FailedJobsHistoryLimit, desired.Spec.FailedJobsHistoryLimit) {
 		return true
 	}
-	if !reflect.DeepEqual(existing.Labels, desired.Labels) {
+	if !equality.Semantic.DeepEqual(existing.Labels, desired.Labels) {
 		return true
 	}
 
@@ -65,13 +65,13 @@ func cronJobNeedsUpdate(existing, desired *batchv1.CronJob) bool {
 		if existingContainers[i].Image != desiredContainers[i].Image {
 			return true
 		}
-		if !reflect.DeepEqual(existingContainers[i].Command, desiredContainers[i].Command) {
+		if !equality.Semantic.DeepEqual(existingContainers[i].Command, desiredContainers[i].Command) {
 			return true
 		}
-		if !reflect.DeepEqual(existingContainers[i].Env, desiredContainers[i].Env) {
+		if !equality.Semantic.DeepEqual(existingContainers[i].Env, desiredContainers[i].Env) {
 			return true
 		}
-		if !reflect.DeepEqual(existingContainers[i].VolumeMounts, desiredContainers[i].VolumeMounts) {
+		if !equality.Semantic.DeepEqual(existingContainers[i].VolumeMounts, desiredContainers[i].VolumeMounts) {
 			return true
 		}
 	}
@@ -85,14 +85,14 @@ func cronJobNeedsUpdate(existing, desired *batchv1.CronJob) bool {
 		if existingVolumes[i].Name != desiredVolumes[i].Name {
 			return true
 		}
-		if !reflect.DeepEqual(existingVolumes[i].VolumeSource, desiredVolumes[i].VolumeSource) {
+		if !equality.Semantic.DeepEqual(existingVolumes[i].VolumeSource, desiredVolumes[i].VolumeSource) {
 			return true
 		}
 	}
 	return false
 }
 
-// EtcdBackupScheduleReconciler reconciles a EtcdBackupSchedule object
+// EtcdBackupScheduleReconciler reconciles a [github.com/aenix-io/etcd-operator/api/v1alpha1.EtcdBackupSchedule] object
 type EtcdBackupScheduleReconciler struct {
 	client.Client
 	Scheme        *runtime.Scheme

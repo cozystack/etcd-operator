@@ -19,10 +19,10 @@ package v1alpha1
 import (
 	"fmt"
 	"math"
-	"reflect"
 	"strings"
 
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/equality"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -140,8 +140,8 @@ func (r *EtcdCluster) ValidateUpdate(old runtime.Object) (admission.Warnings, er
 		)
 	}
 
-	// Check if bootstrap is being changed
-	if !reflect.DeepEqual(oldCluster.Spec.Bootstrap, r.Spec.Bootstrap) {
+	// Check if the bootstrap is being changed
+	if !equality.Semantic.DeepEqual(oldCluster.Spec.Bootstrap, r.Spec.Bootstrap) {
 		allErrors = append(allErrors, field.Forbidden(
 			field.NewPath("spec", "bootstrap"),
 			"field is immutable after cluster creation"),

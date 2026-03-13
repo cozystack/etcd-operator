@@ -19,9 +19,9 @@ package v1alpha1
 import (
 	"fmt"
 	"path/filepath"
-	"reflect"
 	"strings"
 
+	"k8s.io/apimachinery/pkg/api/equality"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -93,7 +93,7 @@ func (r *EtcdBackup) ValidateUpdate(old runtime.Object) (admission.Warnings, err
 		return nil, fmt.Errorf("expected EtcdBackup but got %T", old)
 	}
 
-	if !reflect.DeepEqual(r.Spec, oldBackup.Spec) {
+	if !equality.Semantic.DeepEqual(r.Spec, oldBackup.Spec) {
 		var allErrors field.ErrorList
 		allErrors = append(allErrors, field.Forbidden(
 			field.NewPath("spec"),
