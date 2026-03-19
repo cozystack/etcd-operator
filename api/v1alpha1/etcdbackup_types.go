@@ -33,20 +33,6 @@ type EtcdBackupSpec struct {
 	ClusterRef corev1.LocalObjectReference `json:"clusterRef"`
 	// Destination defines where the backup will be stored.
 	Destination BackupDestination `json:"destination"`
-	// ActiveBackupJobDeadline is the duration in seconds that the backup Job
-	// may be active before the system tries to terminate it. Acts as a safety
-	// net if the backup-agent hangs.
-	// +kubebuilder:default=900
-	// +kubebuilder:validation:Minimum=0
-	// +optional
-	ActiveBackupJobDeadline int64 `json:"activeBackupJobDeadline,omitempty"`
-	// FinishedBackupJobsTTL is the TTL in seconds for cleaning up finished
-	// backup Jobs. Once the Job finishes and this duration elapses, the Job
-	// and its Pods are deleted.
-	// +kubebuilder:default=600
-	// +kubebuilder:validation:Minimum=0
-	// +optional
-	FinishedBackupJobsTTL int32 `json:"finishedBackupJobsTTL,omitempty"`
 }
 
 // BackupDestination defines the target location for the backup. Exactly one must be specified.

@@ -49,15 +49,6 @@ spec:
           spec:
             description: EtcdBackupSpec defines the desired state of EtcdBackup
             properties:
-              activeBackupJobDeadline:
-                default: 900
-                description: |-
-                  ActiveBackupJobDeadline is the duration in seconds that the backup Job
-                  may be active before the system tries to terminate it. Acts as a safety
-                  net if the backup-agent hangs.
-                format: int64
-                minimum: 0
-                type: integer
               clusterRef:
                 description: ClusterRef references the EtcdCluster to back up.
                 properties:
@@ -138,15 +129,6 @@ spec:
                     - key
                     type: object
                 type: object
-              finishedBackupJobsTTL:
-                default: 600
-                description: |-
-                  FinishedBackupJobsTTL is the TTL in seconds for cleaning up finished
-                  backup Jobs. Once the Job finishes and this duration elapses, the Job
-                  and its Pods are deleted.
-                format: int32
-                minimum: 0
-                type: integer
             required:
             - clusterRef
             - destination

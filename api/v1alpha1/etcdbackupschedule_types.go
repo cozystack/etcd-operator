@@ -42,18 +42,6 @@ type EtcdBackupScheduleSpec struct {
 	// +kubebuilder:validation:Minimum=0
 	// +optional
 	FailedJobsHistoryLimit *int32 `json:"failedJobsHistoryLimit,omitempty"`
-	// ActiveBackupJobDeadline is the duration in seconds that each scheduled
-	// backup Job may be active before the system tries to terminate it.
-	// +kubebuilder:default=900
-	// +kubebuilder:validation:Minimum=0
-	// +optional
-	ActiveBackupJobDeadline int64 `json:"activeBackupJobDeadline,omitempty"`
-	// FinishedBackupJobsTTL is the TTL in seconds for cleaning up finished
-	// backup Jobs spawned by the CronJob.
-	// +kubebuilder:default=600
-	// +kubebuilder:validation:Minimum=0
-	// +optional
-	FinishedBackupJobsTTL int32 `json:"finishedBackupJobsTTL,omitempty"`
 }
 
 // EtcdBackupScheduleStatus defines the observed state of EtcdBackupSchedule

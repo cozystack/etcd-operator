@@ -48,8 +48,8 @@ func CreateBackupCronJob(
 	container.Env = append(container.Env, corev1.EnvVar{Name: "BACKUP_TIMESTAMP", Value: "true"})
 
 	var backoffLimit int32
-	ttl := schedule.Spec.FinishedBackupJobsTTL
-	activeDeadline := schedule.Spec.ActiveBackupJobDeadline
+	var ttl int32 = 600
+	var activeDeadline int64 = 900 // 15 minutes; safety net if backup-agent hangs
 	cronJob := &batchv1.CronJob{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      GetBackupCronJobName(schedule),
