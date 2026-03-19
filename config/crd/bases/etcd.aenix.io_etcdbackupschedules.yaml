@@ -145,6 +145,7 @@ spec:
                 description: FailedJobsHistoryLimit is the number of failed finished
                   CronJob children to retain.
                 format: int32
+                minimum: 0
                 type: integer
               finishedBackupJobsTTL:
                 default: 600
@@ -162,6 +163,7 @@ spec:
                 description: SuccessfulJobsHistoryLimit is the number of successful
                   finished CronJob children to retain.
                 format: int32
+                minimum: 0
                 type: integer
             required:
             - clusterRef

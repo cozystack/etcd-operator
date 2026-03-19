@@ -35,9 +35,11 @@ type EtcdBackupScheduleSpec struct {
 	// Destination defines where the backup will be stored.
 	Destination BackupDestination `json:"destination"`
 	// SuccessfulJobsHistoryLimit is the number of successful finished CronJob children to retain.
+	// +kubebuilder:validation:Minimum=0
 	// +optional
 	SuccessfulJobsHistoryLimit *int32 `json:"successfulJobsHistoryLimit,omitempty"`
 	// FailedJobsHistoryLimit is the number of failed finished CronJob children to retain.
+	// +kubebuilder:validation:Minimum=0
 	// +optional
 	FailedJobsHistoryLimit *int32 `json:"failedJobsHistoryLimit,omitempty"`
 	// ActiveBackupJobDeadline is the duration in seconds that each scheduled

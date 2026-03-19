@@ -18,6 +18,7 @@ package v1alpha1
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/robfig/cron/v3"
 	"k8s.io/apimachinery/pkg/api/errors"
@@ -118,6 +119,12 @@ func (r *EtcdBackupSchedule) validateSpec() field.ErrorList {
 		allErrors = append(allErrors, field.Required(
 			field.NewPath("spec", "schedule"),
 			"schedule is required",
+		))
+	} else if strings.HasPrefix(r.Spec.Schedule, "@every ") {
+		allErrors = append(allErrors, field.Invalid(
+			field.NewPath("spec", "schedule"),
+			r.Spec.Schedule,
+			"@every expressions are not supported by Kubernetes CronJobs",
 		))
 	} else if _, err := cronParser.Parse(r.Spec.Schedule); err != nil {
 		allErrors = append(allErrors, field.Invalid(
