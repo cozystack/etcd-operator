@@ -59,6 +59,8 @@ func TestCreateBackupCronJob_PVC(t *testing.T) {
 					ClaimName: "backup-pvc",
 				},
 			},
+			ActiveBackupJobDeadline: 900,
+			FinishedBackupJobsTTL:   600,
 		},
 	}
 
@@ -147,8 +149,10 @@ func TestCreateBackupCronJob_S3(t *testing.T) {
 			UID:       "test-uid-s3",
 		},
 		Spec: etcdaenixiov1alpha1.EtcdBackupScheduleSpec{
-			ClusterRef: corev1.LocalObjectReference{Name: "my-etcd"},
-			Schedule:   "@daily",
+			ClusterRef:              corev1.LocalObjectReference{Name: "my-etcd"},
+			Schedule:                "@daily",
+			ActiveBackupJobDeadline: 900,
+			FinishedBackupJobsTTL:   600,
 			Destination: etcdaenixiov1alpha1.BackupDestination{
 				S3: &etcdaenixiov1alpha1.S3BackupDestination{
 					Endpoint:             "https://s3.example.com",
@@ -221,6 +225,8 @@ func TestCreateBackupCronJob_HistoryLimits(t *testing.T) {
 					ClaimName: "backup-pvc",
 				},
 			},
+			ActiveBackupJobDeadline:    900,
+			FinishedBackupJobsTTL:      600,
 			SuccessfulJobsHistoryLimit: ptr.To(int32(5)),
 			FailedJobsHistoryLimit:     ptr.To(int32(2)),
 		},

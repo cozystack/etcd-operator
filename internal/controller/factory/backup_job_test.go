@@ -58,6 +58,8 @@ func TestCreateBackupJob_PVC(t *testing.T) {
 					ClaimName: "backup-pvc",
 				},
 			},
+			ActiveBackupJobDeadline: 900,
+			FinishedBackupJobsTTL:   600,
 		},
 	}
 
@@ -149,7 +151,9 @@ func TestCreateBackupJob_S3(t *testing.T) {
 			UID:       "test-uid-s3",
 		},
 		Spec: etcdaenixiov1alpha1.EtcdBackupSpec{
-			ClusterRef: corev1.LocalObjectReference{Name: "my-etcd"},
+			ClusterRef:              corev1.LocalObjectReference{Name: "my-etcd"},
+			ActiveBackupJobDeadline: 900,
+			FinishedBackupJobsTTL:   600,
 			Destination: etcdaenixiov1alpha1.BackupDestination{
 				S3: &etcdaenixiov1alpha1.S3BackupDestination{
 					Endpoint:             "https://s3.example.com",
@@ -244,6 +248,8 @@ func TestCreateBackupJob_WithTLS(t *testing.T) {
 					ClaimName: "backup-pvc",
 				},
 			},
+			ActiveBackupJobDeadline: 900,
+			FinishedBackupJobsTTL:   600,
 		},
 	}
 
@@ -337,6 +343,8 @@ func TestCreateBackupJob_PVCSubPath(t *testing.T) {
 					SubPath:   "daily/snap-2024.db",
 				},
 			},
+			ActiveBackupJobDeadline: 900,
+			FinishedBackupJobsTTL:   600,
 		},
 	}
 

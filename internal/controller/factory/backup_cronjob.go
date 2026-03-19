@@ -48,6 +48,8 @@ func CreateBackupCronJob(
 	container.Env = append(container.Env, corev1.EnvVar{Name: "BACKUP_TIMESTAMP", Value: "true"})
 
 	var backoffLimit int32
+	ttl := schedule.Spec.FinishedBackupJobsTTL
+	activeDeadline := schedule.Spec.ActiveBackupJobDeadline
 	cronJob := &batchv1.CronJob{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      GetBackupCronJobName(schedule),
@@ -64,7 +66,9 @@ func CreateBackupCronJob(
 					Labels: labels,
 				},
 				Spec: batchv1.JobSpec{
-					BackoffLimit: &backoffLimit,
+					BackoffLimit:            &backoffLimit,
+					TTLSecondsAfterFinished: &ttl,
+					ActiveDeadlineSeconds:   &activeDeadline,
 					Template: corev1.PodTemplateSpec{
 						ObjectMeta: metav1.ObjectMeta{
 							Labels: labels,

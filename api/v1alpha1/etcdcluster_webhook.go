@@ -110,7 +110,10 @@ func (r *EtcdCluster) ValidateCreate() (admission.Warnings, error) {
 func (r *EtcdCluster) ValidateUpdate(old runtime.Object) (admission.Warnings, error) {
 	etcdclusterlog.Info("validate update", "name", r.Name)
 	var warnings admission.Warnings
-	oldCluster := old.(*EtcdCluster)
+	oldCluster, ok := old.(*EtcdCluster)
+	if !ok {
+		return nil, fmt.Errorf("expected EtcdCluster but got %T", old)
+	}
 
 	// Check if replicas are being resized
 	if *oldCluster.Spec.Replicas != *r.Spec.Replicas {

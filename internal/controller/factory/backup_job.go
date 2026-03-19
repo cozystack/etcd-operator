@@ -47,8 +47,8 @@ func CreateBackupJob(
 	labels["etcd.aenix.io/etcdbackup-name"] = backup.Name
 
 	var backoffLimit int32
-	var ttl int32 = 600
-	var activeDeadline int64 = 900 // 15 minutes; safety net if backup-agent hangs
+	ttl := backup.Spec.FinishedBackupJobsTTL
+	activeDeadline := backup.Spec.ActiveBackupJobDeadline
 	container, volumes := buildBackupContainer(backup.Name, backup.Spec.Destination, cluster, operatorImage)
 
 	job := &batchv1.Job{
