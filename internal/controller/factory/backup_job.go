@@ -30,6 +30,11 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 )
 
+const (
+	stringTrue = "true"
+	backupData = "backup-data"
+)
+
 // GetBackupJobName returns the deterministic Job name for a given EtcdBackup.
 func GetBackupJobName(backup *etcdaenixiov1alpha1.EtcdBackup) string {
 	return fmt.Sprintf("%s-backup", backup.Name)
@@ -105,7 +110,7 @@ func buildBackupContainer(
 	var volumeMounts []corev1.VolumeMount
 
 	if cluster.IsClientSecurityEnabled() || cluster.IsServerSecurityEnabled() || cluster.IsServerTrustedCADefined() {
-		envVars = append(envVars, corev1.EnvVar{Name: "ETCD_TLS_ENABLED", Value: "true"})
+		envVars = append(envVars, corev1.EnvVar{Name: "ETCD_TLS_ENABLED", Value: stringTrue})
 	}
 
 	if cluster.IsClientSecurityEnabled() {
@@ -150,7 +155,7 @@ func buildBackupContainer(
 	if s3 := destination.S3; s3 != nil {
 		forcePathStyle := "false"
 		if s3.ForcePathStyle {
-			forcePathStyle = "true"
+			forcePathStyle = stringTrue
 		}
 		envVars = append(envVars,
 			corev1.EnvVar{Name: "BACKUP_DESTINATION", Value: "s3"},
@@ -190,7 +195,7 @@ func buildBackupContainer(
 			corev1.EnvVar{Name: "PVC_BACKUP_PATH", Value: backupPath},
 		)
 		volumes = append(volumes, corev1.Volume{
-			Name: "backup-data",
+			Name: backupData,
 			VolumeSource: corev1.VolumeSource{
 				PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
 					ClaimName: pvc.ClaimName,
@@ -198,7 +203,7 @@ func buildBackupContainer(
 			},
 		})
 		volumeMounts = append(volumeMounts, corev1.VolumeMount{
-			Name:      "backup-data",
+			Name:      backupData,
 			MountPath: "/backup/data",
 		})
 	}

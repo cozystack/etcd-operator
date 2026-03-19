@@ -120,7 +120,7 @@ func (r *EtcdBackupSchedule) validateSpec() field.ErrorList {
 			field.NewPath("spec", "schedule"),
 			"schedule is required",
 		))
-	} else if strings.HasPrefix(r.Spec.Schedule, "@every ") {
+	} else if strings.HasPrefix(strings.ToLower(r.Spec.Schedule), "@every ") {
 		allErrors = append(allErrors, field.Invalid(
 			field.NewPath("spec", "schedule"),
 			r.Spec.Schedule,

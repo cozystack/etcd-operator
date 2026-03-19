@@ -130,7 +130,7 @@ var _ = Describe("CreateOrUpdateStatefulSet handler", func() {
 					},
 				},
 				Spec: corev1.PodSpec{
-					ServiceAccountName: "etcd-operator",
+					ServiceAccountName: etcdOperatorName,
 					ReadinessGates: []corev1.PodReadinessGate{
 						{
 							// Some custom readiness gate
@@ -173,7 +173,7 @@ var _ = Describe("CreateOrUpdateStatefulSet handler", func() {
 				Expect(statefulSet.Spec.Template.ObjectMeta.Labels).To(Equal(map[string]string{
 					"app.kubernetes.io/name":       "etcd",
 					"app.kubernetes.io/instance":   etcdcluster.Name,
-					"app.kubernetes.io/managed-by": "etcd-operator",
+					"app.kubernetes.io/managed-by": etcdOperatorName,
 					"app":                          "etcd",
 				}))
 				Expect(statefulSet.Spec.Template.ObjectMeta.Annotations).To(Equal(etcdcluster.Spec.PodTemplate.Annotations))

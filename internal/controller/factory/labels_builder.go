@@ -1,5 +1,7 @@
 package factory
 
+const etcdOperatorName = "etcd-operator"
+
 type LabelsBuilder map[string]string
 
 func NewLabelsBuilder() LabelsBuilder {
@@ -17,6 +19,6 @@ func (b LabelsBuilder) WithInstance(name string) LabelsBuilder {
 }
 
 func (b LabelsBuilder) WithManagedBy() LabelsBuilder {
-	b["app.kubernetes.io/managed-by"] = "etcd-operator"
+	b["app.kubernetes.io/managed-by"] = etcdOperatorName
 	return b
 }

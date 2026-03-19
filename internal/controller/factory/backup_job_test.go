@@ -98,7 +98,7 @@ func TestCreateBackupJob_PVC(t *testing.T) {
 	// Check PVC volume mount
 	foundBackupVolume := false
 	for _, v := range job.Spec.Template.Spec.Volumes {
-		if v.Name == "backup-data" {
+		if v.Name == backupData {
 			foundBackupVolume = true
 			if v.VolumeSource.PersistentVolumeClaim.ClaimName != "backup-pvc" {
 				t.Errorf("expected PVC claim 'backup-pvc', got %q", v.VolumeSource.PersistentVolumeClaim.ClaimName)
@@ -121,7 +121,7 @@ func TestCreateBackupJob_PVC(t *testing.T) {
 	if job.Labels["etcd.aenix.io/etcdbackup-name"] != "my-backup" {
 		t.Errorf("expected label etcd.aenix.io/etcdbackup-name=my-backup, got %q", job.Labels["etcd.aenix.io/etcdbackup-name"])
 	}
-	if job.Labels["app.kubernetes.io/managed-by"] != "etcd-operator" {
+	if job.Labels["app.kubernetes.io/managed-by"] != etcdOperatorName {
 		t.Errorf("expected managed-by label, got %q", job.Labels["app.kubernetes.io/managed-by"])
 	}
 }
@@ -203,7 +203,7 @@ func TestCreateBackupJob_S3(t *testing.T) {
 
 	// S3 backup should have no PVC volumes
 	for _, v := range job.Spec.Template.Spec.Volumes {
-		if v.Name == "backup-data" {
+		if v.Name == backupData {
 			t.Error("S3 backup should not have backup-data volume")
 		}
 	}

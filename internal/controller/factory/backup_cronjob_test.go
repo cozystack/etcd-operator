@@ -27,6 +27,8 @@ import (
 	"k8s.io/utils/ptr"
 )
 
+const awsCreds = "aws-creds"
+
 func TestCreateBackupCronJob_PVC(t *testing.T) {
 	scheme := runtime.NewScheme()
 	_ = clientgoscheme.AddToScheme(scheme)
@@ -96,7 +98,7 @@ func TestCreateBackupCronJob_PVC(t *testing.T) {
 	// Check PVC volume
 	foundBackupVolume := false
 	for _, v := range cronJob.Spec.JobTemplate.Spec.Template.Spec.Volumes {
-		if v.Name == "backup-data" {
+		if v.Name == backupData {
 			foundBackupVolume = true
 			if v.VolumeSource.PersistentVolumeClaim.ClaimName != "backup-pvc" {
 				t.Errorf("expected PVC claim 'backup-pvc', got %q", v.VolumeSource.PersistentVolumeClaim.ClaimName)
@@ -119,7 +121,7 @@ func TestCreateBackupCronJob_PVC(t *testing.T) {
 	if cronJob.Labels["etcd.aenix.io/etcdbackupschedule-name"] != "my-schedule" {
 		t.Errorf("expected label etcd.aenix.io/etcdbackupschedule-name=my-schedule, got %q", cronJob.Labels["etcd.aenix.io/etcdbackupschedule-name"])
 	}
-	if cronJob.Labels["app.kubernetes.io/managed-by"] != "etcd-operator" {
+	if cronJob.Labels["app.kubernetes.io/managed-by"] != etcdOperatorName {
 		t.Errorf("expected managed-by label, got %q", cronJob.Labels["app.kubernetes.io/managed-by"])
 	}
 }
@@ -158,7 +160,7 @@ func TestCreateBackupCronJob_S3(t *testing.T) {
 					Endpoint:             "https://s3.example.com",
 					Bucket:               "backups",
 					Key:                  "etcd/snap.db",
-					CredentialsSecretRef: corev1.LocalObjectReference{Name: "aws-creds"},
+					CredentialsSecretRef: corev1.LocalObjectReference{Name: awsCreds},
 					Region:               "eu-west-1",
 				},
 			},
@@ -188,7 +190,7 @@ func TestCreateBackupCronJob_S3(t *testing.T) {
 	}
 
 	awsAccessKey := envMap["AWS_ACCESS_KEY_ID"]
-	if awsAccessKey.ValueFrom == nil || awsAccessKey.ValueFrom.SecretKeyRef.Name != "aws-creds" {
+	if awsAccessKey.ValueFrom == nil || awsAccessKey.ValueFrom.SecretKeyRef.Name != awsCreds {
 		t.Error("AWS_ACCESS_KEY_ID should reference aws-creds secret")
 	}
 }

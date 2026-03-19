@@ -168,8 +168,17 @@ var _ = Describe("EtcdBackupSchedule Controller", func() {
 			})
 			Expect(err).NotTo(HaveOccurred())
 
+			// Verify CronJob schedule matches the updated EtcdBackupSchedule
+			updatedCronJob := &batchv1.CronJob{}
+			Expect(k8sClient.Get(ctx, types.NamespacedName{
+				Name:      factory.GetBackupCronJobName(schedule),
+				Namespace: testNamespace,
+			}, updatedCronJob)).To(Succeed())
+
 			updatedSchedule := &etcdaenixiov1alpha1.EtcdBackupSchedule{}
 			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: schedule.Name, Namespace: testNamespace}, updatedSchedule)).To(Succeed())
+			Expect(normalizeCronSchedule(updatedCronJob.Spec.Schedule)).To(Equal(normalizeCronSchedule(updatedSchedule.Spec.Schedule)))
+
 			Expect(meta.IsStatusConditionTrue(updatedSchedule.Status.Conditions, etcdaenixiov1alpha1.EtcdBackupScheduleConditionReady)).To(BeTrue())
 		})
 	})
@@ -318,6 +327,25 @@ func createTestPVCSchedule(ctx context.Context, name, clusterName string) *etcda
 
 // createTestCluster is already defined in etcdbackup_controller_test.go.
 // Since tests run in the same package, we don't need to re-declare it.
+
+// normalizeCronSchedule converts cron macros (@daily, @hourly, etc.) to their
+// 5-field equivalents so that schedule comparisons are not sensitive to format.
+func normalizeCronSchedule(schedule string) string {
+	switch schedule {
+	case "@yearly", "@annually":
+		return "0 0 1 1 *"
+	case "@monthly":
+		return "0 0 1 * *"
+	case "@weekly":
+		return "0 0 * * 0"
+	case "@daily", "@midnight":
+		return "0 0 * * *"
+	case "@hourly":
+		return "0 * * * *"
+	default:
+		return schedule
+	}
+}
 
 // Verify that all helpers referenced in this file compile.
 var _ = func() {

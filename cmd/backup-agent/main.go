@@ -34,6 +34,8 @@ import (
 	clientv3 "go.etcd.io/etcd/client/v3"
 )
 
+const stringTrue = "true"
+
 func main() {
 	if err := run(); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
@@ -96,7 +98,7 @@ func run() error {
 }
 
 func buildTLSConfig() (*tls.Config, error) {
-	if os.Getenv("ETCD_TLS_ENABLED") != "true" {
+	if os.Getenv("ETCD_TLS_ENABLED") != stringTrue {
 		return nil, nil
 	}
 
@@ -144,7 +146,7 @@ func uploadToS3(ctx context.Context, reader io.Reader) error {
 	endpoint := os.Getenv("S3_ENDPOINT")
 	bucket := os.Getenv("S3_BUCKET")
 	key := os.Getenv("S3_KEY")
-	if os.Getenv("BACKUP_TIMESTAMP") == "true" {
+	if os.Getenv("BACKUP_TIMESTAMP") == stringTrue {
 		key = injectTimestamp(key)
 	}
 	region := os.Getenv("S3_REGION")
@@ -197,7 +199,7 @@ func uploadToS3(ctx context.Context, reader io.Reader) error {
 		if endpoint != "" {
 			o.BaseEndpoint = aws.String(endpoint)
 		}
-		if os.Getenv("S3_FORCE_PATH_STYLE") == "true" {
+		if os.Getenv("S3_FORCE_PATH_STYLE") == stringTrue {
 			o.UsePathStyle = true
 		}
 	})
@@ -222,7 +224,7 @@ func writeToPVC(reader io.Reader) error {
 	if backupPath == "" {
 		return fmt.Errorf("PVC_BACKUP_PATH is required")
 	}
-	if os.Getenv("BACKUP_TIMESTAMP") == "true" {
+	if os.Getenv("BACKUP_TIMESTAMP") == stringTrue {
 		backupPath = injectTimestamp(backupPath)
 	}
 
