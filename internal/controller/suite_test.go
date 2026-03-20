@@ -103,3 +103,13 @@ var _ = AfterSuite(func() {
 		Expect(err).NotTo(HaveOccurred())
 	})
 })
+
+// getK8sClient is a helper function to get the non-nil k8s client.
+// It's a compliment to nilaway linter which does not recognize
+// the nil check in BeforeSuite.
+func getK8sClient() client.Client {
+	if k8sClient == nil {
+		Fail("k8sClient is not initialized.")
+	}
+	return k8sClient
+}

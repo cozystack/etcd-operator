@@ -48,27 +48,27 @@ var _ = Describe("EtcdBackupSchedule Controller", func() {
 
 	BeforeEach(func() {
 		reconciler = &EtcdBackupScheduleReconciler{
-			Client:        k8sClient,
-			Scheme:        k8sClient.Scheme(),
+			Client:        getK8sClient(),
+			Scheme:        getK8sClient().Scheme(),
 			OperatorImage: scheduleImage,
 		}
 	})
 
 	AfterEach(func() {
 		scheduleList := &etcdaenixiov1alpha1.EtcdBackupScheduleList{}
-		Expect(k8sClient.List(ctx, scheduleList, client.InNamespace(testNamespace))).To(Succeed())
+		Expect(getK8sClient().List(ctx, scheduleList, client.InNamespace(testNamespace))).To(Succeed())
 		for i := range scheduleList.Items {
-			Expect(client.IgnoreNotFound(k8sClient.Delete(ctx, &scheduleList.Items[i]))).To(Succeed())
+			Expect(client.IgnoreNotFound(getK8sClient().Delete(ctx, &scheduleList.Items[i]))).To(Succeed())
 		}
 		cronJobList := &batchv1.CronJobList{}
-		Expect(k8sClient.List(ctx, cronJobList, client.InNamespace(testNamespace))).To(Succeed())
+		Expect(getK8sClient().List(ctx, cronJobList, client.InNamespace(testNamespace))).To(Succeed())
 		for i := range cronJobList.Items {
-			Expect(client.IgnoreNotFound(k8sClient.Delete(ctx, &cronJobList.Items[i]))).To(Succeed())
+			Expect(client.IgnoreNotFound(getK8sClient().Delete(ctx, &cronJobList.Items[i]))).To(Succeed())
 		}
 		clusterList := &etcdaenixiov1alpha1.EtcdClusterList{}
-		Expect(k8sClient.List(ctx, clusterList, client.InNamespace(testNamespace))).To(Succeed())
+		Expect(getK8sClient().List(ctx, clusterList, client.InNamespace(testNamespace))).To(Succeed())
 		for i := range clusterList.Items {
-			Expect(client.IgnoreNotFound(k8sClient.Delete(ctx, &clusterList.Items[i]))).To(Succeed())
+			Expect(client.IgnoreNotFound(getK8sClient().Delete(ctx, &clusterList.Items[i]))).To(Succeed())
 		}
 	})
 
@@ -85,7 +85,7 @@ var _ = Describe("EtcdBackupSchedule Controller", func() {
 
 			// Verify CronJob was created
 			cronJob := &batchv1.CronJob{}
-			Expect(k8sClient.Get(ctx, types.NamespacedName{
+			Expect(getK8sClient().Get(ctx, types.NamespacedName{
 				Name:      factory.GetBackupCronJobName(schedule),
 				Namespace: testNamespace,
 			}, cronJob)).To(Succeed())
@@ -100,7 +100,7 @@ var _ = Describe("EtcdBackupSchedule Controller", func() {
 
 			// Verify Ready condition
 			updatedSchedule := &etcdaenixiov1alpha1.EtcdBackupSchedule{}
-			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: schedule.Name, Namespace: testNamespace}, updatedSchedule)).To(Succeed())
+			Expect(getK8sClient().Get(ctx, types.NamespacedName{Name: schedule.Name, Namespace: testNamespace}, updatedSchedule)).To(Succeed())
 			Expect(meta.IsStatusConditionTrue(updatedSchedule.Status.Conditions, etcdaenixiov1alpha1.EtcdBackupScheduleConditionReady)).To(BeTrue())
 
 			_ = cluster
@@ -118,7 +118,7 @@ var _ = Describe("EtcdBackupSchedule Controller", func() {
 			Expect(result.RequeueAfter).To(BeNumerically(">", 0))
 
 			updatedSchedule := &etcdaenixiov1alpha1.EtcdBackupSchedule{}
-			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: schedule.Name, Namespace: testNamespace}, updatedSchedule)).To(Succeed())
+			Expect(getK8sClient().Get(ctx, types.NamespacedName{Name: schedule.Name, Namespace: testNamespace}, updatedSchedule)).To(Succeed())
 			readyCond := meta.FindStatusCondition(updatedSchedule.Status.Conditions, etcdaenixiov1alpha1.EtcdBackupScheduleConditionReady)
 			Expect(readyCond).NotTo(BeNil())
 			Expect(readyCond.Status).To(Equal(metav1.ConditionFalse))
@@ -149,7 +149,7 @@ var _ = Describe("EtcdBackupSchedule Controller", func() {
 
 			// Verify CronJob exists
 			cronJob := &batchv1.CronJob{}
-			Expect(k8sClient.Get(ctx, types.NamespacedName{
+			Expect(getK8sClient().Get(ctx, types.NamespacedName{
 				Name:      factory.GetBackupCronJobName(schedule),
 				Namespace: testNamespace,
 			}, cronJob)).To(Succeed())
@@ -157,9 +157,9 @@ var _ = Describe("EtcdBackupSchedule Controller", func() {
 
 			// Update schedule
 			Eventually(func(g Gomega) {
-				g.Expect(k8sClient.Get(ctx, types.NamespacedName{Name: schedule.Name, Namespace: schedule.Namespace}, schedule)).To(Succeed())
+				g.Expect(getK8sClient().Get(ctx, types.NamespacedName{Name: schedule.Name, Namespace: schedule.Namespace}, schedule)).To(Succeed())
 				schedule.Spec.Schedule = "0 12 * * 0"
-				g.Expect(k8sClient.Update(ctx, schedule)).To(Succeed())
+				g.Expect(getK8sClient().Update(ctx, schedule)).To(Succeed())
 			}).Should(Succeed())
 
 			// Second reconcile: CronJob already exists, should be Ready
@@ -170,13 +170,13 @@ var _ = Describe("EtcdBackupSchedule Controller", func() {
 
 			// Verify CronJob schedule matches the updated EtcdBackupSchedule
 			updatedCronJob := &batchv1.CronJob{}
-			Expect(k8sClient.Get(ctx, types.NamespacedName{
+			Expect(getK8sClient().Get(ctx, types.NamespacedName{
 				Name:      factory.GetBackupCronJobName(schedule),
 				Namespace: testNamespace,
 			}, updatedCronJob)).To(Succeed())
 
 			updatedSchedule := &etcdaenixiov1alpha1.EtcdBackupSchedule{}
-			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: schedule.Name, Namespace: testNamespace}, updatedSchedule)).To(Succeed())
+			Expect(getK8sClient().Get(ctx, types.NamespacedName{Name: schedule.Name, Namespace: testNamespace}, updatedSchedule)).To(Succeed())
 			Expect(normalizeCronSchedule(updatedCronJob.Spec.Schedule)).To(Equal(normalizeCronSchedule(updatedSchedule.Spec.Schedule)))
 
 			Expect(meta.IsStatusConditionTrue(updatedSchedule.Status.Conditions, etcdaenixiov1alpha1.EtcdBackupScheduleConditionReady)).To(BeTrue())
@@ -196,16 +196,16 @@ var _ = Describe("EtcdBackupSchedule Controller", func() {
 
 			// Simulate CronJob having been scheduled
 			cronJob := &batchv1.CronJob{}
-			Expect(k8sClient.Get(ctx, types.NamespacedName{
+			Expect(getK8sClient().Get(ctx, types.NamespacedName{
 				Name:      factory.GetBackupCronJobName(schedule),
 				Namespace: testNamespace,
 			}, cronJob)).To(Succeed())
 			now := metav1.Now()
 			cronJob.Status.LastScheduleTime = &now
-			Expect(k8sClient.Status().Update(ctx, cronJob)).To(Succeed())
+			Expect(getK8sClient().Status().Update(ctx, cronJob)).To(Succeed())
 
 			// Re-fetch the schedule to get latest version
-			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: schedule.Name, Namespace: testNamespace}, schedule)).To(Succeed())
+			Expect(getK8sClient().Get(ctx, types.NamespacedName{Name: schedule.Name, Namespace: testNamespace}, schedule)).To(Succeed())
 
 			// Second reconcile: should sync status
 			_, err = reconciler.Reconcile(ctx, ctrl.Request{
@@ -214,7 +214,7 @@ var _ = Describe("EtcdBackupSchedule Controller", func() {
 			Expect(err).NotTo(HaveOccurred())
 
 			updatedSchedule := &etcdaenixiov1alpha1.EtcdBackupSchedule{}
-			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: schedule.Name, Namespace: testNamespace}, updatedSchedule)).To(Succeed())
+			Expect(getK8sClient().Get(ctx, types.NamespacedName{Name: schedule.Name, Namespace: testNamespace}, updatedSchedule)).To(Succeed())
 			Expect(updatedSchedule.Status.LastScheduleTime).NotTo(BeNil())
 		})
 	})
@@ -222,8 +222,8 @@ var _ = Describe("EtcdBackupSchedule Controller", func() {
 	Context("When OperatorImage is empty", func() {
 		It("Should set Failed and Ready=false conditions", func() {
 			emptyImageReconciler := &EtcdBackupScheduleReconciler{
-				Client:        k8sClient,
-				Scheme:        k8sClient.Scheme(),
+				Client:        getK8sClient(),
+				Scheme:        getK8sClient().Scheme(),
 				OperatorImage: "",
 			}
 
@@ -237,7 +237,7 @@ var _ = Describe("EtcdBackupSchedule Controller", func() {
 			Expect(result.Requeue).To(BeFalse())
 
 			updatedSchedule := &etcdaenixiov1alpha1.EtcdBackupSchedule{}
-			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: schedule.Name, Namespace: testNamespace}, updatedSchedule)).To(Succeed())
+			Expect(getK8sClient().Get(ctx, types.NamespacedName{Name: schedule.Name, Namespace: testNamespace}, updatedSchedule)).To(Succeed())
 
 			failedCond := meta.FindStatusCondition(updatedSchedule.Status.Conditions, etcdaenixiov1alpha1.EtcdBackupScheduleConditionFailed)
 			Expect(failedCond).NotTo(BeNil())
@@ -251,7 +251,7 @@ var _ = Describe("EtcdBackupSchedule Controller", func() {
 
 			// Verify no CronJob was created
 			cronJobList := &batchv1.CronJobList{}
-			Expect(k8sClient.List(ctx, cronJobList, client.InNamespace(testNamespace))).To(Succeed())
+			Expect(getK8sClient().List(ctx, cronJobList, client.InNamespace(testNamespace))).To(Succeed())
 			for _, cj := range cronJobList.Items {
 				Expect(cj.OwnerReferences).NotTo(ContainElement(
 					HaveField("Name", schedule.Name),
@@ -279,7 +279,7 @@ var _ = Describe("EtcdBackupSchedule Controller", func() {
 			Expect(err).NotTo(HaveOccurred())
 
 			cronJob := &batchv1.CronJob{}
-			Expect(k8sClient.Get(ctx, types.NamespacedName{
+			Expect(getK8sClient().Get(ctx, types.NamespacedName{
 				Name:      factory.GetBackupCronJobName(schedule),
 				Namespace: testNamespace,
 			}, cronJob)).To(Succeed())
@@ -321,7 +321,7 @@ func createTestPVCSchedule(ctx context.Context, name, clusterName string) *etcda
 			},
 		},
 	}
-	Expect(k8sClient.Create(ctx, schedule)).To(Succeed())
+	Expect(getK8sClient().Create(ctx, schedule)).To(Succeed())
 	return schedule
 }
 

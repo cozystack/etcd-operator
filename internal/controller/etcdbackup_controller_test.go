@@ -50,8 +50,8 @@ var _ = Describe("EtcdBackup Controller", func() {
 
 	BeforeEach(func() {
 		reconciler = &EtcdBackupReconciler{
-			Client:        k8sClient,
-			Scheme:        k8sClient.Scheme(),
+			Client:        getK8sClient(),
+			Scheme:        getK8sClient().Scheme(),
 			OperatorImage: operatorImage,
 		}
 	})
@@ -59,19 +59,19 @@ var _ = Describe("EtcdBackup Controller", func() {
 	AfterEach(func() {
 		// Cleanup resources
 		backupList := &etcdaenixiov1alpha1.EtcdBackupList{}
-		Expect(k8sClient.List(ctx, backupList, client.InNamespace(testNamespace))).To(Succeed())
+		Expect(getK8sClient().List(ctx, backupList, client.InNamespace(testNamespace))).To(Succeed())
 		for i := range backupList.Items {
-			Expect(client.IgnoreNotFound(k8sClient.Delete(ctx, &backupList.Items[i]))).To(Succeed())
+			Expect(client.IgnoreNotFound(getK8sClient().Delete(ctx, &backupList.Items[i]))).To(Succeed())
 		}
 		clusterList := &etcdaenixiov1alpha1.EtcdClusterList{}
-		Expect(k8sClient.List(ctx, clusterList, client.InNamespace(testNamespace))).To(Succeed())
+		Expect(getK8sClient().List(ctx, clusterList, client.InNamespace(testNamespace))).To(Succeed())
 		for i := range clusterList.Items {
-			Expect(client.IgnoreNotFound(k8sClient.Delete(ctx, &clusterList.Items[i]))).To(Succeed())
+			Expect(client.IgnoreNotFound(getK8sClient().Delete(ctx, &clusterList.Items[i]))).To(Succeed())
 		}
 		jobList := &batchv1.JobList{}
-		Expect(k8sClient.List(ctx, jobList, client.InNamespace(testNamespace))).To(Succeed())
+		Expect(getK8sClient().List(ctx, jobList, client.InNamespace(testNamespace))).To(Succeed())
 		for i := range jobList.Items {
-			Expect(client.IgnoreNotFound(k8sClient.Delete(ctx, &jobList.Items[i], client.PropagationPolicy(metav1.DeletePropagationBackground)))).To(Succeed())
+			Expect(client.IgnoreNotFound(getK8sClient().Delete(ctx, &jobList.Items[i], client.PropagationPolicy(metav1.DeletePropagationBackground)))).To(Succeed())
 		}
 	})
 
@@ -88,7 +88,7 @@ var _ = Describe("EtcdBackup Controller", func() {
 
 			// Verify Job was created
 			job := &batchv1.Job{}
-			Expect(k8sClient.Get(ctx, types.NamespacedName{
+			Expect(getK8sClient().Get(ctx, types.NamespacedName{
 				Name:      factory.GetBackupJobName(backup),
 				Namespace: testNamespace,
 			}, job)).To(Succeed())
@@ -102,7 +102,7 @@ var _ = Describe("EtcdBackup Controller", func() {
 
 			// Verify Started condition
 			updatedBackup := &etcdaenixiov1alpha1.EtcdBackup{}
-			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: backup.Name, Namespace: testNamespace}, updatedBackup)).To(Succeed())
+			Expect(getK8sClient().Get(ctx, types.NamespacedName{Name: backup.Name, Namespace: testNamespace}, updatedBackup)).To(Succeed())
 			Expect(meta.IsStatusConditionTrue(updatedBackup.Status.Conditions, etcdaenixiov1alpha1.EtcdBackupConditionStarted)).To(BeTrue())
 
 			_ = cluster // used to keep cluster in scope
@@ -121,7 +121,7 @@ var _ = Describe("EtcdBackup Controller", func() {
 			Expect(result.Requeue).To(BeFalse())
 
 			job := &batchv1.Job{}
-			Expect(k8sClient.Get(ctx, types.NamespacedName{
+			Expect(getK8sClient().Get(ctx, types.NamespacedName{
 				Name:      factory.GetBackupJobName(backup),
 				Namespace: testNamespace,
 			}, job)).To(Succeed())
@@ -150,7 +150,7 @@ var _ = Describe("EtcdBackup Controller", func() {
 			Expect(result.Requeue).To(BeFalse())
 
 			updatedBackup := &etcdaenixiov1alpha1.EtcdBackup{}
-			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: backup.Name, Namespace: testNamespace}, updatedBackup)).To(Succeed())
+			Expect(getK8sClient().Get(ctx, types.NamespacedName{Name: backup.Name, Namespace: testNamespace}, updatedBackup)).To(Succeed())
 			failedCond := meta.FindStatusCondition(updatedBackup.Status.Conditions, etcdaenixiov1alpha1.EtcdBackupConditionFailed)
 			Expect(failedCond).NotTo(BeNil())
 			Expect(failedCond.Status).To(Equal(metav1.ConditionTrue))
@@ -171,12 +171,12 @@ var _ = Describe("EtcdBackup Controller", func() {
 
 			// Simulate Job success
 			job := &batchv1.Job{}
-			Expect(k8sClient.Get(ctx, types.NamespacedName{
+			Expect(getK8sClient().Get(ctx, types.NamespacedName{
 				Name:      factory.GetBackupJobName(backup),
 				Namespace: testNamespace,
 			}, job)).To(Succeed())
 			job.Status.Succeeded = 1
-			Expect(k8sClient.Status().Update(ctx, job)).To(Succeed())
+			Expect(getK8sClient().Status().Update(ctx, job)).To(Succeed())
 
 			// Second reconcile: should set Complete
 			_, err = reconciler.Reconcile(ctx, ctrl.Request{
@@ -185,7 +185,7 @@ var _ = Describe("EtcdBackup Controller", func() {
 			Expect(err).NotTo(HaveOccurred())
 
 			updatedBackup := &etcdaenixiov1alpha1.EtcdBackup{}
-			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: backup.Name, Namespace: testNamespace}, updatedBackup)).To(Succeed())
+			Expect(getK8sClient().Get(ctx, types.NamespacedName{Name: backup.Name, Namespace: testNamespace}, updatedBackup)).To(Succeed())
 			Expect(meta.IsStatusConditionTrue(updatedBackup.Status.Conditions, etcdaenixiov1alpha1.EtcdBackupConditionComplete)).To(BeTrue())
 		})
 	})
@@ -203,7 +203,7 @@ var _ = Describe("EtcdBackup Controller", func() {
 
 			// Simulate Job failure
 			job := &batchv1.Job{}
-			Expect(k8sClient.Get(ctx, types.NamespacedName{
+			Expect(getK8sClient().Get(ctx, types.NamespacedName{
 				Name:      factory.GetBackupJobName(backup),
 				Namespace: testNamespace,
 			}, job)).To(Succeed())
@@ -214,7 +214,7 @@ var _ = Describe("EtcdBackup Controller", func() {
 				Reason:  "BackoffLimitExceeded",
 				Message: "Job has reached the specified backoff limit",
 			})
-			Expect(k8sClient.Status().Update(ctx, job)).To(Succeed())
+			Expect(getK8sClient().Status().Update(ctx, job)).To(Succeed())
 
 			// Second reconcile: should set Failed
 			_, err = reconciler.Reconcile(ctx, ctrl.Request{
@@ -223,7 +223,7 @@ var _ = Describe("EtcdBackup Controller", func() {
 			Expect(err).NotTo(HaveOccurred())
 
 			updatedBackup := &etcdaenixiov1alpha1.EtcdBackup{}
-			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: backup.Name, Namespace: testNamespace}, updatedBackup)).To(Succeed())
+			Expect(getK8sClient().Get(ctx, types.NamespacedName{Name: backup.Name, Namespace: testNamespace}, updatedBackup)).To(Succeed())
 			Expect(meta.IsStatusConditionTrue(updatedBackup.Status.Conditions, etcdaenixiov1alpha1.EtcdBackupConditionFailed)).To(BeTrue())
 		})
 	})
@@ -240,7 +240,7 @@ var _ = Describe("EtcdBackup Controller", func() {
 				Reason:  "JobSucceeded",
 				Message: "Backup completed",
 			})
-			Expect(k8sClient.Status().Update(ctx, backup)).To(Succeed())
+			Expect(getK8sClient().Status().Update(ctx, backup)).To(Succeed())
 
 			result, err := reconciler.Reconcile(ctx, ctrl.Request{
 				NamespacedName: types.NamespacedName{Name: backup.Name, Namespace: backup.Namespace},
@@ -250,7 +250,7 @@ var _ = Describe("EtcdBackup Controller", func() {
 
 			// Verify no Job was created
 			job := &batchv1.Job{}
-			err = k8sClient.Get(ctx, types.NamespacedName{
+			err = getK8sClient().Get(ctx, types.NamespacedName{
 				Name:      factory.GetBackupJobName(backup),
 				Namespace: testNamespace,
 			}, job)
@@ -287,7 +287,7 @@ var _ = Describe("EtcdBackup Controller", func() {
 			Expect(err).NotTo(HaveOccurred())
 
 			job := &batchv1.Job{}
-			Expect(k8sClient.Get(ctx, types.NamespacedName{
+			Expect(getK8sClient().Get(ctx, types.NamespacedName{
 				Name:      factory.GetBackupJobName(backup),
 				Namespace: testNamespace,
 			}, job)).To(Succeed())
@@ -317,8 +317,8 @@ var _ = Describe("EtcdBackup Controller", func() {
 	Context("When OperatorImage is empty", func() {
 		It("Should set Failed condition instead of creating Job", func() {
 			emptyImageReconciler := &EtcdBackupReconciler{
-				Client:        k8sClient,
-				Scheme:        k8sClient.Scheme(),
+				Client:        getK8sClient(),
+				Scheme:        getK8sClient().Scheme(),
 				OperatorImage: "",
 			}
 
@@ -334,11 +334,11 @@ var _ = Describe("EtcdBackup Controller", func() {
 			// Verify no Job was created
 			jobName := factory.GetBackupJobName(backup)
 			job := &batchv1.Job{}
-			err = k8sClient.Get(ctx, types.NamespacedName{Name: jobName, Namespace: backup.Namespace}, job)
+			err = getK8sClient().Get(ctx, types.NamespacedName{Name: jobName, Namespace: backup.Namespace}, job)
 			Expect(errors.IsNotFound(err)).To(BeTrue())
 
 			// Verify Failed condition was set
-			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: backup.Name, Namespace: backup.Namespace}, backup)).To(Succeed())
+			Expect(getK8sClient().Get(ctx, types.NamespacedName{Name: backup.Name, Namespace: backup.Namespace}, backup)).To(Succeed())
 			failedCond := meta.FindStatusCondition(backup.Status.Conditions, etcdaenixiov1alpha1.EtcdBackupConditionFailed)
 			Expect(failedCond).NotTo(BeNil())
 			Expect(failedCond.Reason).To(Equal("ConfigurationError"))
@@ -367,7 +367,7 @@ func createTestCluster(ctx context.Context, name string, security *etcdaenixiov1
 			Security: security,
 		},
 	}
-	Expect(k8sClient.Create(ctx, cluster)).To(Succeed())
+	Expect(getK8sClient().Create(ctx, cluster)).To(Succeed())
 	return cluster
 }
 
@@ -386,7 +386,7 @@ func createTestPVCBackup(ctx context.Context, name, clusterName string) *etcdaen
 			},
 		},
 	}
-	Expect(k8sClient.Create(ctx, backup)).To(Succeed())
+	Expect(getK8sClient().Create(ctx, backup)).To(Succeed())
 	return backup
 }
 
@@ -409,6 +409,6 @@ func createTestS3Backup(ctx context.Context, name, clusterName string) *etcdaeni
 			},
 		},
 	}
-	Expect(k8sClient.Create(ctx, backup)).To(Succeed())
+	Expect(getK8sClient().Create(ctx, backup)).To(Succeed())
 	return backup
 }
