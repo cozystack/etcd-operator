@@ -17,6 +17,7 @@ limitations under the License.
 package factory
 
 import (
+	"strings"
 	"testing"
 
 	etcdaenixiov1alpha1 "github.com/aenix-io/etcd-operator/api/v1alpha1"
@@ -302,6 +303,12 @@ func TestCreateBackupJob_WithTLS(t *testing.T) {
 	// Endpoints should use https
 	if envMap["ETCD_ENDPOINTS"].Value == "" {
 		t.Error("ETCD_ENDPOINTS should not be empty")
+	}
+	etcdEndpointsSlice := strings.Split(envMap["ETCD_ENDPOINTS"].Value, ",")
+	for _, endpoint := range etcdEndpointsSlice {
+		if !strings.HasPrefix(endpoint, "https://") {
+			t.Errorf("expected endpoint to start with https://, got %q", endpoint)
+		}
 	}
 }
 

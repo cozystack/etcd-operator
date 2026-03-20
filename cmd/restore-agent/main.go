@@ -18,11 +18,13 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -137,6 +139,11 @@ func downloadFromS3() error {
 }
 
 func copyFromPVC() error {
+	timeout, err := getTimeout()
+	if err != nil {
+		return err
+	}
+
 	backupPath := os.Getenv("PVC_BACKUP_PATH")
 	if backupPath == "" {
 		return fmt.Errorf("PVC_BACKUP_PATH is required")
@@ -147,11 +154,27 @@ func copyFromPVC() error {
 	if err != nil {
 		return fmt.Errorf("failed to open backup file %s: %w", backupPath, err)
 	}
+
+	var closeOnce sync.Once
+	closeSrc := func() { closeOnce.Do(func() { _ = src.Close() }) }
+
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer func() {
-		_ = src.Close()
+		closeSrc()
+		cancel()
 	}()
 
-	return writeSnapshot(src)
+	// Close the file descriptor on timeout to unblock any kernel-level
+	// read stuck on unresponsive NFS/network-backed storage.
+	go func() {
+		<-ctx.Done()
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			closeSrc()
+		}
+	}()
+
+	err = writeSnapshot(src)
+	return errors.Join(err, ctx.Err())
 }
 
 func writeSnapshot(reader io.Reader) error {
