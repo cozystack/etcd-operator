@@ -108,6 +108,12 @@ func main() {
 		os.Exit(1)
 	}
 
+	err = etcdaenixiov1alpha1.SetupIndexers(ctx, mgr)
+	if err != nil {
+		log.Error(ctx, err, "unable to setup indexers")
+		os.Exit(1)
+	}
+
 	operatorImage := os.Getenv("OPERATOR_IMAGE")
 	if operatorImage == "" {
 		log.Info(ctx, "OPERATOR_IMAGE not set; backup, restore, and scheduled backup features will be unavailable")

@@ -30,6 +30,8 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	etcdaenixiov1alpha1 "github.com/aenix-io/etcd-operator/api/v1alpha1"
 	"github.com/aenix-io/etcd-operator/internal/controller/factory"
@@ -258,6 +260,25 @@ func (r *EtcdBackupScheduleReconciler) updateStatus(ctx context.Context, schedul
 func (r *EtcdBackupScheduleReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&etcdaenixiov1alpha1.EtcdBackupSchedule{}).
+		// we'll watch for ETCD Cluster changes and enqueue EtcdBackupSchedule objects
+		// that are referencing the EtcdCluster being an event source.
+		Watches(&etcdaenixiov1alpha1.EtcdCluster{},
+			handler.EnqueueRequestsFromMapFunc(func(ctx context.Context, obj client.Object) []reconcile.Request {
+				etcdCluster, ok := obj.(*etcdaenixiov1alpha1.EtcdCluster)
+				if !ok {
+					return nil
+				}
+				etcdSchedules := &etcdaenixiov1alpha1.EtcdBackupScheduleList{}
+				if err := r.List(ctx, etcdSchedules, client.InNamespace(etcdCluster.Namespace), client.MatchingFields{etcdaenixiov1alpha1.EtcdClusterRefIndex: etcdCluster.Name}); err != nil {
+					log.Error(ctx, err, "cannot list EtcdBackupSchedules for EtcdCluster")
+					return nil
+				}
+				var requests []reconcile.Request
+				for _, schedule := range etcdSchedules.Items {
+					requests = append(requests, reconcile.Request{NamespacedName: types.NamespacedName{Namespace: schedule.Namespace, Name: schedule.Name}})
+				}
+				return requests
+			})).
 		Owns(&batchv1.CronJob{}).
 		Complete(r)
 }
