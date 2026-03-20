@@ -155,7 +155,7 @@ func TestCreateBackupJob_S3(t *testing.T) {
 				S3: &etcdaenixiov1alpha1.S3BackupDestination{
 					Endpoint:             "https://s3.example.com",
 					Bucket:               "backups",
-					Key:                  "etcd/snap.db",
+					Key:                  "etcd/backups",
 					CredentialsSecretRef: corev1.LocalObjectReference{Name: "aws-creds"},
 					Region:               "eu-west-1",
 				},
@@ -181,8 +181,8 @@ func TestCreateBackupJob_S3(t *testing.T) {
 	if envMap["S3_BUCKET"].Value != "backups" {
 		t.Errorf("expected S3_BUCKET=backups, got %q", envMap["S3_BUCKET"].Value)
 	}
-	if envMap["S3_KEY"].Value != "etcd/snap.db" {
-		t.Errorf("expected S3_KEY=etcd/snap.db, got %q", envMap["S3_KEY"].Value)
+	if envMap["S3_KEY"].Value != "etcd/backups/s3-backup.db" {
+		t.Errorf("expected S3_KEY=etcd/backups/s3-backup.db, got %q", envMap["S3_KEY"].Value)
 	}
 	if envMap["S3_REGION"].Value != "eu-west-1" {
 		t.Errorf("expected S3_REGION=eu-west-1, got %q", envMap["S3_REGION"].Value)
@@ -341,7 +341,7 @@ func TestCreateBackupJob_PVCSubPath(t *testing.T) {
 			Destination: etcdaenixiov1alpha1.BackupDestination{
 				PVC: &etcdaenixiov1alpha1.PVCBackupDestination{
 					ClaimName: "backup-pvc",
-					SubPath:   "daily/snap-2024.db",
+					SubPath:   "daily",
 				},
 			},
 		},
@@ -358,7 +358,7 @@ func TestCreateBackupJob_PVCSubPath(t *testing.T) {
 		envMap[e.Name] = e
 	}
 
-	expected := "/backup/data/daily/snap-2024.db"
+	expected := "/backup/data/daily/subpath-backup.db"
 	if envMap["PVC_BACKUP_PATH"].Value != expected {
 		t.Errorf("expected PVC_BACKUP_PATH=%q, got %q", expected, envMap["PVC_BACKUP_PATH"].Value)
 	}

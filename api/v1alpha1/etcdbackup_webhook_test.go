@@ -152,7 +152,6 @@ var _ = Describe("EtcdBackup Webhook", func() {
 				statusErr := err.(*errors.StatusError)
 				Expect(statusErr.ErrStatus.Message).To(ContainSubstring("endpoint"))
 				Expect(statusErr.ErrStatus.Message).To(ContainSubstring("bucket"))
-				Expect(statusErr.ErrStatus.Message).To(ContainSubstring("key"))
 				Expect(statusErr.ErrStatus.Message).To(ContainSubstring("credentialsSecretRef"))
 			}
 		})

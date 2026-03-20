@@ -51,8 +51,10 @@ type S3BackupDestination struct {
 	Endpoint string `json:"endpoint"`
 	// Bucket is the name of the S3 bucket.
 	Bucket string `json:"bucket"`
-	// Key is the object key (path) within the bucket.
-	Key string `json:"key"`
+	// Key is the key prefix (directory path) within the bucket.
+	// The operator appends the backup filename automatically.
+	// +optional
+	Key string `json:"key,omitempty"`
 	// CredentialsSecretRef references a Secret containing AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY keys.
 	CredentialsSecretRef corev1.LocalObjectReference `json:"credentialsSecretRef"`
 	// Region is the AWS region for the S3 bucket.
@@ -69,7 +71,8 @@ type S3BackupDestination struct {
 type PVCBackupDestination struct {
 	// ClaimName is the name of the PersistentVolumeClaim to use.
 	ClaimName string `json:"claimName"`
-	// SubPath is an optional sub-path within the PVC volume.
+	// SubPath is an optional sub-directory within the PVC volume.
+	// The operator appends the backup filename automatically.
 	// +optional
 	SubPath string `json:"subPath,omitempty"`
 }

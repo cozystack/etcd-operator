@@ -77,8 +77,9 @@ spec:
                           to use.
                         type: string
                       subPath:
-                        description: SubPath is an optional sub-path within the PVC
-                          volume.
+                        description: |-
+                          SubPath is an optional sub-directory within the PVC volume.
+                          The operator appends the backup filename automatically.
                         type: string
                     required:
                     - claimName
@@ -117,7 +118,9 @@ spec:
                           Most S3-compatible providers (MinIO, Ceph) require path style.
                         type: boolean
                       key:
-                        description: Key is the object key (path) within the bucket.
+                        description: |-
+                          Key is the key prefix (directory path) within the bucket.
+                          The operator appends the backup filename automatically.
                         type: string
                       region:
                         description: Region is the AWS region for the S3 bucket.
@@ -126,7 +129,6 @@ spec:
                     - bucket
                     - credentialsSecretRef
                     - endpoint
-                    - key
                     type: object
                 type: object
             required:

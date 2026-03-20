@@ -77,6 +77,17 @@ func run() error {
 		_ = etcdClient.Close()
 	}()
 
+	var revision int64
+	if os.Getenv("BACKUP_INCLUDE_REVISION") == stringTrue {
+		firstEndpoint := strings.Split(endpoints, ",")[0]
+		statusResp, err := etcdClient.Status(ctx, firstEndpoint)
+		if err != nil {
+			return fmt.Errorf("failed to get etcd status for revision: %w", err)
+		}
+		revision = statusResp.Header.Revision
+		fmt.Printf("etcd revision: %d\n", revision)
+	}
+
 	fmt.Println("taking etcd snapshot...")
 	reader, err := etcdClient.Snapshot(ctx)
 	if err != nil {
@@ -89,9 +100,9 @@ func run() error {
 	dest := os.Getenv("BACKUP_DESTINATION")
 	switch dest {
 	case "s3":
-		return uploadToS3(ctx, reader)
+		return uploadToS3(ctx, reader, revision)
 	case "pvc":
-		return writeToPVC(reader)
+		return writeToPVC(reader, revision)
 	default:
 		return fmt.Errorf("unknown BACKUP_DESTINATION: %q (expected 's3' or 'pvc')", dest)
 	}
@@ -142,12 +153,23 @@ func injectTimestamp(path string) string {
 	return fmt.Sprintf("%s-%s%s", base, ts, ext)
 }
 
-func uploadToS3(ctx context.Context, reader io.Reader) error {
+// injectRevision inserts an etcd revision before the file extension in a path.
+// For example: "backups/snap.db" -> "backups/snap-rev12345.db"
+func injectRevision(path string, revision int64) string {
+	ext := filepath.Ext(path)
+	base := strings.TrimSuffix(path, ext)
+	return fmt.Sprintf("%s-rev%d%s", base, revision, ext)
+}
+
+func uploadToS3(ctx context.Context, reader io.Reader, revision int64) error {
 	endpoint := os.Getenv("S3_ENDPOINT")
 	bucket := os.Getenv("S3_BUCKET")
 	key := os.Getenv("S3_KEY")
 	if os.Getenv("BACKUP_TIMESTAMP") == stringTrue {
 		key = injectTimestamp(key)
+	}
+	if revision > 0 {
+		key = injectRevision(key, revision)
 	}
 	region := os.Getenv("S3_REGION")
 
@@ -219,13 +241,16 @@ func uploadToS3(ctx context.Context, reader io.Reader) error {
 	return nil
 }
 
-func writeToPVC(reader io.Reader) error {
+func writeToPVC(reader io.Reader, revision int64) error {
 	backupPath := os.Getenv("PVC_BACKUP_PATH")
 	if backupPath == "" {
 		return fmt.Errorf("PVC_BACKUP_PATH is required")
 	}
 	if os.Getenv("BACKUP_TIMESTAMP") == stringTrue {
 		backupPath = injectTimestamp(backupPath)
+	}
+	if revision > 0 {
+		backupPath = injectRevision(backupPath, revision)
 	}
 
 	if err := os.MkdirAll(filepath.Dir(backupPath), 0700); err != nil {

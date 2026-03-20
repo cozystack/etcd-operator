@@ -157,11 +157,15 @@ func buildBackupContainer(
 		if s3.ForcePathStyle {
 			forcePathStyle = stringTrue
 		}
+		s3Key := fmt.Sprintf("%s.db", backupName)
+		if s3.Key != "" {
+			s3Key = fmt.Sprintf("%s/%s.db", strings.TrimRight(s3.Key, "/"), backupName)
+		}
 		envVars = append(envVars,
 			corev1.EnvVar{Name: "BACKUP_DESTINATION", Value: "s3"},
 			corev1.EnvVar{Name: "S3_ENDPOINT", Value: s3.Endpoint},
 			corev1.EnvVar{Name: "S3_BUCKET", Value: s3.Bucket},
-			corev1.EnvVar{Name: "S3_KEY", Value: s3.Key},
+			corev1.EnvVar{Name: "S3_KEY", Value: s3Key},
 			corev1.EnvVar{Name: "S3_REGION", Value: s3.Region},
 			corev1.EnvVar{Name: "S3_FORCE_PATH_STYLE", Value: forcePathStyle},
 			corev1.EnvVar{
@@ -188,7 +192,7 @@ func buildBackupContainer(
 	if pvc := destination.PVC; pvc != nil {
 		backupPath := fmt.Sprintf("/backup/data/%s.db", backupName)
 		if pvc.SubPath != "" {
-			backupPath = fmt.Sprintf("/backup/data/%s", pvc.SubPath)
+			backupPath = fmt.Sprintf("/backup/data/%s/%s.db", pvc.SubPath, backupName)
 		}
 		envVars = append(envVars,
 			corev1.EnvVar{Name: "BACKUP_DESTINATION", Value: "pvc"},
@@ -207,6 +211,8 @@ func buildBackupContainer(
 			MountPath: "/backup/data",
 		})
 	}
+
+	envVars = append(envVars, corev1.EnvVar{Name: "BACKUP_INCLUDE_REVISION", Value: stringTrue})
 
 	container := corev1.Container{
 		Name:         "backup-agent",

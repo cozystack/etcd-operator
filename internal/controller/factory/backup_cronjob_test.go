@@ -155,7 +155,7 @@ func TestCreateBackupCronJob_S3(t *testing.T) {
 				S3: &etcdaenixiov1alpha1.S3BackupDestination{
 					Endpoint:             "https://s3.example.com",
 					Bucket:               "backups",
-					Key:                  "etcd/snap.db",
+					Key:                  "etcd/backups",
 					CredentialsSecretRef: corev1.LocalObjectReference{Name: awsCreds},
 					Region:               "eu-west-1",
 				},
@@ -181,8 +181,8 @@ func TestCreateBackupCronJob_S3(t *testing.T) {
 	if envMap["S3_BUCKET"].Value != "backups" {
 		t.Errorf("expected S3_BUCKET=backups, got %q", envMap["S3_BUCKET"].Value)
 	}
-	if envMap["S3_KEY"].Value != "etcd/snap.db" {
-		t.Errorf("expected S3_KEY=etcd/snap.db, got %q", envMap["S3_KEY"].Value)
+	if envMap["S3_KEY"].Value != "etcd/backups/s3-schedule.db" {
+		t.Errorf("expected S3_KEY=etcd/backups/s3-schedule.db, got %q", envMap["S3_KEY"].Value)
 	}
 
 	awsAccessKey := envMap["AWS_ACCESS_KEY_ID"]

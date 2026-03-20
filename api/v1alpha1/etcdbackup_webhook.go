@@ -150,9 +150,6 @@ func validateBackupDestination(dest BackupDestination, destPath *field.Path) fie
 		if s3.Bucket == "" {
 			allErrors = append(allErrors, field.Required(s3Path.Child("bucket"), "bucket is required"))
 		}
-		if s3.Key == "" {
-			allErrors = append(allErrors, field.Required(s3Path.Child("key"), "key is required"))
-		}
 		if s3.CredentialsSecretRef.Name == "" {
 			allErrors = append(allErrors, field.Required(s3Path.Child("credentialsSecretRef", "name"), "credentialsSecretRef.name is required"))
 		}
