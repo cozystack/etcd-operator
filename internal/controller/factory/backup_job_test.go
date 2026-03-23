@@ -22,6 +22,7 @@ import (
 
 	etcdaenixiov1alpha1 "github.com/aenix-io/etcd-operator/api/v1alpha1"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
@@ -114,6 +115,19 @@ func TestCreateBackupJob_PVC(t *testing.T) {
 	}
 	if job.OwnerReferences[0].Name != "my-backup" {
 		t.Errorf("expected owner name 'my-backup', got %q", job.OwnerReferences[0].Name)
+	}
+
+	// Check ephemeral storage (EmptyDir without SizeLimit → etcd default 2Gi)
+	expectedEphemeral := resource.NewQuantity(2*1024*1024*1024, resource.BinarySI)
+	if req, ok := container.Resources.Requests[corev1.ResourceEphemeralStorage]; !ok {
+		t.Error("ephemeral-storage request not set")
+	} else if req.Cmp(*expectedEphemeral) != 0 {
+		t.Errorf("expected ephemeral-storage request %s, got %s", expectedEphemeral.String(), req.String())
+	}
+	if lim, ok := container.Resources.Limits[corev1.ResourceEphemeralStorage]; !ok {
+		t.Error("ephemeral-storage limit not set")
+	} else if lim.Cmp(*expectedEphemeral) != 0 {
+		t.Errorf("expected ephemeral-storage limit %s, got %s", expectedEphemeral.String(), lim.String())
 	}
 
 	// Check labels
@@ -361,5 +375,94 @@ func TestCreateBackupJob_PVCSubPath(t *testing.T) {
 	expected := "/backup/data/daily/subpath-backup.db"
 	if envMap["PVC_BACKUP_PATH"].Value != expected {
 		t.Errorf("expected PVC_BACKUP_PATH=%q, got %q", expected, envMap["PVC_BACKUP_PATH"].Value)
+	}
+}
+
+func TestGetEffectiveDBQuota(t *testing.T) {
+	tests := []struct {
+		name     string
+		cluster  *etcdaenixiov1alpha1.EtcdCluster
+		expected int64
+	}{
+		{
+			name: "explicit quota-backend-bytes",
+			cluster: &etcdaenixiov1alpha1.EtcdCluster{
+				Spec: etcdaenixiov1alpha1.EtcdClusterSpec{
+					Options: map[string]string{"quota-backend-bytes": "8589934592"}, // 8Gi
+					Storage: etcdaenixiov1alpha1.StorageSpec{
+						EmptyDir: &corev1.EmptyDirVolumeSource{},
+					},
+				},
+			},
+			expected: 8589934592,
+		},
+		{
+			name: "derived from EmptyDir SizeLimit",
+			cluster: &etcdaenixiov1alpha1.EtcdCluster{
+				Spec: etcdaenixiov1alpha1.EtcdClusterSpec{
+					Storage: etcdaenixiov1alpha1.StorageSpec{
+						EmptyDir: &corev1.EmptyDirVolumeSource{
+							SizeLimit: ptr.To(resource.MustParse("4Gi")),
+						},
+					},
+				},
+			},
+			expected: 4 * 1024 * 1024 * 1024, // 4Gi
+		},
+		{
+			name: "derived from PVC storage request",
+			cluster: &etcdaenixiov1alpha1.EtcdCluster{
+				Spec: etcdaenixiov1alpha1.EtcdClusterSpec{
+					Storage: etcdaenixiov1alpha1.StorageSpec{
+						VolumeClaimTemplate: etcdaenixiov1alpha1.EmbeddedPersistentVolumeClaim{
+							Spec: corev1.PersistentVolumeClaimSpec{
+								Resources: corev1.VolumeResourceRequirements{
+									Requests: corev1.ResourceList{
+										corev1.ResourceStorage: resource.MustParse("10Gi"),
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			expected: 10 * 1024 * 1024 * 1024, // 10Gi
+		},
+		{
+			name: "EmptyDir without SizeLimit falls back to etcd default",
+			cluster: &etcdaenixiov1alpha1.EtcdCluster{
+				Spec: etcdaenixiov1alpha1.EtcdClusterSpec{
+					Storage: etcdaenixiov1alpha1.StorageSpec{
+						EmptyDir: &corev1.EmptyDirVolumeSource{},
+					},
+				},
+			},
+			expected: 2 * 1024 * 1024 * 1024, // 2Gi
+		},
+		{
+			name: "invalid quota-backend-bytes falls through to storage size",
+			cluster: &etcdaenixiov1alpha1.EtcdCluster{
+				Spec: etcdaenixiov1alpha1.EtcdClusterSpec{
+					Options: map[string]string{"quota-backend-bytes": "not-a-number"},
+					Storage: etcdaenixiov1alpha1.StorageSpec{
+						EmptyDir: &corev1.EmptyDirVolumeSource{
+							SizeLimit: ptr.To(resource.MustParse("4Gi")),
+						},
+					},
+				},
+			},
+			expected: 4 * 1024 * 1024 * 1024, // 4Gi
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := getEffectiveDBQuota(tt.cluster)
+			expectedQ := resource.NewQuantity(tt.expected, resource.BinarySI)
+			if got.Cmp(*expectedQ) != 0 {
+				t.Errorf("expected %s (%d bytes), got %s (%d bytes)",
+					expectedQ.String(), tt.expected, got.String(), got.Value())
+			}
+		})
 	}
 }

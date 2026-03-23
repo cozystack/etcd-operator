@@ -18,6 +18,7 @@ package factory
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 
 	etcdaenixiov1alpha1 "github.com/aenix-io/etcd-operator/api/v1alpha1"
@@ -33,7 +34,35 @@ import (
 const (
 	stringTrue = "true"
 	backupData = "backup-data"
+
+	// defaultEtcdQuotaBytes is etcd's default backend quota (2 GiB).
+	defaultEtcdQuotaBytes int64 = 2 * 1024 * 1024 * 1024
 )
+
+// getEffectiveDBQuota returns the maximum etcd DB size for the given cluster,
+// used to set ephemeral-storage requests/limits on backup Jobs.
+// It checks, in order: explicit quota-backend-bytes option, the full cluster
+// storage size, and falls back to etcd's default 2 GiB quota.
+func getEffectiveDBQuota(cluster *etcdaenixiov1alpha1.EtcdCluster) resource.Quantity {
+	// we'll use an explicit quota-backend-bytes option if set.
+	if v, ok := cluster.Spec.Options["quota-backend-bytes"]; ok && v != "" {
+		if parsed, err := strconv.ParseInt(v, 10, 64); err == nil && parsed > 0 {
+			return *resource.NewQuantity(parsed, resource.BinarySI)
+		}
+	}
+
+	// if a quota-backend-bytes option is not set, use the full cluster storage size
+	if cluster.Spec.Storage.EmptyDir != nil {
+		if cluster.Spec.Storage.EmptyDir.SizeLimit != nil {
+			return *cluster.Spec.Storage.EmptyDir.SizeLimit
+		}
+	} else if req := cluster.Spec.Storage.VolumeClaimTemplate.Spec.Resources.Requests.Storage(); req != nil {
+		return *req
+	}
+
+	// otherwise we'll fall back to etcd's default quota.
+	return *resource.NewQuantity(defaultEtcdQuotaBytes, resource.BinarySI)
+}
 
 // CreateBackupJob builds a Job that runs the backup-agent to take an etcd snapshot
 // and store it to the configured destination.
@@ -209,6 +238,7 @@ func buildBackupContainer(
 
 	envVars = append(envVars, corev1.EnvVar{Name: "BACKUP_INCLUDE_REVISION", Value: stringTrue})
 
+	ephemeralStorage := getEffectiveDBQuota(cluster)
 	container := corev1.Container{
 		Name:         "backup-agent",
 		Image:        operatorImage,
@@ -217,11 +247,13 @@ func buildBackupContainer(
 		VolumeMounts: volumeMounts,
 		Resources: corev1.ResourceRequirements{
 			Requests: corev1.ResourceList{
-				corev1.ResourceCPU:    resource.MustParse("100m"),
-				corev1.ResourceMemory: resource.MustParse("128Mi"),
+				corev1.ResourceCPU:              resource.MustParse("100m"),
+				corev1.ResourceMemory:           resource.MustParse("128Mi"),
+				corev1.ResourceEphemeralStorage: ephemeralStorage,
 			},
 			Limits: corev1.ResourceList{
-				corev1.ResourceMemory: resource.MustParse("512Mi"),
+				corev1.ResourceMemory:           resource.MustParse("512Mi"),
+				corev1.ResourceEphemeralStorage: ephemeralStorage,
 			},
 		},
 	}
