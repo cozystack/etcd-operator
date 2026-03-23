@@ -22,6 +22,7 @@ import (
 	"strings"
 
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/equality"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -92,6 +93,9 @@ func (r *EtcdCluster) ValidateCreate() (admission.Warnings, error) {
 			errOptions.Error()))
 	}
 
+	bootstrapErr := r.validateBootstrap()
+	allErrors = append(allErrors, bootstrapErr...)
+
 	if len(allErrors) > 0 {
 		err := errors.NewInvalid(
 			schema.GroupKind{Group: GroupVersion.Group, Kind: "EtcdCluster"},
@@ -106,7 +110,10 @@ func (r *EtcdCluster) ValidateCreate() (admission.Warnings, error) {
 func (r *EtcdCluster) ValidateUpdate(old runtime.Object) (admission.Warnings, error) {
 	etcdclusterlog.Info("validate update", "name", r.Name)
 	var warnings admission.Warnings
-	oldCluster := old.(*EtcdCluster)
+	oldCluster, ok := old.(*EtcdCluster)
+	if !ok {
+		return nil, fmt.Errorf("expected EtcdCluster but got %T", old)
+	}
 
 	// Check if replicas are being resized
 	if *oldCluster.Spec.Replicas != *r.Spec.Replicas {
@@ -133,6 +140,14 @@ func (r *EtcdCluster) ValidateUpdate(old runtime.Object) (admission.Warnings, er
 			field.NewPath("spec", "storage", "emptyDir"),
 			r.Spec.Storage.EmptyDir,
 			"field is immutable"),
+		)
+	}
+
+	// Check if the bootstrap is being changed
+	if !equality.Semantic.DeepEqual(oldCluster.Spec.Bootstrap, r.Spec.Bootstrap) {
+		allErrors = append(allErrors, field.Forbidden(
+			field.NewPath("spec", "bootstrap"),
+			"field is immutable after cluster creation"),
 		)
 	}
 
@@ -313,6 +328,16 @@ func (r *EtcdCluster) validateSecurity() field.ErrorList {
 	}
 
 	return nil
+}
+
+func (r *EtcdCluster) validateBootstrap() field.ErrorList {
+	if r.Spec.Bootstrap == nil || r.Spec.Bootstrap.Restore == nil {
+		return nil
+	}
+	return validateBackupDestination(
+		r.Spec.Bootstrap.Restore.Source,
+		field.NewPath("spec", "bootstrap", "restore", "source"),
+	)
 }
 
 func validateOptions(cluster *EtcdCluster) error {

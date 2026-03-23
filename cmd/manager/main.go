@@ -108,16 +108,52 @@ func main() {
 		os.Exit(1)
 	}
 
+	err = etcdaenixiov1alpha1.SetupIndexers(ctx, mgr)
+	if err != nil {
+		log.Error(ctx, err, "unable to setup indexers")
+		os.Exit(1)
+	}
+
+	operatorImage := os.Getenv("OPERATOR_IMAGE")
+	if operatorImage == "" {
+		log.Info(ctx, "OPERATOR_IMAGE not set; backup, restore, and scheduled backup features will be unavailable")
+	}
+
 	if err = (&controller.EtcdClusterReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
+		Client:        mgr.GetClient(),
+		Scheme:        mgr.GetScheme(),
+		OperatorImage: operatorImage,
 	}).SetupWithManager(mgr); err != nil {
 		log.Error(ctx, err, "unable to create controller", "controller", "EtcdCluster")
+		os.Exit(1)
+	}
+	if err = (&controller.EtcdBackupReconciler{
+		Client:        mgr.GetClient(),
+		Scheme:        mgr.GetScheme(),
+		OperatorImage: operatorImage,
+	}).SetupWithManager(mgr); err != nil {
+		log.Error(ctx, err, "unable to create controller", "controller", "EtcdBackup")
+		os.Exit(1)
+	}
+	if err = (&controller.EtcdBackupScheduleReconciler{
+		Client:        mgr.GetClient(),
+		Scheme:        mgr.GetScheme(),
+		OperatorImage: operatorImage,
+	}).SetupWithManager(mgr); err != nil {
+		log.Error(ctx, err, "unable to create controller", "controller", "EtcdBackupSchedule")
 		os.Exit(1)
 	}
 	if !flags.DisableWebhooks {
 		if err = (&etcdaenixiov1alpha1.EtcdCluster{}).SetupWebhookWithManager(mgr); err != nil {
 			log.Error(ctx, err, "unable to create webhook", "webhook", "EtcdCluster")
+			os.Exit(1)
+		}
+		if err = (&etcdaenixiov1alpha1.EtcdBackup{}).SetupWebhookWithManager(mgr); err != nil {
+			log.Error(ctx, err, "unable to create webhook", "webhook", "EtcdBackup")
+			os.Exit(1)
+		}
+		if err = (&etcdaenixiov1alpha1.EtcdBackupSchedule{}).SetupWebhookWithManager(mgr); err != nil {
+			log.Error(ctx, err, "unable to create webhook", "webhook", "EtcdBackupSchedule")
 			os.Exit(1)
 		}
 	}

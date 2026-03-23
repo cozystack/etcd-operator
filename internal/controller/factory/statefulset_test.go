@@ -95,7 +95,7 @@ var _ = Describe("CreateOrUpdateStatefulSet handler", func() {
 		})
 
 		It("should successfully ensure the statefulSet with empty spec", func() {
-			Expect(CreateOrUpdateStatefulSet(ctx, &etcdcluster, k8sClient)).To(Succeed())
+			Expect(CreateOrUpdateStatefulSet(ctx, &etcdcluster, k8sClient, "")).To(Succeed())
 			Eventually(Object(&statefulSet)).Should(
 				HaveField("Spec.Replicas", Equal(etcdcluster.Spec.Replicas)),
 			)
@@ -130,7 +130,7 @@ var _ = Describe("CreateOrUpdateStatefulSet handler", func() {
 					},
 				},
 				Spec: corev1.PodSpec{
-					ServiceAccountName: "etcd-operator",
+					ServiceAccountName: etcdOperatorName,
 					ReadinessGates: []corev1.PodReadinessGate{
 						{
 							// Some custom readiness gate
@@ -159,7 +159,7 @@ var _ = Describe("CreateOrUpdateStatefulSet handler", func() {
 					ClientSecret:          "client-secret",
 				},
 			}
-			Expect(CreateOrUpdateStatefulSet(ctx, &etcdcluster, k8sClient)).To(Succeed())
+			Expect(CreateOrUpdateStatefulSet(ctx, &etcdcluster, k8sClient, "")).To(Succeed())
 			Eventually(Get(&statefulSet)).Should(Succeed())
 
 			By("Checking the resources", func() {
@@ -173,7 +173,7 @@ var _ = Describe("CreateOrUpdateStatefulSet handler", func() {
 				Expect(statefulSet.Spec.Template.ObjectMeta.Labels).To(Equal(map[string]string{
 					"app.kubernetes.io/name":       "etcd",
 					"app.kubernetes.io/instance":   etcdcluster.Name,
-					"app.kubernetes.io/managed-by": "etcd-operator",
+					"app.kubernetes.io/managed-by": etcdOperatorName,
 					"app":                          "etcd",
 				}))
 				Expect(statefulSet.Spec.Template.ObjectMeta.Annotations).To(Equal(etcdcluster.Spec.PodTemplate.Annotations))
@@ -321,7 +321,7 @@ var _ = Describe("CreateOrUpdateStatefulSet handler", func() {
 					},
 				},
 			}
-			Expect(CreateOrUpdateStatefulSet(ctx, &etcdcluster, k8sClient)).To(Succeed())
+			Expect(CreateOrUpdateStatefulSet(ctx, &etcdcluster, k8sClient, "")).To(Succeed())
 			Eventually(Get(&statefulSet)).Should(Succeed())
 
 			By("Checking the updated startup probe", func() {
@@ -381,7 +381,7 @@ var _ = Describe("CreateOrUpdateStatefulSet handler", func() {
 					SizeLimit: ptr.To(size),
 				},
 			}
-			Expect(CreateOrUpdateStatefulSet(ctx, &etcdcluster, k8sClient)).To(Succeed())
+			Expect(CreateOrUpdateStatefulSet(ctx, &etcdcluster, k8sClient, "")).To(Succeed())
 			Eventually(Get(&statefulSet)).Should(Succeed())
 
 			By("Checking the emptyDir", func() {
@@ -390,7 +390,7 @@ var _ = Describe("CreateOrUpdateStatefulSet handler", func() {
 		})
 
 		It("should fail on creating the statefulset with invalid owner reference", func() {
-			Expect(CreateOrUpdateStatefulSet(ctx, &etcdcluster, clientWithEmptyScheme)).NotTo(Succeed())
+			Expect(CreateOrUpdateStatefulSet(ctx, &etcdcluster, clientWithEmptyScheme, "")).NotTo(Succeed())
 		})
 	})
 

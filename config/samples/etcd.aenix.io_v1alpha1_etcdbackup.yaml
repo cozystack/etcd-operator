@@ -1,0 +1,16 @@
+apiVersion: etcd.aenix.io/v1alpha1
+kind: EtcdBackup
+metadata:
+  labels:
+    app.kubernetes.io/name: etcdbackup
+    app.kubernetes.io/instance: etcdbackup-sample
+    app.kubernetes.io/part-of: etcd-operator
+    app.kubernetes.io/managed-by: kustomize
+    app.kubernetes.io/created-by: etcd-operator
+  name: etcdbackup-sample
+spec:
+  clusterRef:
+    name: etcdcluster-sample
+  destination:
+    pvc:
+      claimName: etcd-backup-pvc

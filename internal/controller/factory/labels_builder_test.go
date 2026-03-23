@@ -19,7 +19,7 @@ var _ = Describe("Labels builder", func() {
 		It("WithManagedBy sets correct key and value", func() {
 			builder := NewLabelsBuilder()
 			builder.WithManagedBy()
-			Expect(builder["app.kubernetes.io/managed-by"]).To(Equal("etcd-operator"))
+			Expect(builder["app.kubernetes.io/managed-by"]).To(Equal(etcdOperatorName))
 		})
 		It("WithInstance sets correct key and value", func() {
 			builder := NewLabelsBuilder()
@@ -32,7 +32,7 @@ var _ = Describe("Labels builder", func() {
 			expected := map[string]string{
 				"app.kubernetes.io/name":       "etcd",
 				"app.kubernetes.io/instance":   "local",
-				"app.kubernetes.io/managed-by": "etcd-operator",
+				"app.kubernetes.io/managed-by": etcdOperatorName,
 			}
 			Expect(builder).To(Equal(LabelsBuilder(expected)))
 		})

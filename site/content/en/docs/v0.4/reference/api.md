@@ -14,8 +14,47 @@ simple_list: true
 Package v1alpha1 contains API Schema definitions for the etcd.aenix.io v1alpha1 API group
 
 ### Resource Types
+- [EtcdBackup](#etcdbackup)
+- [EtcdBackupList](#etcdbackuplist)
+- [EtcdBackupSchedule](#etcdbackupschedule)
+- [EtcdBackupScheduleList](#etcdbackupschedulelist)
 - [EtcdCluster](#etcdcluster)
 
+
+
+#### BackupDestination
+
+
+
+BackupDestination defines the target location for the backup. Exactly one must be specified.
+
+
+
+_Appears in:_
+- [EtcdBackupScheduleSpec](#etcdbackupschedulespec)
+- [EtcdBackupSpec](#etcdbackupspec)
+- [RestoreSpec](#restorespec)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `s3` _[S3BackupDestination](#s3backupdestination)_ | S3 defines S3-compatible storage as the backup destination. |  | Optional: {} <br /> |
+| `pvc` _[PVCBackupDestination](#pvcbackupdestination)_ | PVC defines a PersistentVolumeClaim as the backup destination. |  | Optional: {} <br /> |
+
+
+#### BootstrapSpec
+
+
+
+BootstrapSpec defines how to initialize a new EtcdCluster from an existing data source.
+
+
+
+_Appears in:_
+- [EtcdClusterSpec](#etcdclusterspec)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `restore` _[RestoreSpec](#restorespec)_ | Restore configures cluster initialization from an etcd snapshot. |  | Optional: {} <br /> |
 
 
 #### EmbeddedMetadataResource
@@ -109,6 +148,134 @@ _Appears in:_
 | `spec` _[ServiceSpec](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.30.0/#servicespec-v1-core)_ | Spec defines the behavior of the service. |  | Optional: {} <br /> |
 
 
+#### EtcdBackup
+
+
+
+EtcdBackup is the Schema for the etcdbackups API
+
+
+
+_Appears in:_
+- [EtcdBackupList](#etcdbackuplist)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `apiVersion` _string_ | `etcd.aenix.io/v1alpha1` | | |
+| `kind` _string_ | `EtcdBackup` | | |
+| `metadata` _[ObjectMeta](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.30.0/#objectmeta-v1-meta)_ | Refer to Kubernetes API documentation for fields of `metadata`. |  |  |
+| `spec` _[EtcdBackupSpec](#etcdbackupspec)_ |  |  |  |
+
+
+#### EtcdBackupList
+
+
+
+EtcdBackupList contains a list of EtcdBackup
+
+
+
+
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `apiVersion` _string_ | `etcd.aenix.io/v1alpha1` | | |
+| `kind` _string_ | `EtcdBackupList` | | |
+| `metadata` _[ListMeta](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.30.0/#listmeta-v1-meta)_ | Refer to Kubernetes API documentation for fields of `metadata`. |  |  |
+| `items` _[EtcdBackup](#etcdbackup) array_ |  |  |  |
+
+
+#### EtcdBackupSchedule
+
+
+
+EtcdBackupSchedule is the Schema for the etcdbackupschedules API
+
+
+
+_Appears in:_
+- [EtcdBackupScheduleList](#etcdbackupschedulelist)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `apiVersion` _string_ | `etcd.aenix.io/v1alpha1` | | |
+| `kind` _string_ | `EtcdBackupSchedule` | | |
+| `metadata` _[ObjectMeta](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.30.0/#objectmeta-v1-meta)_ | Refer to Kubernetes API documentation for fields of `metadata`. |  |  |
+| `spec` _[EtcdBackupScheduleSpec](#etcdbackupschedulespec)_ |  |  |  |
+
+
+#### EtcdBackupScheduleList
+
+
+
+EtcdBackupScheduleList contains a list of EtcdBackupSchedule
+
+
+
+
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `apiVersion` _string_ | `etcd.aenix.io/v1alpha1` | | |
+| `kind` _string_ | `EtcdBackupScheduleList` | | |
+| `metadata` _[ListMeta](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.30.0/#listmeta-v1-meta)_ | Refer to Kubernetes API documentation for fields of `metadata`. |  |  |
+| `items` _[EtcdBackupSchedule](#etcdbackupschedule) array_ |  |  |  |
+
+
+#### EtcdBackupScheduleSpec
+
+
+
+EtcdBackupScheduleSpec defines the desired state of EtcdBackupSchedule
+
+
+
+_Appears in:_
+- [EtcdBackupSchedule](#etcdbackupschedule)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `clusterRef` _[LocalObjectReference](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.30.0/#localobjectreference-v1-core)_ | ClusterRef references the EtcdCluster to back up. |  |  |
+| `schedule` _string_ | Schedule is a cron expression defining when backups should be taken. |  |  |
+| `destination` _[BackupDestination](#backupdestination)_ | Destination defines where the backup will be stored. |  |  |
+| `successfulJobsHistoryLimit` _integer_ | SuccessfulJobsHistoryLimit is the number of successful finished CronJob children to retain. |  | Minimum: 0 <br />Optional: {} <br /> |
+| `failedJobsHistoryLimit` _integer_ | FailedJobsHistoryLimit is the number of failed finished CronJob children to retain. |  | Minimum: 0 <br />Optional: {} <br /> |
+
+
+
+
+#### EtcdBackupSpec
+
+
+
+EtcdBackupSpec defines the desired state of EtcdBackup
+
+
+
+_Appears in:_
+- [EtcdBackup](#etcdbackup)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `clusterRef` _[LocalObjectReference](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.30.0/#localobjectreference-v1-core)_ | ClusterRef references the EtcdCluster to back up. |  |  |
+| `destination` _[BackupDestination](#backupdestination)_ | Destination defines where the backup will be stored. |  |  |
+
+
+
+
+#### EtcdBackupStatusPhase
+
+_Underlying type:_ _string_
+
+
+
+
+
+_Appears in:_
+- [EtcdBackupStatus](#etcdbackupstatus)
+
+
+
 #### EtcdCluster
 
 
@@ -148,10 +315,28 @@ _Appears in:_
 | `podDisruptionBudgetTemplate` _[EmbeddedPodDisruptionBudget](#embeddedpoddisruptionbudget)_ | PodDisruptionBudgetTemplate describes PDB resource to create for etcd cluster members. Nil to disable. |  | Optional: {} <br /> |
 | `storage` _[StorageSpec](#storagespec)_ |  |  |  |
 | `security` _[SecuritySpec](#securityspec)_ | Security describes security settings of etcd (authentication, certificates, rbac) |  | Optional: {} <br /> |
+| `bootstrap` _[BootstrapSpec](#bootstrapspec)_ | Bootstrap defines initialization from an existing data source (e.g., snapshot restore).<br />This is only used during initial cluster creation and is ignored afterward. |  | Optional: {} <br /> |
 
 
 
 
+
+
+#### PVCBackupDestination
+
+
+
+PVCBackupDestination defines a PersistentVolumeClaim as the backup target.
+
+
+
+_Appears in:_
+- [BackupDestination](#backupdestination)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `claimName` _string_ | ClaimName is the name of the PersistentVolumeClaim to use. |  |  |
+| `subPath` _string_ | SubPath is an optional sub-directory within the PVC volume.<br />The operator appends the backup filename automatically. |  | Optional: {} <br /> |
 
 
 #### PodDisruptionBudgetSpec
@@ -186,6 +371,43 @@ _Appears in:_
 | --- | --- | --- | --- |
 | `metadata` _[EmbeddedObjectMetadata](#embeddedobjectmetadata)_ | Refer to Kubernetes API documentation for fields of `metadata`. |  | Optional: {} <br /> |
 | `spec` _[PodSpec](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.30.0/#podspec-v1-core)_ | Spec follows the structure of a regular Pod spec. Overrides defined here will be strategically merged with the default pod spec, generated by the operator. |  | Optional: {} <br /> |
+
+
+#### RestoreSpec
+
+
+
+RestoreSpec defines how to restore a cluster from a snapshot.
+
+
+
+_Appears in:_
+- [BootstrapSpec](#bootstrapspec)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `source` _[BackupDestination](#backupdestination)_ | Source defines where to get the snapshot for restoration. |  |  |
+
+
+#### S3BackupDestination
+
+
+
+S3BackupDestination defines S3-compatible storage parameters.
+
+
+
+_Appears in:_
+- [BackupDestination](#backupdestination)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `endpoint` _string_ | Endpoint is the S3-compatible endpoint URL (e.g., "https://s3.amazonaws.com"). |  |  |
+| `bucket` _string_ | Bucket is the name of the S3 bucket. |  |  |
+| `key` _string_ | Key is the key prefix (directory path) within the bucket.<br />The operator appends the backup filename automatically. |  | Optional: {} <br /> |
+| `credentialsSecretRef` _[LocalObjectReference](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.30.0/#localobjectreference-v1-core)_ | CredentialsSecretRef references a Secret containing AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY keys. |  |  |
+| `region` _string_ | Region is the AWS region for the S3 bucket. |  | Optional: {} <br /> |
+| `forcePathStyle` _boolean_ | ForcePathStyle forces path-style S3 URLs (e.g., endpoint/bucket/key)<br />instead of virtual-hosted-style (e.g., bucket.endpoint/key).<br />Most S3-compatible providers (MinIO, Ceph) require path style. |  | Optional: {} <br /> |
 
 
 #### SecuritySpec

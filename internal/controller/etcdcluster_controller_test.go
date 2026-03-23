@@ -39,8 +39,8 @@ var _ = Describe("EtcdCluster Controller", func() {
 
 	BeforeEach(func() {
 		reconciler = &EtcdClusterReconciler{
-			Client: k8sClient,
-			Scheme: k8sClient.Scheme(),
+			Client: getK8sClient(),
+			Scheme: getK8sClient().Scheme(),
 		}
 
 		ns = &corev1.Namespace{
@@ -48,8 +48,8 @@ var _ = Describe("EtcdCluster Controller", func() {
 				GenerateName: "test-",
 			},
 		}
-		Expect(k8sClient.Create(ctx, ns)).Should(Succeed())
-		DeferCleanup(k8sClient.Delete, ns)
+		Expect(getK8sClient().Create(ctx, ns)).Should(Succeed())
+		DeferCleanup(getK8sClient().Delete, ns)
 	})
 
 	Context("When running getEtcdEndpoints", func() {
@@ -107,9 +107,9 @@ var _ = Describe("EtcdCluster Controller", func() {
 					},
 				},
 			}
-			Expect(k8sClient.Create(ctx, &etcdcluster)).Should(Succeed())
+			Expect(getK8sClient().Create(ctx, &etcdcluster)).Should(Succeed())
 			Eventually(Get(&etcdcluster)).Should(Succeed())
-			DeferCleanup(k8sClient.Delete, &etcdcluster)
+			DeferCleanup(getK8sClient().Delete, &etcdcluster)
 
 			configMap = corev1.ConfigMap{
 				ObjectMeta: metav1.ObjectMeta{
@@ -117,28 +117,28 @@ var _ = Describe("EtcdCluster Controller", func() {
 					Name:      factory.GetClusterStateConfigMapName(&etcdcluster),
 				},
 			}
-			DeferCleanup(k8sClient.Delete, &configMap)
+			DeferCleanup(getK8sClient().Delete, &configMap)
 			headlessService = corev1.Service{
 				ObjectMeta: metav1.ObjectMeta{
 					Namespace: ns.GetName(),
 					Name:      factory.GetHeadlessServiceName(&etcdcluster),
 				},
 			}
-			DeferCleanup(k8sClient.Delete, &headlessService)
+			DeferCleanup(getK8sClient().Delete, &headlessService)
 			service = corev1.Service{
 				ObjectMeta: metav1.ObjectMeta{
 					Namespace: ns.GetName(),
 					Name:      factory.GetServiceName(&etcdcluster),
 				},
 			}
-			DeferCleanup(k8sClient.Delete, &service)
+			DeferCleanup(getK8sClient().Delete, &service)
 			statefulSet = appsv1.StatefulSet{
 				ObjectMeta: metav1.ObjectMeta{
 					Namespace: ns.GetName(),
 					Name:      etcdcluster.GetName(),
 				},
 			}
-			DeferCleanup(k8sClient.Delete, &statefulSet)
+			DeferCleanup(getK8sClient().Delete, &statefulSet)
 		})
 
 		It("should reconcile a new EtcdCluster", func() {
