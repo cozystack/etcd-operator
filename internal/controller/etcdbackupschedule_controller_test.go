@@ -23,7 +23,6 @@ import (
 	. "github.com/onsi/gomega"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -32,7 +31,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	etcdaenixiov1alpha1 "github.com/aenix-io/etcd-operator/api/v1alpha1"
-	"github.com/aenix-io/etcd-operator/internal/controller/factory"
 )
 
 var _ = Describe("EtcdBackupSchedule Controller", func() {
@@ -84,11 +82,7 @@ var _ = Describe("EtcdBackupSchedule Controller", func() {
 			Expect(result.Requeue).To(BeFalse())
 
 			// Verify CronJob was created
-			cronJob := &batchv1.CronJob{}
-			Expect(getK8sClient().Get(ctx, types.NamespacedName{
-				Name:      factory.GetBackupCronJobName(schedule),
-				Namespace: testNamespace,
-			}, cronJob)).To(Succeed())
+			cronJob := getScheduleCronJob(ctx, schedule.Name)
 			Expect(cronJob.Spec.Schedule).To(Equal("0 */6 * * *"))
 			Expect(cronJob.Spec.ConcurrencyPolicy).To(Equal(batchv1.ForbidConcurrent))
 			Expect(cronJob.Spec.JobTemplate.Spec.Template.Spec.Containers).To(HaveLen(1))
@@ -148,11 +142,7 @@ var _ = Describe("EtcdBackupSchedule Controller", func() {
 			Expect(err).NotTo(HaveOccurred())
 
 			// Verify CronJob exists
-			cronJob := &batchv1.CronJob{}
-			Expect(getK8sClient().Get(ctx, types.NamespacedName{
-				Name:      factory.GetBackupCronJobName(schedule),
-				Namespace: testNamespace,
-			}, cronJob)).To(Succeed())
+			cronJob := getScheduleCronJob(ctx, schedule.Name)
 			Expect(cronJob.Spec.Schedule).To(Equal("0 */6 * * *"))
 
 			// Update schedule
@@ -169,11 +159,7 @@ var _ = Describe("EtcdBackupSchedule Controller", func() {
 			Expect(err).NotTo(HaveOccurred())
 
 			// Verify CronJob schedule matches the updated EtcdBackupSchedule
-			updatedCronJob := &batchv1.CronJob{}
-			Expect(getK8sClient().Get(ctx, types.NamespacedName{
-				Name:      factory.GetBackupCronJobName(schedule),
-				Namespace: testNamespace,
-			}, updatedCronJob)).To(Succeed())
+			updatedCronJob := getScheduleCronJob(ctx, schedule.Name)
 
 			updatedSchedule := &etcdaenixiov1alpha1.EtcdBackupSchedule{}
 			Expect(getK8sClient().Get(ctx, types.NamespacedName{Name: schedule.Name, Namespace: testNamespace}, updatedSchedule)).To(Succeed())
@@ -195,11 +181,7 @@ var _ = Describe("EtcdBackupSchedule Controller", func() {
 			Expect(err).NotTo(HaveOccurred())
 
 			// Simulate CronJob having been scheduled
-			cronJob := &batchv1.CronJob{}
-			Expect(getK8sClient().Get(ctx, types.NamespacedName{
-				Name:      factory.GetBackupCronJobName(schedule),
-				Namespace: testNamespace,
-			}, cronJob)).To(Succeed())
+			cronJob := getScheduleCronJob(ctx, schedule.Name)
 			now := metav1.Now()
 			cronJob.Status.LastScheduleTime = &now
 			Expect(getK8sClient().Status().Update(ctx, cronJob)).To(Succeed())
@@ -278,11 +260,7 @@ var _ = Describe("EtcdBackupSchedule Controller", func() {
 			})
 			Expect(err).NotTo(HaveOccurred())
 
-			cronJob := &batchv1.CronJob{}
-			Expect(getK8sClient().Get(ctx, types.NamespacedName{
-				Name:      factory.GetBackupCronJobName(schedule),
-				Namespace: testNamespace,
-			}, cronJob)).To(Succeed())
+			cronJob := getScheduleCronJob(ctx, schedule.Name)
 
 			container := cronJob.Spec.JobTemplate.Spec.Template.Spec.Containers[0]
 
@@ -304,6 +282,16 @@ var _ = Describe("EtcdBackupSchedule Controller", func() {
 		})
 	})
 })
+
+func getScheduleCronJob(ctx context.Context, scheduleName string) *batchv1.CronJob {
+	cronJobList := &batchv1.CronJobList{}
+	ExpectWithOffset(1, getK8sClient().List(ctx, cronJobList,
+		client.InNamespace(testNamespace),
+		client.MatchingLabels{"etcd.aenix.io/etcdbackupschedule-name": scheduleName},
+	)).To(Succeed())
+	ExpectWithOffset(1, cronJobList.Items).To(HaveLen(1))
+	return &cronJobList.Items[0]
+}
 
 func createTestPVCSchedule(ctx context.Context, name, clusterName string) *etcdaenixiov1alpha1.EtcdBackupSchedule { //nolint:unparam
 	schedule := &etcdaenixiov1alpha1.EtcdBackupSchedule{
@@ -349,6 +337,5 @@ func normalizeCronSchedule(schedule string) string {
 
 // Verify that all helpers referenced in this file compile.
 var _ = func() {
-	_ = errors.IsNotFound
 	_ = ptr.To[int32]
 }

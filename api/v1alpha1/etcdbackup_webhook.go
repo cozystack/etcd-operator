@@ -51,20 +51,6 @@ func (r *EtcdBackup) ValidateCreate() (admission.Warnings, error) {
 
 	var allErrors field.ErrorList
 
-	// Job name = "{name}-backup" (7 char suffix).
-	// Job names must be <= 63 chars (DNS label limit).
-	const jobSuffix = "-backup"
-	const maxJobNameLen = 63
-	maxNameLen := maxJobNameLen - len(jobSuffix)
-	if len(r.Name) > maxNameLen {
-		allErrors = append(allErrors, field.Invalid(
-			field.NewPath("metadata", "name"),
-			r.Name,
-			fmt.Sprintf("name must be at most %d characters (Job name limit is %d, suffix %q is %d characters)",
-				maxNameLen, maxJobNameLen, jobSuffix, len(jobSuffix)),
-		))
-	}
-
 	if r.Spec.ClusterRef.Name == "" {
 		allErrors = append(allErrors, field.Required(
 			field.NewPath("spec", "clusterRef", "name"),

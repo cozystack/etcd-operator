@@ -35,11 +35,6 @@ const (
 	backupData = "backup-data"
 )
 
-// GetBackupJobName returns the deterministic Job name for a given EtcdBackup.
-func GetBackupJobName(backup *etcdaenixiov1alpha1.EtcdBackup) string {
-	return fmt.Sprintf("%s-backup", backup.Name)
-}
-
 // CreateBackupJob builds a Job that runs the backup-agent to take an etcd snapshot
 // and store it to the configured destination.
 func CreateBackupJob(
@@ -58,9 +53,9 @@ func CreateBackupJob(
 
 	job := &batchv1.Job{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      GetBackupJobName(backup),
-			Namespace: backup.Namespace,
-			Labels:    labels,
+			GenerateName: backup.Name + "-backup-",
+			Namespace:    backup.Namespace,
+			Labels:       labels,
 		},
 		Spec: batchv1.JobSpec{
 			BackoffLimit:            &backoffLimit,

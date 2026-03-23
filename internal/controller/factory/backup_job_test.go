@@ -67,8 +67,8 @@ func TestCreateBackupJob_PVC(t *testing.T) {
 		t.Fatalf("CreateBackupJob failed: %v", err)
 	}
 
-	if job.Name != "my-backup-backup" {
-		t.Errorf("expected job name 'my-backup-backup', got %q", job.Name)
+	if job.GenerateName != "my-backup-backup-" {
+		t.Errorf("expected job generateName 'my-backup-backup-', got %q", job.GenerateName)
 	}
 	if job.Namespace != "default" {
 		t.Errorf("expected namespace 'default', got %q", job.Namespace)
@@ -364,12 +364,3 @@ func TestCreateBackupJob_PVCSubPath(t *testing.T) {
 	}
 }
 
-func TestGetBackupJobName(t *testing.T) {
-	backup := &etcdaenixiov1alpha1.EtcdBackup{
-		ObjectMeta: metav1.ObjectMeta{Name: "my-backup"},
-	}
-	expected := "my-backup-backup"
-	if got := GetBackupJobName(backup); got != expected {
-		t.Errorf("expected %q, got %q", expected, got)
-	}
-}

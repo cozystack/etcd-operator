@@ -89,24 +89,15 @@ func (r *EtcdBackupReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		return ctrl.Result{}, fmt.Errorf("failed to get EtcdCluster: %w", err)
 	}
 
-	jobName := factory.GetBackupJobName(backup)
-	existingJob := &batchv1.Job{}
-	err := r.Get(ctx, types.NamespacedName{Name: jobName, Namespace: backup.Namespace}, existingJob)
-	if err == nil {
-		if !metav1.IsControlledBy(existingJob, backup) {
-			meta.SetStatusCondition(&backup.Status.Conditions, metav1.Condition{
-				Type:               etcdaenixiov1alpha1.EtcdBackupConditionFailed,
-				Status:             metav1.ConditionTrue,
-				Reason:             "JobNameConflict",
-				Message:            fmt.Sprintf("Job %q already exists and is not controlled by this EtcdBackup", jobName),
-				ObservedGeneration: backup.Generation,
-			})
-			return r.updateStatus(ctx, backup)
-		}
-		return r.reconcileJobStatus(ctx, backup, existingJob)
+	existingJobs := &batchv1.JobList{}
+	if err := r.List(ctx, existingJobs,
+		client.InNamespace(backup.Namespace),
+		client.MatchingLabels{"etcd.aenix.io/etcdbackup-name": backup.Name},
+	); err != nil {
+		return ctrl.Result{}, fmt.Errorf("failed to list Jobs: %w", err)
 	}
-	if !errors.IsNotFound(err) {
-		return ctrl.Result{}, fmt.Errorf("failed to get Job: %w", err)
+	if len(existingJobs.Items) > 0 {
+		return r.reconcileJobStatus(ctx, backup, &existingJobs.Items[0])
 	}
 
 	if r.OperatorImage == "" {
@@ -129,12 +120,12 @@ func (r *EtcdBackupReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		return ctrl.Result{}, fmt.Errorf("failed to create backup Job: %w", err)
 	}
 
-	log.Info(ctx, "backup Job created", "job", jobName)
+	log.Info(ctx, "backup Job created", "job", job.Name)
 	meta.SetStatusCondition(&backup.Status.Conditions, metav1.Condition{
 		Type:               etcdaenixiov1alpha1.EtcdBackupConditionStarted,
 		Status:             metav1.ConditionTrue,
 		Reason:             "JobCreated",
-		Message:            fmt.Sprintf("Backup Job %q created", jobName),
+		Message:            fmt.Sprintf("Backup Job %q created", job.Name),
 		ObservedGeneration: backup.Generation,
 	})
 

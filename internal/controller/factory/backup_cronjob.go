@@ -28,11 +28,6 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 )
 
-// GetBackupCronJobName returns the deterministic CronJob name for a given EtcdBackupSchedule.
-func GetBackupCronJobName(schedule *etcdaenixiov1alpha1.EtcdBackupSchedule) string {
-	return fmt.Sprintf("%s-scheduled-backup", schedule.Name)
-}
-
 // CreateBackupCronJob builds a CronJob that runs the backup-agent on a schedule.
 func CreateBackupCronJob(
 	schedule *etcdaenixiov1alpha1.EtcdBackupSchedule,
@@ -52,9 +47,9 @@ func CreateBackupCronJob(
 	var activeDeadline int64 = 900 // 15 minutes; safety net if backup-agent hangs
 	cronJob := &batchv1.CronJob{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      GetBackupCronJobName(schedule),
-			Namespace: schedule.Namespace,
-			Labels:    labels,
+			GenerateName: schedule.Name + "-scheduled-backup-",
+			Namespace:    schedule.Namespace,
+			Labels:       labels,
 		},
 		Spec: batchv1.CronJobSpec{
 			Schedule:                   schedule.Spec.Schedule,

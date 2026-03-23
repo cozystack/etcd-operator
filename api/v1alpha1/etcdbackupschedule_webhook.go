@@ -53,20 +53,6 @@ func (r *EtcdBackupSchedule) ValidateCreate() (admission.Warnings, error) {
 
 	var allErrors field.ErrorList
 
-	// CronJob name = "{name}-scheduled-backup" (17 char suffix).
-	// CronJob names must be <= 52 chars (63 max Pod name - 11 for Job/Pod suffixes).
-	const cronJobSuffix = "-scheduled-backup"
-	const maxCronJobNameLen = 52
-	maxNameLen := maxCronJobNameLen - len(cronJobSuffix)
-	if len(r.Name) > maxNameLen {
-		allErrors = append(allErrors, field.Invalid(
-			field.NewPath("metadata", "name"),
-			r.Name,
-			fmt.Sprintf("name must be at most %d characters (CronJob name limit is %d, suffix %q is %d characters)",
-				maxNameLen, maxCronJobNameLen, cronJobSuffix, len(cronJobSuffix)),
-		))
-	}
-
 	allErrors = append(allErrors, r.validateSpec()...)
 
 	if len(allErrors) > 0 {

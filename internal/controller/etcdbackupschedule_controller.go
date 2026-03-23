@@ -168,14 +168,15 @@ func (r *EtcdBackupScheduleReconciler) Reconcile(ctx context.Context, req ctrl.R
 		return r.updateStatus(ctx, schedule)
 	}
 
-	cronJobName := factory.GetBackupCronJobName(schedule)
-	existingCronJob := &batchv1.CronJob{}
-	err := r.Get(ctx, types.NamespacedName{Name: cronJobName, Namespace: schedule.Namespace}, existingCronJob)
-	if err == nil {
-		return r.reconcileExistingCronJob(ctx, schedule, cluster, existingCronJob)
+	existingCronJobs := &batchv1.CronJobList{}
+	if err := r.List(ctx, existingCronJobs,
+		client.InNamespace(schedule.Namespace),
+		client.MatchingLabels{"etcd.aenix.io/etcdbackupschedule-name": schedule.Name},
+	); err != nil {
+		return ctrl.Result{}, fmt.Errorf("failed to list CronJobs: %w", err)
 	}
-	if !errors.IsNotFound(err) {
-		return ctrl.Result{}, fmt.Errorf("failed to get CronJob: %w", err)
+	if len(existingCronJobs.Items) > 0 {
+		return r.reconcileExistingCronJob(ctx, schedule, cluster, &existingCronJobs.Items[0])
 	}
 
 	cronJob, err := factory.CreateBackupCronJob(schedule, cluster, r.OperatorImage, r.Scheme)
@@ -187,12 +188,12 @@ func (r *EtcdBackupScheduleReconciler) Reconcile(ctx context.Context, req ctrl.R
 		return ctrl.Result{}, fmt.Errorf("failed to create backup CronJob: %w", err)
 	}
 
-	log.Info(ctx, "backup CronJob created", "cronJob", cronJobName)
+	log.Info(ctx, "backup CronJob created", "cronJob", cronJob.Name)
 	meta.SetStatusCondition(&schedule.Status.Conditions, metav1.Condition{
 		Type:               etcdaenixiov1alpha1.EtcdBackupScheduleConditionReady,
 		Status:             metav1.ConditionTrue,
 		Reason:             "CronJobCreated",
-		Message:            fmt.Sprintf("CronJob %q created", cronJobName),
+		Message:            fmt.Sprintf("CronJob %q created", cronJob.Name),
 		ObservedGeneration: schedule.Generation,
 	})
 	// Clear any previous failure condition
