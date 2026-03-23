@@ -263,6 +263,19 @@ _Appears in:_
 
 
 
+#### EtcdBackupStatusPhase
+
+_Underlying type:_ _string_
+
+
+
+
+
+_Appears in:_
+- [EtcdBackupStatus](#etcdbackupstatus)
+
+
+
 #### EtcdCluster
 
 
