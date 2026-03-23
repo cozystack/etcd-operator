@@ -65,8 +65,8 @@ func (r *EtcdBackupReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		return ctrl.Result{}, nil
 	}
 
-	if meta.IsStatusConditionTrue(backup.Status.Conditions, etcdaenixiov1alpha1.EtcdBackupConditionComplete) ||
-		meta.IsStatusConditionTrue(backup.Status.Conditions, etcdaenixiov1alpha1.EtcdBackupConditionFailed) {
+	if backup.Status.Phase == etcdaenixiov1alpha1.EtcdBackupStatusPhaseComplete ||
+		backup.Status.Phase == etcdaenixiov1alpha1.EtcdBackupStatusPhaseFailed {
 		return ctrl.Result{}, nil
 	}
 
@@ -77,6 +77,7 @@ func (r *EtcdBackupReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	}
 	if err := r.Get(ctx, clusterKey, cluster); err != nil {
 		if errors.IsNotFound(err) {
+			backup.Status.Phase = etcdaenixiov1alpha1.EtcdBackupStatusPhaseFailed
 			meta.SetStatusCondition(&backup.Status.Conditions, metav1.Condition{
 				Type:               etcdaenixiov1alpha1.EtcdBackupConditionFailed,
 				Status:             metav1.ConditionTrue,
@@ -101,6 +102,7 @@ func (r *EtcdBackupReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	}
 
 	if r.OperatorImage == "" {
+		backup.Status.Phase = etcdaenixiov1alpha1.EtcdBackupStatusPhaseFailed
 		meta.SetStatusCondition(&backup.Status.Conditions, metav1.Condition{
 			Type:               etcdaenixiov1alpha1.EtcdBackupConditionFailed,
 			Status:             metav1.ConditionTrue,
@@ -121,6 +123,7 @@ func (r *EtcdBackupReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	}
 
 	log.Info(ctx, "backup Job created", "job", job.Name)
+	backup.Status.Phase = etcdaenixiov1alpha1.EtcdBackupStatusPhaseStarted
 	meta.SetStatusCondition(&backup.Status.Conditions, metav1.Condition{
 		Type:               etcdaenixiov1alpha1.EtcdBackupConditionStarted,
 		Status:             metav1.ConditionTrue,
@@ -138,6 +141,7 @@ func (r *EtcdBackupReconciler) reconcileJobStatus(
 	job *batchv1.Job,
 ) (ctrl.Result, error) {
 	if job.Status.Succeeded >= 1 {
+		backup.Status.Phase = etcdaenixiov1alpha1.EtcdBackupStatusPhaseComplete
 		meta.SetStatusCondition(&backup.Status.Conditions, metav1.Condition{
 			Type:               etcdaenixiov1alpha1.EtcdBackupConditionComplete,
 			Status:             metav1.ConditionTrue,
@@ -150,6 +154,7 @@ func (r *EtcdBackupReconciler) reconcileJobStatus(
 
 	for _, c := range job.Status.Conditions {
 		if c.Type == batchv1.JobFailed && c.Status == corev1.ConditionTrue {
+			backup.Status.Phase = etcdaenixiov1alpha1.EtcdBackupStatusPhaseFailed
 			meta.SetStatusCondition(&backup.Status.Conditions, metav1.Condition{
 				Type:               etcdaenixiov1alpha1.EtcdBackupConditionFailed,
 				Status:             metav1.ConditionTrue,
@@ -162,6 +167,7 @@ func (r *EtcdBackupReconciler) reconcileJobStatus(
 	}
 
 	if !meta.IsStatusConditionTrue(backup.Status.Conditions, etcdaenixiov1alpha1.EtcdBackupConditionStarted) {
+		backup.Status.Phase = etcdaenixiov1alpha1.EtcdBackupStatusPhaseStarted
 		meta.SetStatusCondition(&backup.Status.Conditions, metav1.Condition{
 			Type:               etcdaenixiov1alpha1.EtcdBackupConditionStarted,
 			Status:             metav1.ConditionTrue,

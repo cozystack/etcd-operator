@@ -18,8 +18,8 @@ spec:
     - jsonPath: .spec.clusterRef.name
       name: Cluster
       type: string
-    - jsonPath: .status.conditions[?(@.type=="Complete")].status
-      name: Status
+    - jsonPath: .status.phase
+      name: Phase
       type: string
     - jsonPath: .metadata.creationTimestamp
       name: Age
@@ -207,6 +207,8 @@ spec:
                   - type
                   type: object
                 type: array
+              phase:
+                type: string
             type: object
         type: object
     served: true

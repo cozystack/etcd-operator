@@ -21,6 +21,15 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
+type EtcdBackupStatusPhase string
+
+const (
+	EtcdBackupStatusPhasePending  EtcdBackupStatusPhase = "Pending"
+	EtcdBackupStatusPhaseStarted  EtcdBackupStatusPhase = "Started"
+	EtcdBackupStatusPhaseComplete EtcdBackupStatusPhase = "Complete"
+	EtcdBackupStatusPhaseFailed   EtcdBackupStatusPhase = "Failed"
+)
+
 const (
 	EtcdBackupConditionStarted  = "Started"
 	EtcdBackupConditionComplete = "Complete"
@@ -79,13 +88,14 @@ type PVCBackupDestination struct {
 
 // EtcdBackupStatus defines the observed state of EtcdBackup
 type EtcdBackupStatus struct {
-	Conditions []metav1.Condition `json:"conditions,omitempty"`
+	Conditions []metav1.Condition    `json:"conditions,omitempty"`
+	Phase      EtcdBackupStatusPhase `json:"phase,omitempty"`
 }
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
 // +kubebuilder:printcolumn:name="Cluster",type=string,JSONPath=`.spec.clusterRef.name`
-// +kubebuilder:printcolumn:name="Status",type=string,JSONPath=`.status.conditions[?(@.type=="Complete")].status`
+// +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=`.status.phase`
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 
 // EtcdBackup is the Schema for the etcdbackups API

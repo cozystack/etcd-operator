@@ -94,9 +94,10 @@ var _ = Describe("EtcdBackup Controller", func() {
 			Expect(job.OwnerReferences).To(HaveLen(1))
 			Expect(job.OwnerReferences[0].Name).To(Equal(backup.Name))
 
-			// Verify Started condition
+			// Verify Started phase and condition
 			updatedBackup := &etcdaenixiov1alpha1.EtcdBackup{}
 			Expect(getK8sClient().Get(ctx, types.NamespacedName{Name: backup.Name, Namespace: testNamespace}, updatedBackup)).To(Succeed())
+			Expect(updatedBackup.Status.Phase).To(Equal(etcdaenixiov1alpha1.EtcdBackupStatusPhaseStarted))
 			Expect(meta.IsStatusConditionTrue(updatedBackup.Status.Conditions, etcdaenixiov1alpha1.EtcdBackupConditionStarted)).To(BeTrue())
 
 			_ = cluster // used to keep cluster in scope
@@ -141,6 +142,7 @@ var _ = Describe("EtcdBackup Controller", func() {
 
 			updatedBackup := &etcdaenixiov1alpha1.EtcdBackup{}
 			Expect(getK8sClient().Get(ctx, types.NamespacedName{Name: backup.Name, Namespace: testNamespace}, updatedBackup)).To(Succeed())
+			Expect(updatedBackup.Status.Phase).To(Equal(etcdaenixiov1alpha1.EtcdBackupStatusPhaseFailed))
 			failedCond := meta.FindStatusCondition(updatedBackup.Status.Conditions, etcdaenixiov1alpha1.EtcdBackupConditionFailed)
 			Expect(failedCond).NotTo(BeNil())
 			Expect(failedCond.Status).To(Equal(metav1.ConditionTrue))
@@ -172,6 +174,7 @@ var _ = Describe("EtcdBackup Controller", func() {
 
 			updatedBackup := &etcdaenixiov1alpha1.EtcdBackup{}
 			Expect(getK8sClient().Get(ctx, types.NamespacedName{Name: backup.Name, Namespace: testNamespace}, updatedBackup)).To(Succeed())
+			Expect(updatedBackup.Status.Phase).To(Equal(etcdaenixiov1alpha1.EtcdBackupStatusPhaseComplete))
 			Expect(meta.IsStatusConditionTrue(updatedBackup.Status.Conditions, etcdaenixiov1alpha1.EtcdBackupConditionComplete)).To(BeTrue())
 		})
 	})
@@ -206,6 +209,7 @@ var _ = Describe("EtcdBackup Controller", func() {
 
 			updatedBackup := &etcdaenixiov1alpha1.EtcdBackup{}
 			Expect(getK8sClient().Get(ctx, types.NamespacedName{Name: backup.Name, Namespace: testNamespace}, updatedBackup)).To(Succeed())
+			Expect(updatedBackup.Status.Phase).To(Equal(etcdaenixiov1alpha1.EtcdBackupStatusPhaseFailed))
 			Expect(meta.IsStatusConditionTrue(updatedBackup.Status.Conditions, etcdaenixiov1alpha1.EtcdBackupConditionFailed)).To(BeTrue())
 		})
 	})
@@ -215,7 +219,8 @@ var _ = Describe("EtcdBackup Controller", func() {
 			cluster := createTestCluster(ctx, clusterName+"-done", nil)
 			backup := createTestPVCBackup(ctx, backupName+"-done", cluster.Name)
 
-			// Set Complete condition directly
+			// Set Complete phase and condition directly
+			backup.Status.Phase = etcdaenixiov1alpha1.EtcdBackupStatusPhaseComplete
 			meta.SetStatusCondition(&backup.Status.Conditions, metav1.Condition{
 				Type:    etcdaenixiov1alpha1.EtcdBackupConditionComplete,
 				Status:  metav1.ConditionTrue,
@@ -317,8 +322,9 @@ var _ = Describe("EtcdBackup Controller", func() {
 			)).To(Succeed())
 			Expect(jobList.Items).To(BeEmpty())
 
-			// Verify Failed condition was set
+			// Verify Failed phase and condition were set
 			Expect(getK8sClient().Get(ctx, types.NamespacedName{Name: backup.Name, Namespace: backup.Namespace}, backup)).To(Succeed())
+			Expect(backup.Status.Phase).To(Equal(etcdaenixiov1alpha1.EtcdBackupStatusPhaseFailed))
 			failedCond := meta.FindStatusCondition(backup.Status.Conditions, etcdaenixiov1alpha1.EtcdBackupConditionFailed)
 			Expect(failedCond).NotTo(BeNil())
 			Expect(failedCond.Reason).To(Equal("ConfigurationError"))
