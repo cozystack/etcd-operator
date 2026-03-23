@@ -69,8 +69,8 @@ func TestCreateBackupCronJob_PVC(t *testing.T) {
 		t.Fatalf("CreateBackupCronJob failed: %v", err)
 	}
 
-	if cronJob.GenerateName != "my-schedule-scheduled-backup-" {
-		t.Errorf("expected cronjob generateName 'my-schedule-scheduled-backup-', got %q", cronJob.GenerateName)
+	if cronJob.GenerateName != "my-schedule-" {
+		t.Errorf("expected cronjob generateName 'my-schedule-', got %q", cronJob.GenerateName)
 	}
 	if cronJob.Namespace != "default" {
 		t.Errorf("expected namespace 'default', got %q", cronJob.Namespace)
@@ -240,4 +240,3 @@ func TestCreateBackupCronJob_HistoryLimits(t *testing.T) {
 		t.Errorf("expected FailedJobsHistoryLimit=2, got %v", cronJob.Spec.FailedJobsHistoryLimit)
 	}
 }
-

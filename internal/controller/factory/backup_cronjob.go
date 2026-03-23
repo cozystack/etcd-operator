@@ -47,7 +47,7 @@ func CreateBackupCronJob(
 	var activeDeadline int64 = 900 // 15 minutes; safety net if backup-agent hangs
 	cronJob := &batchv1.CronJob{
 		ObjectMeta: metav1.ObjectMeta{
-			GenerateName: schedule.Name + "-scheduled-backup-",
+			GenerateName: schedule.Name + "-",
 			Namespace:    schedule.Namespace,
 			Labels:       labels,
 		},

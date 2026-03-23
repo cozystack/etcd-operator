@@ -67,8 +67,8 @@ func TestCreateBackupJob_PVC(t *testing.T) {
 		t.Fatalf("CreateBackupJob failed: %v", err)
 	}
 
-	if job.GenerateName != "my-backup-backup-" {
-		t.Errorf("expected job generateName 'my-backup-backup-', got %q", job.GenerateName)
+	if job.GenerateName != "my-backup-" {
+		t.Errorf("expected job generateName 'my-backup-', got %q", job.GenerateName)
 	}
 	if job.Namespace != "default" {
 		t.Errorf("expected namespace 'default', got %q", job.Namespace)
@@ -363,4 +363,3 @@ func TestCreateBackupJob_PVCSubPath(t *testing.T) {
 		t.Errorf("expected PVC_BACKUP_PATH=%q, got %q", expected, envMap["PVC_BACKUP_PATH"].Value)
 	}
 }
-

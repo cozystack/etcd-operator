@@ -53,7 +53,7 @@ func CreateBackupJob(
 
 	job := &batchv1.Job{
 		ObjectMeta: metav1.ObjectMeta{
-			GenerateName: backup.Name + "-backup-",
+			GenerateName: backup.Name + "-",
 			Namespace:    backup.Namespace,
 			Labels:       labels,
 		},
