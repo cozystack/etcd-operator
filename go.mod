@@ -1,6 +1,6 @@
 module github.com/aenix-io/etcd-operator
 
-go 1.22.4
+go 1.23
 
 require (
 	github.com/aws/aws-sdk-go-v2 v1.27.2
@@ -19,7 +19,7 @@ require (
 	k8s.io/api v0.30.2
 	k8s.io/apimachinery v0.30.2
 	k8s.io/client-go v0.30.2
-	k8s.io/utils v0.0.0-20240502163921-fe8a2dddb1d0
+	k8s.io/utils v0.0.0-20260319190234-28399d86e0b5
 	sigs.k8s.io/controller-runtime v0.18.4
 )
 
