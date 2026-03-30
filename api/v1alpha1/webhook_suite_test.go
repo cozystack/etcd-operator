@@ -51,6 +51,12 @@ var testEnv *envtest.Environment
 var ctx context.Context
 var cancel context.CancelFunc
 
+var (
+	etcdBackupValidator         = &EtcdBackupValidator{}
+	etcdClusterValidator        = &EtcdClusterValidator{}
+	etcdBackupScheduleValidator = &EtcdBackupScheduleValidator{}
+)
+
 func TestAPIs(t *testing.T) {
 	RegisterFailHandler(Fail)
 
@@ -113,13 +119,13 @@ var _ = BeforeSuite(func() {
 	})
 	Expect(err).NotTo(HaveOccurred())
 
-	err = (&EtcdCluster{}).SetupWebhookWithManager(mgr)
+	err = etcdClusterValidator.SetupWebhookWithManager(mgr)
 	Expect(err).NotTo(HaveOccurred())
 
-	err = (&EtcdBackup{}).SetupWebhookWithManager(mgr)
+	err = etcdBackupValidator.SetupWebhookWithManager(mgr)
 	Expect(err).NotTo(HaveOccurred())
 
-	err = (&EtcdBackupSchedule{}).SetupWebhookWithManager(mgr)
+	err = etcdBackupScheduleValidator.SetupWebhookWithManager(mgr)
 	Expect(err).NotTo(HaveOccurred())
 
 	//+kubebuilder:scaffold:webhook

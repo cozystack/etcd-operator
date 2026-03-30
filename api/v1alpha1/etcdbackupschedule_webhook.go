@@ -17,17 +17,16 @@ limitations under the License.
 package v1alpha1
 
 import (
+	"context"
 	"fmt"
 	"strings"
 
 	"github.com/robfig/cron/v3"
 	"k8s.io/apimachinery/pkg/api/errors"
-	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 	ctrl "sigs.k8s.io/controller-runtime"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
-	"sigs.k8s.io/controller-runtime/pkg/webhook"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 )
 
@@ -36,57 +35,59 @@ var etcdbackupschedulelog = logf.Log.WithName("etcdbackupschedule-resource")
 // cronParser is a standard 5-field cron parser matching Kubernetes CronJob behavior.
 var cronParser = cron.NewParser(cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow | cron.Descriptor)
 
-// SetupWebhookWithManager will setup the manager to manage the webhooks
-func (r *EtcdBackupSchedule) SetupWebhookWithManager(mgr ctrl.Manager) error {
-	return ctrl.NewWebhookManagedBy(mgr).
-		For(r).
+type EtcdBackupScheduleValidator struct{}
+
+// SetupWebhookWithManager will set up the manager to manage the webhooks
+func (r *EtcdBackupScheduleValidator) SetupWebhookWithManager(mgr ctrl.Manager) error {
+	return ctrl.NewWebhookManagedBy(mgr, &EtcdBackupSchedule{}).
+		WithValidator(r).
 		Complete()
 }
 
 // +kubebuilder:webhook:path=/validate-etcd-aenix-io-v1alpha1-etcdbackupschedule,mutating=false,failurePolicy=fail,sideEffects=None,groups=etcd.aenix.io,resources=etcdbackupschedules,verbs=create;update,versions=v1alpha1,name=vetcdbackupschedule.kb.io,admissionReviewVersions=v1
 
-var _ webhook.Validator = &EtcdBackupSchedule{}
+var _ admission.Validator[*EtcdBackupSchedule] = &EtcdBackupScheduleValidator{}
 
 // ValidateCreate implements webhook.Validator so a webhook will be registered for the type
-func (r *EtcdBackupSchedule) ValidateCreate() (admission.Warnings, error) {
-	etcdbackupschedulelog.Info("validate create", "name", r.Name)
+func (*EtcdBackupScheduleValidator) ValidateCreate(_ context.Context, obj *EtcdBackupSchedule) (admission.Warnings, error) {
+	etcdbackupschedulelog.Info("validate create", "name", obj.Name)
 
 	var allErrors field.ErrorList
 
-	allErrors = append(allErrors, r.validateSpec()...)
+	allErrors = append(allErrors, obj.validateSpec()...)
 
 	if len(allErrors) > 0 {
 		return nil, errors.NewInvalid(
 			schema.GroupKind{Group: GroupVersion.Group, Kind: "EtcdBackupSchedule"},
-			r.Name, allErrors)
+			obj.Name, allErrors)
 	}
 
 	return nil, nil
 }
 
 // ValidateUpdate implements webhook.Validator so a webhook will be registered for the type
-func (r *EtcdBackupSchedule) ValidateUpdate(_ runtime.Object) (admission.Warnings, error) {
-	etcdbackupschedulelog.Info("validate update", "name", r.Name)
+func (*EtcdBackupScheduleValidator) ValidateUpdate(_ context.Context, old, new *EtcdBackupSchedule) (admission.Warnings, error) {
+	etcdbackupschedulelog.Info("validate update", "name", old.Name)
 
 	// Schedules are mutable, so re-validate the spec.
 	// Name length is NOT checked here because Kubernetes does not allow
 	// renaming resources, and existing resources with long names (created
 	// before this webhook) must remain updatable.
 	var allErrors field.ErrorList
-	allErrors = append(allErrors, r.validateSpec()...)
+	allErrors = append(allErrors, new.validateSpec()...)
 
 	if len(allErrors) > 0 {
 		return nil, errors.NewInvalid(
 			schema.GroupKind{Group: GroupVersion.Group, Kind: "EtcdBackupSchedule"},
-			r.Name, allErrors)
+			old.Name, allErrors)
 	}
 
 	return nil, nil
 }
 
 // ValidateDelete implements webhook.Validator so a webhook will be registered for the type
-func (r *EtcdBackupSchedule) ValidateDelete() (admission.Warnings, error) {
-	etcdbackupschedulelog.Info("validate delete", "name", r.Name)
+func (*EtcdBackupScheduleValidator) ValidateDelete(_ context.Context, obj *EtcdBackupSchedule) (admission.Warnings, error) {
+	etcdbackupschedulelog.Info("validate delete", "name", obj.Name)
 	return nil, nil
 }
 

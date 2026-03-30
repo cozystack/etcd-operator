@@ -38,7 +38,7 @@ var _ = Describe("EtcdBackupSchedule Webhook", func() {
 					},
 				},
 			}
-			w, err := schedule.ValidateCreate()
+			w, err := etcdBackupScheduleValidator.ValidateCreate(ctx, schedule)
 			Expect(err).To(Succeed())
 			Expect(w).To(BeEmpty())
 		})
@@ -58,7 +58,7 @@ var _ = Describe("EtcdBackupSchedule Webhook", func() {
 					},
 				},
 			}
-			w, err := schedule.ValidateCreate()
+			w, err := etcdBackupScheduleValidator.ValidateCreate(ctx, schedule)
 			Expect(err).To(Succeed())
 			Expect(w).To(BeEmpty())
 		})
@@ -75,7 +75,7 @@ var _ = Describe("EtcdBackupSchedule Webhook", func() {
 					},
 				},
 			}
-			_, err := schedule.ValidateCreate()
+			_, err := etcdBackupScheduleValidator.ValidateCreate(ctx, schedule)
 			if Expect(err).To(HaveOccurred()) {
 				statusErr := err.(*errors.StatusError)
 				Expect(statusErr.ErrStatus.Message).To(ContainSubstring("clusterRef.name"))
@@ -94,7 +94,7 @@ var _ = Describe("EtcdBackupSchedule Webhook", func() {
 					},
 				},
 			}
-			_, err := schedule.ValidateCreate()
+			_, err := etcdBackupScheduleValidator.ValidateCreate(ctx, schedule)
 			if Expect(err).To(HaveOccurred()) {
 				statusErr := err.(*errors.StatusError)
 				Expect(statusErr.ErrStatus.Message).To(ContainSubstring("schedule"))
@@ -113,7 +113,7 @@ var _ = Describe("EtcdBackupSchedule Webhook", func() {
 					},
 				},
 			}
-			_, err := schedule.ValidateCreate()
+			_, err := etcdBackupScheduleValidator.ValidateCreate(ctx, schedule)
 			if Expect(err).To(HaveOccurred()) {
 				statusErr := err.(*errors.StatusError)
 				Expect(statusErr.ErrStatus.Message).To(ContainSubstring("schedule"))
@@ -128,7 +128,7 @@ var _ = Describe("EtcdBackupSchedule Webhook", func() {
 					Destination: BackupDestination{},
 				},
 			}
-			_, err := schedule.ValidateCreate()
+			_, err := etcdBackupScheduleValidator.ValidateCreate(ctx, schedule)
 			if Expect(err).To(HaveOccurred()) {
 				statusErr := err.(*errors.StatusError)
 				Expect(statusErr.ErrStatus.Message).To(ContainSubstring("exactly one of s3 or pvc must be specified"))
@@ -153,7 +153,7 @@ var _ = Describe("EtcdBackupSchedule Webhook", func() {
 					},
 				},
 			}
-			_, err := schedule.ValidateCreate()
+			_, err := etcdBackupScheduleValidator.ValidateCreate(ctx, schedule)
 			if Expect(err).To(HaveOccurred()) {
 				statusErr := err.(*errors.StatusError)
 				Expect(statusErr.ErrStatus.Message).To(ContainSubstring("exactly one of s3 or pvc must be specified"))
@@ -173,7 +173,7 @@ var _ = Describe("EtcdBackupSchedule Webhook", func() {
 					},
 				},
 			}
-			_, err := schedule.ValidateCreate()
+			_, err := etcdBackupScheduleValidator.ValidateCreate(ctx, schedule)
 			if Expect(err).To(HaveOccurred()) {
 				statusErr := err.(*errors.StatusError)
 				Expect(statusErr.ErrStatus.Message).To(ContainSubstring("subPath"))
@@ -192,7 +192,7 @@ var _ = Describe("EtcdBackupSchedule Webhook", func() {
 					},
 				},
 			}
-			_, err := schedule.ValidateCreate()
+			_, err := etcdBackupScheduleValidator.ValidateCreate(ctx, schedule)
 			Expect(err).To(HaveOccurred())
 		})
 
@@ -208,7 +208,7 @@ var _ = Describe("EtcdBackupSchedule Webhook", func() {
 					},
 				},
 			}
-			w, err := schedule.ValidateCreate()
+			w, err := etcdBackupScheduleValidator.ValidateCreate(ctx, schedule)
 			Expect(err).To(Succeed())
 			Expect(w).To(BeEmpty())
 		})
@@ -227,7 +227,7 @@ var _ = Describe("EtcdBackupSchedule Webhook", func() {
 			}
 			oldSchedule := schedule.DeepCopy()
 			schedule.Spec.Schedule = "0 */12 * * *"
-			w, err := schedule.ValidateUpdate(oldSchedule)
+			w, err := etcdBackupScheduleValidator.ValidateUpdate(ctx, oldSchedule, schedule)
 			Expect(err).To(Succeed())
 			Expect(w).To(BeEmpty())
 		})
@@ -245,7 +245,7 @@ var _ = Describe("EtcdBackupSchedule Webhook", func() {
 			schedule.Name = "this-name-is-way-too-long-for-cronjob-suffix"
 			oldSchedule := schedule.DeepCopy()
 			schedule.Spec.Schedule = "0 */12 * * *"
-			w, err := schedule.ValidateUpdate(oldSchedule)
+			w, err := etcdBackupScheduleValidator.ValidateUpdate(ctx, oldSchedule, schedule)
 			Expect(err).To(Succeed())
 			Expect(w).To(BeEmpty())
 		})
@@ -262,7 +262,7 @@ var _ = Describe("EtcdBackupSchedule Webhook", func() {
 			}
 			oldSchedule := schedule.DeepCopy()
 			oldSchedule.Spec.Schedule = "0 0 * * *"
-			_, err := schedule.ValidateUpdate(oldSchedule)
+			_, err := etcdBackupScheduleValidator.ValidateUpdate(ctx, oldSchedule, schedule)
 			Expect(err).To(HaveOccurred())
 		})
 	})
@@ -270,7 +270,7 @@ var _ = Describe("EtcdBackupSchedule Webhook", func() {
 	Context("When deleting EtcdBackupSchedule under Validating Webhook", func() {
 		It("Should always allow deletion", func() {
 			schedule := &EtcdBackupSchedule{}
-			w, err := schedule.ValidateDelete()
+			w, err := etcdBackupScheduleValidator.ValidateDelete(ctx, schedule)
 			Expect(err).To(Succeed())
 			Expect(w).To(BeEmpty())
 		})

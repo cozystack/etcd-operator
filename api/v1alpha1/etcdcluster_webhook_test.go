@@ -31,7 +31,7 @@ var _ = Describe("EtcdCluster Webhook", func() {
 	Context("When creating EtcdCluster under Defaulting Webhook", func() {
 		It("Should fill in the default value if a required field is empty", func() {
 			etcdCluster := &EtcdCluster{}
-			etcdCluster.Default()
+			Expect(etcdClusterValidator.Default(ctx, etcdCluster)).To(Succeed())
 			Expect(etcdCluster.Spec.Replicas).To(BeNil(), "User should have an opportunity to create cluster with 0 replicas")
 			Expect(etcdCluster.Spec.Storage.EmptyDir).To(BeNil())
 			storage := etcdCluster.Spec.Storage.VolumeClaimTemplate.Spec.Resources.Requests.Storage()
@@ -64,7 +64,7 @@ var _ = Describe("EtcdCluster Webhook", func() {
 					},
 				},
 			}
-			etcdCluster.Default()
+			Expect(etcdClusterValidator.Default(ctx, etcdCluster)).To(Succeed())
 			Expect(*etcdCluster.Spec.Replicas).To(Equal(int32(5)))
 			Expect(etcdCluster.Spec.PodDisruptionBudgetTemplate).NotTo(BeNil())
 			Expect(etcdCluster.Spec.PodDisruptionBudgetTemplate.Spec.MaxUnavailable.IntValue()).To(Equal(2))
@@ -83,7 +83,7 @@ var _ = Describe("EtcdCluster Webhook", func() {
 					Replicas: new(int32(1)),
 				},
 			}
-			w, err := etcdCluster.ValidateCreate()
+			w, err := etcdClusterValidator.ValidateCreate(ctx, etcdCluster)
 			Expect(err).To(Succeed())
 			Expect(w).To(BeEmpty())
 		})
@@ -103,7 +103,7 @@ var _ = Describe("EtcdCluster Webhook", func() {
 					Storage:  StorageSpec{EmptyDir: nil},
 				},
 			}
-			_, err := etcdCluster.ValidateUpdate(oldCluster)
+			_, err := etcdClusterValidator.ValidateUpdate(ctx, oldCluster, etcdCluster)
 			if Expect(err).To(HaveOccurred()) {
 				statusErr := err.(*errors.StatusError)
 				Expect(statusErr.ErrStatus.Message).To(ContainSubstring("field is immutable"))
@@ -143,7 +143,7 @@ var _ = Describe("EtcdCluster Webhook", func() {
 					},
 				},
 			}
-			_, err := etcdCluster.ValidateUpdate(oldCluster)
+			_, err := etcdClusterValidator.ValidateUpdate(ctx, oldCluster, etcdCluster)
 			if Expect(err).To(HaveOccurred()) {
 				statusErr := err.(*errors.StatusError)
 				Expect(statusErr.ErrStatus.Message).To(ContainSubstring("decreasing storage size is not allowed"))
@@ -163,7 +163,7 @@ var _ = Describe("EtcdCluster Webhook", func() {
 					Storage:  StorageSpec{EmptyDir: &corev1.EmptyDirVolumeSource{SizeLimit: new(resource.MustParse("10Gi"))}},
 				},
 			}
-			_, err := etcdCluster.ValidateUpdate(oldCluster)
+			_, err := etcdClusterValidator.ValidateUpdate(ctx, oldCluster, etcdCluster)
 			Expect(err).To(Succeed())
 		})
 	})
@@ -425,7 +425,7 @@ var _ = Describe("EtcdCluster Webhook", func() {
 					},
 				},
 			}
-			_, err := newCluster.ValidateUpdate(oldCluster)
+			_, err := etcdClusterValidator.ValidateUpdate(ctx, oldCluster, newCluster)
 			if Expect(err).To(HaveOccurred()) {
 				statusErr := err.(*errors.StatusError)
 				Expect(statusErr.ErrStatus.Message).To(ContainSubstring("immutable"))
@@ -452,7 +452,7 @@ var _ = Describe("EtcdCluster Webhook", func() {
 					Bootstrap: bootstrap.DeepCopy(),
 				},
 			}
-			_, err := newCluster.ValidateUpdate(oldCluster)
+			_, err := etcdClusterValidator.ValidateUpdate(ctx, oldCluster, newCluster)
 			Expect(err).To(Succeed())
 		})
 	})

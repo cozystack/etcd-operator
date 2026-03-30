@@ -17,69 +17,64 @@ limitations under the License.
 package v1alpha1
 
 import (
-	"fmt"
+	"context"
 	"path/filepath"
 	"strings"
 
 	"k8s.io/apimachinery/pkg/api/equality"
 	"k8s.io/apimachinery/pkg/api/errors"
-	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 	ctrl "sigs.k8s.io/controller-runtime"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
-	"sigs.k8s.io/controller-runtime/pkg/webhook"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 )
 
 var etcdbackuplog = logf.Log.WithName("etcdbackup-resource")
 
-// SetupWebhookWithManager will setup the manager to manage the webhooks
-func (r *EtcdBackup) SetupWebhookWithManager(mgr ctrl.Manager) error {
-	return ctrl.NewWebhookManagedBy(mgr).
-		For(r).
+type EtcdBackupValidator struct{}
+
+// SetupWebhookWithManager will set up the manager to manage the webhooks
+func (r *EtcdBackupValidator) SetupWebhookWithManager(mgr ctrl.Manager) error {
+	return ctrl.NewWebhookManagedBy(mgr, &EtcdBackup{}).
+		WithValidator(r).
 		Complete()
 }
 
 // +kubebuilder:webhook:path=/validate-etcd-aenix-io-v1alpha1-etcdbackup,mutating=false,failurePolicy=fail,sideEffects=None,groups=etcd.aenix.io,resources=etcdbackups,verbs=create;update,versions=v1alpha1,name=vetcdbackup.kb.io,admissionReviewVersions=v1
 
-var _ webhook.Validator = &EtcdBackup{}
+var _ admission.Validator[*EtcdBackup] = &EtcdBackupValidator{}
 
 // ValidateCreate implements webhook.Validator so a webhook will be registered for the type
-func (r *EtcdBackup) ValidateCreate() (admission.Warnings, error) {
-	etcdbackuplog.Info("validate create", "name", r.Name)
+func (*EtcdBackupValidator) ValidateCreate(_ context.Context, obj *EtcdBackup) (admission.Warnings, error) {
+	etcdbackuplog.Info("validate create", "name", obj.Name)
 
 	var allErrors field.ErrorList
 
-	if r.Spec.ClusterRef.Name == "" {
+	if obj.Spec.ClusterRef.Name == "" {
 		allErrors = append(allErrors, field.Required(
 			field.NewPath("spec", "clusterRef", "name"),
 			"clusterRef.name is required",
 		))
 	}
 
-	destErrors := r.validateDestination()
+	destErrors := obj.validateDestination()
 	allErrors = append(allErrors, destErrors...)
 
 	if len(allErrors) > 0 {
 		return nil, errors.NewInvalid(
 			schema.GroupKind{Group: GroupVersion.Group, Kind: "EtcdBackup"},
-			r.Name, allErrors)
+			obj.Name, allErrors)
 	}
 
 	return nil, nil
 }
 
 // ValidateUpdate implements webhook.Validator so a webhook will be registered for the type
-func (r *EtcdBackup) ValidateUpdate(old runtime.Object) (admission.Warnings, error) {
-	etcdbackuplog.Info("validate update", "name", r.Name)
+func (*EtcdBackupValidator) ValidateUpdate(_ context.Context, old, new *EtcdBackup) (admission.Warnings, error) {
+	etcdbackuplog.Info("validate update", "name", old.Name)
 
-	oldBackup, ok := old.(*EtcdBackup)
-	if !ok {
-		return nil, fmt.Errorf("expected EtcdBackup but got %T", old)
-	}
-
-	if !equality.Semantic.DeepEqual(r.Spec, oldBackup.Spec) {
+	if !equality.Semantic.DeepEqual(old.Spec, new.Spec) {
 		var allErrors field.ErrorList
 		allErrors = append(allErrors, field.Forbidden(
 			field.NewPath("spec"),
@@ -87,15 +82,15 @@ func (r *EtcdBackup) ValidateUpdate(old runtime.Object) (admission.Warnings, err
 		))
 		return nil, errors.NewInvalid(
 			schema.GroupKind{Group: GroupVersion.Group, Kind: "EtcdBackup"},
-			r.Name, allErrors)
+			old.Name, allErrors)
 	}
 
 	return nil, nil
 }
 
 // ValidateDelete implements webhook.Validator so a webhook will be registered for the type
-func (r *EtcdBackup) ValidateDelete() (admission.Warnings, error) {
-	etcdbackuplog.Info("validate delete", "name", r.Name)
+func (*EtcdBackupValidator) ValidateDelete(_ context.Context, obj *EtcdBackup) (admission.Warnings, error) {
+	etcdbackuplog.Info("validate delete", "name", obj.Name)
 	return nil, nil
 }
 

@@ -40,7 +40,7 @@ var _ = Describe("EtcdBackup Webhook", func() {
 					},
 				},
 			}
-			w, err := backup.ValidateCreate()
+			w, err := etcdBackupValidator.ValidateCreate(ctx, backup)
 			Expect(err).To(Succeed())
 			Expect(w).To(BeEmpty())
 		})
@@ -56,7 +56,7 @@ var _ = Describe("EtcdBackup Webhook", func() {
 					},
 				},
 			}
-			w, err := backup.ValidateCreate()
+			w, err := etcdBackupValidator.ValidateCreate(ctx, backup)
 			Expect(err).To(Succeed())
 			Expect(w).To(BeEmpty())
 		})
@@ -78,7 +78,7 @@ var _ = Describe("EtcdBackup Webhook", func() {
 					},
 				},
 			}
-			_, err := backup.ValidateCreate()
+			_, err := etcdBackupValidator.ValidateCreate(ctx, backup)
 			if Expect(err).To(HaveOccurred()) {
 				statusErr := err.(*errors.StatusError)
 				Expect(statusErr.ErrStatus.Message).To(ContainSubstring("exactly one of s3 or pvc must be specified"))
@@ -92,7 +92,7 @@ var _ = Describe("EtcdBackup Webhook", func() {
 					Destination: BackupDestination{},
 				},
 			}
-			_, err := backup.ValidateCreate()
+			_, err := etcdBackupValidator.ValidateCreate(ctx, backup)
 			if Expect(err).To(HaveOccurred()) {
 				statusErr := err.(*errors.StatusError)
 				Expect(statusErr.ErrStatus.Message).To(ContainSubstring("exactly one of s3 or pvc must be specified"))
@@ -110,7 +110,7 @@ var _ = Describe("EtcdBackup Webhook", func() {
 					},
 				},
 			}
-			_, err := backup.ValidateCreate()
+			_, err := etcdBackupValidator.ValidateCreate(ctx, backup)
 			if Expect(err).To(HaveOccurred()) {
 				statusErr := err.(*errors.StatusError)
 				Expect(statusErr.ErrStatus.Message).To(ContainSubstring("clusterRef.name"))
@@ -131,7 +131,7 @@ var _ = Describe("EtcdBackup Webhook", func() {
 					},
 				},
 			}
-			_, err := backup.ValidateCreate()
+			_, err := etcdBackupValidator.ValidateCreate(ctx, backup)
 			if Expect(err).To(HaveOccurred()) {
 				statusErr := err.(*errors.StatusError)
 				Expect(statusErr.ErrStatus.Message).To(ContainSubstring("endpoint must start with http:// or https://"))
@@ -147,7 +147,7 @@ var _ = Describe("EtcdBackup Webhook", func() {
 					},
 				},
 			}
-			_, err := backup.ValidateCreate()
+			_, err := etcdBackupValidator.ValidateCreate(ctx, backup)
 			if Expect(err).To(HaveOccurred()) {
 				statusErr := err.(*errors.StatusError)
 				Expect(statusErr.ErrStatus.Message).To(ContainSubstring("endpoint"))
@@ -168,7 +168,7 @@ var _ = Describe("EtcdBackup Webhook", func() {
 					},
 				},
 			}
-			_, err := backup.ValidateCreate()
+			_, err := etcdBackupValidator.ValidateCreate(ctx, backup)
 			if Expect(err).To(HaveOccurred()) {
 				statusErr := err.(*errors.StatusError)
 				Expect(statusErr.ErrStatus.Message).To(ContainSubstring("subPath"))
@@ -187,7 +187,7 @@ var _ = Describe("EtcdBackup Webhook", func() {
 					},
 				},
 			}
-			_, err := backup.ValidateCreate()
+			_, err := etcdBackupValidator.ValidateCreate(ctx, backup)
 			if Expect(err).To(HaveOccurred()) {
 				statusErr := err.(*errors.StatusError)
 				Expect(statusErr.ErrStatus.Message).To(ContainSubstring("subPath"))
@@ -203,7 +203,7 @@ var _ = Describe("EtcdBackup Webhook", func() {
 					},
 				},
 			}
-			_, err := backup.ValidateCreate()
+			_, err := etcdBackupValidator.ValidateCreate(ctx, backup)
 			if Expect(err).To(HaveOccurred()) {
 				statusErr := err.(*errors.StatusError)
 				Expect(statusErr.ErrStatus.Message).To(ContainSubstring("claimName"))
@@ -223,7 +223,7 @@ var _ = Describe("EtcdBackup Webhook", func() {
 				},
 			}
 			oldBackup := backup.DeepCopy()
-			w, err := backup.ValidateUpdate(oldBackup)
+			w, err := etcdBackupValidator.ValidateUpdate(ctx, oldBackup, backup)
 			Expect(err).To(Succeed())
 			Expect(w).To(BeEmpty())
 		})
@@ -239,7 +239,7 @@ var _ = Describe("EtcdBackup Webhook", func() {
 			}
 			newBackup := oldBackup.DeepCopy()
 			newBackup.Spec.ClusterRef.Name = "other-cluster"
-			_, err := newBackup.ValidateUpdate(oldBackup)
+			_, err := etcdBackupValidator.ValidateUpdate(ctx, oldBackup, newBackup)
 			if Expect(err).To(HaveOccurred()) {
 				statusErr := err.(*errors.StatusError)
 				Expect(statusErr.ErrStatus.Message).To(ContainSubstring("immutable"))
@@ -250,7 +250,7 @@ var _ = Describe("EtcdBackup Webhook", func() {
 	Context("When deleting EtcdBackup under Validating Webhook", func() {
 		It("Should always allow deletion", func() {
 			backup := &EtcdBackup{}
-			w, err := backup.ValidateDelete()
+			w, err := etcdBackupValidator.ValidateDelete(ctx, backup)
 			Expect(err).To(Succeed())
 			Expect(w).To(BeEmpty())
 		})

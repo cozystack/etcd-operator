@@ -17,6 +17,7 @@ limitations under the License.
 package v1alpha1
 
 import (
+	"context"
 	"fmt"
 	"math"
 	"strings"
@@ -25,81 +26,83 @@ import (
 	"k8s.io/apimachinery/pkg/api/equality"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
-	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	kerrors "k8s.io/apimachinery/pkg/util/errors"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 	ctrl "sigs.k8s.io/controller-runtime"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
-	"sigs.k8s.io/controller-runtime/pkg/webhook"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 )
 
 // log is for logging in this package.
 var etcdclusterlog = logf.Log.WithName("etcdcluster-resource")
 
-// SetupWebhookWithManager will setup the manager to manage the webhooks
-func (r *EtcdCluster) SetupWebhookWithManager(mgr ctrl.Manager) error {
-	return ctrl.NewWebhookManagedBy(mgr).
-		For(r).
+type EtcdClusterValidator struct{}
+
+// SetupWebhookWithManager will set up the manager to manage the webhooks
+func (r *EtcdClusterValidator) SetupWebhookWithManager(mgr ctrl.Manager) error {
+	return ctrl.NewWebhookManagedBy(mgr, &EtcdCluster{}).
+		WithDefaulter(r).
+		WithValidator(r).
 		Complete()
 }
 
 // +kubebuilder:webhook:path=/mutate-etcd-aenix-io-v1alpha1-etcdcluster,mutating=true,failurePolicy=fail,sideEffects=None,groups=etcd.aenix.io,resources=etcdclusters,verbs=create;update,versions=v1alpha1,name=metcdcluster.kb.io,admissionReviewVersions=v1
 
-var _ webhook.Defaulter = &EtcdCluster{}
+var _ admission.Defaulter[*EtcdCluster] = &EtcdClusterValidator{}
 
 // Default implements webhook.Defaulter so a webhook will be registered for the type
-func (r *EtcdCluster) Default() {
-	etcdclusterlog.Info("default", "name", r.Name)
-	if r.Spec.Storage.EmptyDir == nil {
-		if len(r.Spec.Storage.VolumeClaimTemplate.Spec.AccessModes) == 0 {
-			r.Spec.Storage.VolumeClaimTemplate.Spec.AccessModes = []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce}
+func (*EtcdClusterValidator) Default(_ context.Context, obj *EtcdCluster) error {
+	etcdclusterlog.Info("default", "name", obj.Name)
+	if obj.Spec.Storage.EmptyDir == nil {
+		if len(obj.Spec.Storage.VolumeClaimTemplate.Spec.AccessModes) == 0 {
+			obj.Spec.Storage.VolumeClaimTemplate.Spec.AccessModes = []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce}
 		}
-		storage := r.Spec.Storage.VolumeClaimTemplate.Spec.Resources.Requests.Storage()
+		storage := obj.Spec.Storage.VolumeClaimTemplate.Spec.Resources.Requests.Storage()
 		if storage == nil || storage.IsZero() {
-			r.Spec.Storage.VolumeClaimTemplate.Spec.Resources.Requests = corev1.ResourceList{
+			obj.Spec.Storage.VolumeClaimTemplate.Spec.Resources.Requests = corev1.ResourceList{
 				corev1.ResourceStorage: resource.MustParse("4Gi"),
 			}
 		}
 	}
+	return nil
 }
 
 // +kubebuilder:webhook:path=/validate-etcd-aenix-io-v1alpha1-etcdcluster,mutating=false,failurePolicy=fail,sideEffects=None,groups=etcd.aenix.io,resources=etcdclusters,verbs=create;update,versions=v1alpha1,name=vetcdcluster.kb.io,admissionReviewVersions=v1
 
-var _ webhook.Validator = &EtcdCluster{}
+var _ admission.Validator[*EtcdCluster] = &EtcdClusterValidator{}
 
 // ValidateCreate implements webhook.Validator so a webhook will be registered for the type
-func (r *EtcdCluster) ValidateCreate() (admission.Warnings, error) {
-	etcdclusterlog.Info("validate create", "name", r.Name)
+func (*EtcdClusterValidator) ValidateCreate(_ context.Context, obj *EtcdCluster) (admission.Warnings, error) {
+	etcdclusterlog.Info("validate create", "name", obj.Name)
 
 	var allErrors field.ErrorList
 
-	warnings, pdbErr := r.validatePdb()
+	warnings, pdbErr := obj.validatePdb()
 	if pdbErr != nil {
 		allErrors = append(allErrors, pdbErr...)
 	}
 
-	securityErr := r.validateSecurity()
+	securityErr := obj.validateSecurity()
 	if securityErr != nil {
 		allErrors = append(allErrors, securityErr...)
 	}
 
-	if errOptions := validateOptions(r); errOptions != nil {
+	if errOptions := validateOptions(obj); errOptions != nil {
 		allErrors = append(allErrors, field.Invalid(
 			field.NewPath("spec", "options"),
-			r.Spec.Options,
+			obj.Spec.Options,
 			errOptions.Error()))
 	}
 
-	bootstrapErr := r.validateBootstrap()
+	bootstrapErr := obj.validateBootstrap()
 	allErrors = append(allErrors, bootstrapErr...)
 
 	if len(allErrors) > 0 {
 		err := errors.NewInvalid(
 			schema.GroupKind{Group: GroupVersion.Group, Kind: "EtcdCluster"},
-			r.Name, allErrors)
+			obj.Name, allErrors)
 		return warnings, err
 	}
 
@@ -107,24 +110,20 @@ func (r *EtcdCluster) ValidateCreate() (admission.Warnings, error) {
 }
 
 // ValidateUpdate implements webhook.Validator so a webhook will be registered for the type
-func (r *EtcdCluster) ValidateUpdate(old runtime.Object) (admission.Warnings, error) {
-	etcdclusterlog.Info("validate update", "name", r.Name)
+func (*EtcdClusterValidator) ValidateUpdate(_ context.Context, old, new *EtcdCluster) (admission.Warnings, error) {
+	etcdclusterlog.Info("validate update", "name", old.Name)
 	var warnings admission.Warnings
-	oldCluster, ok := old.(*EtcdCluster)
-	if !ok {
-		return nil, fmt.Errorf("expected EtcdCluster but got %T", old)
-	}
 
 	// Check if replicas are being resized
-	if *oldCluster.Spec.Replicas != *r.Spec.Replicas {
+	if *old.Spec.Replicas != *new.Spec.Replicas {
 		warnings = append(warnings, "cluster resize is not currently supported")
 	}
 
 	var allErrors field.ErrorList
 
 	// Check if storage size is being decreased
-	oldStorage := oldCluster.Spec.Storage.VolumeClaimTemplate.Spec.Resources.Requests[corev1.ResourceStorage]
-	newStorage := r.Spec.Storage.VolumeClaimTemplate.Spec.Resources.Requests[corev1.ResourceStorage]
+	oldStorage := old.Spec.Storage.VolumeClaimTemplate.Spec.Resources.Requests[corev1.ResourceStorage]
+	newStorage := new.Spec.Storage.VolumeClaimTemplate.Spec.Resources.Requests[corev1.ResourceStorage]
 	if newStorage.Cmp(oldStorage) < 0 {
 		allErrors = append(allErrors, field.Invalid(
 			field.NewPath("spec", "storage", "volumeClaimTemplate", "resources", "requests", "storage"),
@@ -134,17 +133,17 @@ func (r *EtcdCluster) ValidateUpdate(old runtime.Object) (admission.Warnings, er
 	}
 
 	// Check if storage type is changing
-	if oldCluster.Spec.Storage.EmptyDir == nil && r.Spec.Storage.EmptyDir != nil ||
-		oldCluster.Spec.Storage.EmptyDir != nil && r.Spec.Storage.EmptyDir == nil {
+	if old.Spec.Storage.EmptyDir == nil && new.Spec.Storage.EmptyDir != nil ||
+		old.Spec.Storage.EmptyDir != nil && new.Spec.Storage.EmptyDir == nil {
 		allErrors = append(allErrors, field.Invalid(
 			field.NewPath("spec", "storage", "emptyDir"),
-			r.Spec.Storage.EmptyDir,
+			new.Spec.Storage.EmptyDir,
 			"field is immutable"),
 		)
 	}
 
 	// Check if the bootstrap is being changed
-	if !equality.Semantic.DeepEqual(oldCluster.Spec.Bootstrap, r.Spec.Bootstrap) {
+	if !equality.Semantic.DeepEqual(old.Spec.Bootstrap, new.Spec.Bootstrap) {
 		allErrors = append(allErrors, field.Forbidden(
 			field.NewPath("spec", "bootstrap"),
 			"field is immutable after cluster creation"),
@@ -152,7 +151,7 @@ func (r *EtcdCluster) ValidateUpdate(old runtime.Object) (admission.Warnings, er
 	}
 
 	// Validate PodDisruptionBudget
-	pdbWarnings, pdbErr := r.validatePdb()
+	pdbWarnings, pdbErr := new.validatePdb()
 	if pdbErr != nil {
 		allErrors = append(allErrors, pdbErr...)
 	}
@@ -161,23 +160,23 @@ func (r *EtcdCluster) ValidateUpdate(old runtime.Object) (admission.Warnings, er
 	}
 
 	// Validate Security
-	securityErr := r.validateSecurity()
+	securityErr := new.validateSecurity()
 	if securityErr != nil {
 		allErrors = append(allErrors, securityErr...)
 	}
 
 	// Validate Options
-	if errOptions := validateOptions(r); errOptions != nil {
+	if errOptions := validateOptions(new); errOptions != nil {
 		allErrors = append(allErrors, field.Invalid(
 			field.NewPath("spec", "options"),
-			r.Spec.Options,
+			new.Spec.Options,
 			errOptions.Error()))
 	}
 
 	if len(allErrors) > 0 {
 		err := errors.NewInvalid(
 			schema.GroupKind{Group: GroupVersion.Group, Kind: "EtcdCluster"},
-			r.Name, allErrors)
+			new.Name, allErrors)
 		return warnings, err
 	}
 
@@ -185,8 +184,8 @@ func (r *EtcdCluster) ValidateUpdate(old runtime.Object) (admission.Warnings, er
 }
 
 // ValidateDelete implements webhook.Validator so a webhook will be registered for the type
-func (r *EtcdCluster) ValidateDelete() (admission.Warnings, error) {
-	etcdclusterlog.Info("validate delete", "name", r.Name)
+func (*EtcdClusterValidator) ValidateDelete(ctx context.Context, obj *EtcdCluster) (admission.Warnings, error) {
+	etcdclusterlog.Info("validate delete", "name", obj.Name)
 	return nil, nil
 }
 

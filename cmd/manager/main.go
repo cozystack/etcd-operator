@@ -144,15 +144,15 @@ func main() {
 		os.Exit(1)
 	}
 	if !flags.DisableWebhooks {
-		if err = (&etcdaenixiov1alpha1.EtcdCluster{}).SetupWebhookWithManager(mgr); err != nil {
+		if err = (&etcdaenixiov1alpha1.EtcdClusterValidator{}).SetupWebhookWithManager(mgr); err != nil {
 			log.Error(ctx, err, "unable to create webhook", "webhook", "EtcdCluster")
 			os.Exit(1)
 		}
-		if err = (&etcdaenixiov1alpha1.EtcdBackup{}).SetupWebhookWithManager(mgr); err != nil {
+		if err = (&etcdaenixiov1alpha1.EtcdBackupValidator{}).SetupWebhookWithManager(mgr); err != nil {
 			log.Error(ctx, err, "unable to create webhook", "webhook", "EtcdBackup")
 			os.Exit(1)
 		}
-		if err = (&etcdaenixiov1alpha1.EtcdBackupSchedule{}).SetupWebhookWithManager(mgr); err != nil {
+		if err = (&etcdaenixiov1alpha1.EtcdBackupScheduleValidator{}).SetupWebhookWithManager(mgr); err != nil {
 			log.Error(ctx, err, "unable to create webhook", "webhook", "EtcdBackupSchedule")
 			os.Exit(1)
 		}
