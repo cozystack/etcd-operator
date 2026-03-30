@@ -18,6 +18,7 @@ package controller
 
 import (
 	"context"
+	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -192,12 +193,21 @@ var _ = Describe("EtcdBackup Controller", func() {
 			// Simulate Job failure
 			job := getBackupJob(ctx, backup.Name)
 			job.Status.Failed = 1
-			job.Status.Conditions = append(job.Status.Conditions, batchv1.JobCondition{
-				Type:    batchv1.JobFailed,
-				Status:  "True",
-				Reason:  "BackoffLimitExceeded",
-				Message: "Job has reached the specified backoff limit",
-			})
+			job.Status.StartTime = &metav1.Time{Time: time.Now()}
+			job.Status.Conditions = append(job.Status.Conditions, []batchv1.JobCondition{
+				{
+					Type:    batchv1.JobFailureTarget,
+					Status:  "True",
+					Reason:  "BackupFailed",
+					Message: "Backup failed",
+				},
+				{
+					Type:    batchv1.JobFailed,
+					Status:  "True",
+					Reason:  "BackoffLimitExceeded",
+					Message: "Job has reached the specified backoff limit",
+				},
+			}...)
 			Expect(getK8sClient().Status().Update(ctx, job)).To(Succeed())
 
 			// Second reconcile: should set Failed
