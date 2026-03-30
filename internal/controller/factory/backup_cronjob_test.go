@@ -24,7 +24,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
-	"k8s.io/utils/ptr"
 )
 
 const awsCreds = "aws-creds"
@@ -40,7 +39,7 @@ func TestCreateBackupCronJob_PVC(t *testing.T) {
 			Namespace: "default",
 		},
 		Spec: etcdaenixiov1alpha1.EtcdClusterSpec{
-			Replicas: ptr.To(int32(3)),
+			Replicas: new(int32(3)),
 			Storage: etcdaenixiov1alpha1.StorageSpec{
 				EmptyDir: &corev1.EmptyDirVolumeSource{},
 			},
@@ -135,7 +134,7 @@ func TestCreateBackupCronJob_S3(t *testing.T) {
 			Namespace: "default",
 		},
 		Spec: etcdaenixiov1alpha1.EtcdClusterSpec{
-			Replicas: ptr.To(int32(3)),
+			Replicas: new(int32(3)),
 			Storage: etcdaenixiov1alpha1.StorageSpec{
 				EmptyDir: &corev1.EmptyDirVolumeSource{},
 			},
@@ -202,7 +201,7 @@ func TestCreateBackupCronJob_HistoryLimits(t *testing.T) {
 			Namespace: "default",
 		},
 		Spec: etcdaenixiov1alpha1.EtcdClusterSpec{
-			Replicas: ptr.To(int32(1)),
+			Replicas: new(int32(1)),
 			Storage: etcdaenixiov1alpha1.StorageSpec{
 				EmptyDir: &corev1.EmptyDirVolumeSource{},
 			},
@@ -223,8 +222,8 @@ func TestCreateBackupCronJob_HistoryLimits(t *testing.T) {
 					ClaimName: "backup-pvc",
 				},
 			},
-			SuccessfulJobsHistoryLimit: ptr.To(int32(5)),
-			FailedJobsHistoryLimit:     ptr.To(int32(2)),
+			SuccessfulJobsHistoryLimit: new(int32(5)),
+			FailedJobsHistoryLimit:     new(int32(2)),
 		},
 	}
 

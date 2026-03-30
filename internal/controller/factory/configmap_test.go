@@ -19,7 +19,6 @@ package factory
 import (
 	"github.com/google/uuid"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	"k8s.io/utils/ptr"
 	. "sigs.k8s.io/controller-runtime/pkg/envtest/komega"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -61,7 +60,7 @@ var _ = Describe("CreateOrUpdateClusterStateConfigMap handlers", func() {
 					UID:          types.UID(uuid.NewString()),
 				},
 				Spec: etcdaenixiov1alpha1.EtcdClusterSpec{
-					Replicas: ptr.To(int32(3)),
+					Replicas: new(int32(3)),
 				},
 			}
 			Expect(k8sClient.Create(ctx, &etcdcluster)).Should(Succeed())

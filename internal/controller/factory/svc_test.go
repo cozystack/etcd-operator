@@ -19,7 +19,6 @@ package factory
 import (
 	"github.com/google/uuid"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	"k8s.io/utils/ptr"
 	. "sigs.k8s.io/controller-runtime/pkg/envtest/komega"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -61,7 +60,7 @@ var _ = Describe("CreateOrUpdateService handlers", func() {
 					UID:          types.UID(uuid.NewString()),
 				},
 				Spec: etcdaenixiov1alpha1.EtcdClusterSpec{
-					Replicas: ptr.To(int32(3)),
+					Replicas: new(int32(3)),
 				},
 			}
 			Expect(k8sClient.Create(ctx, &etcdcluster)).Should(Succeed())
@@ -172,14 +171,14 @@ var _ = Describe("CreateOrUpdateService handlers", func() {
 							Protocol: corev1.ProtocolUDP,
 						},
 					},
-					LoadBalancerClass: ptr.To("someClass"),
+					LoadBalancerClass: new("someClass"),
 				},
 			}
 
 			Expect(CreateOrUpdateClientService(ctx, &etcdcluster, k8sClient)).To(Succeed())
 			Eventually(Object(&clientService)).Should(SatisfyAll(
 				HaveField("Spec.Type", Equal(corev1.ServiceTypeLoadBalancer)),
-				HaveField("Spec.LoadBalancerClass", Equal(ptr.To("someClass"))),
+				HaveField("Spec.LoadBalancerClass", Equal(new("someClass"))),
 				HaveField("Spec.Ports", SatisfyAll(
 					ContainElements(SatisfyAll(
 						HaveField("Name", Equal("client")),

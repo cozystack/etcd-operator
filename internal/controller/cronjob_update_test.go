@@ -22,7 +22,6 @@ import (
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/utils/ptr"
 )
 
 func baseCronJob() *batchv1.CronJob {
@@ -32,8 +31,8 @@ func baseCronJob() *batchv1.CronJob {
 		},
 		Spec: batchv1.CronJobSpec{
 			Schedule:                   "0 */6 * * *",
-			SuccessfulJobsHistoryLimit: ptr.To(int32(3)),
-			FailedJobsHistoryLimit:     ptr.To(int32(1)),
+			SuccessfulJobsHistoryLimit: new(int32(3)),
+			FailedJobsHistoryLimit:     new(int32(1)),
 			JobTemplate: batchv1.JobTemplateSpec{
 				Spec: batchv1.JobSpec{
 					Template: corev1.PodTemplateSpec{
@@ -88,14 +87,14 @@ func TestCronJobNeedsUpdate(t *testing.T) {
 		{
 			name: "successful history limit changed",
 			mutate: func(cj *batchv1.CronJob) {
-				cj.Spec.SuccessfulJobsHistoryLimit = ptr.To(int32(5))
+				cj.Spec.SuccessfulJobsHistoryLimit = new(int32(5))
 			},
 			expected: true,
 		},
 		{
 			name: "failed history limit changed",
 			mutate: func(cj *batchv1.CronJob) {
-				cj.Spec.FailedJobsHistoryLimit = ptr.To(int32(3))
+				cj.Spec.FailedJobsHistoryLimit = new(int32(3))
 			},
 			expected: true,
 		},

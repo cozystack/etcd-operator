@@ -27,7 +27,6 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 )
 
@@ -97,10 +96,10 @@ func CreateBackupJob(
 				Spec: corev1.PodSpec{
 					RestartPolicy: corev1.RestartPolicyNever,
 					SecurityContext: &corev1.PodSecurityContext{
-						RunAsNonRoot: ptr.To(true),
-						RunAsUser:    ptr.To(int64(65532)),
-						RunAsGroup:   ptr.To(int64(65532)),
-						FSGroup:      ptr.To(int64(65532)),
+						RunAsNonRoot: new(true),
+						RunAsUser:    new(int64(65532)),
+						RunAsGroup:   new(int64(65532)),
+						FSGroup:      new(int64(65532)),
 					},
 					Containers: []corev1.Container{container},
 					Volumes:    volumes,

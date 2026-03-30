@@ -22,7 +22,6 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	. "sigs.k8s.io/controller-runtime/pkg/envtest/komega"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
@@ -56,7 +55,7 @@ var _ = Describe("EtcdCluster Controller", func() {
 		It("Should get etcd empty string slice if etcd has 0 replicas", func() {
 			cluster := &etcdaenixiov1alpha1.EtcdCluster{
 				Spec: etcdaenixiov1alpha1.EtcdClusterSpec{
-					Replicas: ptr.To(int32(0)),
+					Replicas: new(int32(0)),
 				},
 			}
 			Expect(getEndpointsSlice(cluster)).To(BeEmpty())
@@ -71,7 +70,7 @@ var _ = Describe("EtcdCluster Controller", func() {
 					Namespace: "ns-test",
 				},
 				Spec: etcdaenixiov1alpha1.EtcdClusterSpec{
-					Replicas: ptr.To(int32(3)),
+					Replicas: new(int32(3)),
 				},
 			}
 			Expect(getEndpointsSlice(cluster)).To(Equal([]string{
@@ -101,7 +100,7 @@ var _ = Describe("EtcdCluster Controller", func() {
 					Namespace:    ns.GetName(),
 				},
 				Spec: etcdaenixiov1alpha1.EtcdClusterSpec{
-					Replicas: ptr.To(int32(3)),
+					Replicas: new(int32(3)),
 					Storage: etcdaenixiov1alpha1.StorageSpec{
 						EmptyDir: &corev1.EmptyDirVolumeSource{},
 					},

@@ -25,7 +25,6 @@ import (
 	v1 "k8s.io/api/policy/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
-	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
@@ -58,12 +57,12 @@ func CreateOrUpdatePdb(
 			Selector: &metav1.LabelSelector{
 				MatchLabels: NewLabelsBuilder().WithName().WithInstance(cluster.Name).WithManagedBy(),
 			},
-			UnhealthyPodEvictionPolicy: ptr.To(v1.IfHealthyBudget),
+			UnhealthyPodEvictionPolicy: new(v1.IfHealthyBudget),
 		},
 	}
 	// if both are nil, calculate minAvailable based on number of replicas in the cluster
 	if pdb.Spec.MinAvailable == nil && pdb.Spec.MaxUnavailable == nil {
-		pdb.Spec.MinAvailable = ptr.To(intstr.FromInt32(int32(cluster.CalculateQuorumSize())))
+		pdb.Spec.MinAvailable = new(intstr.FromInt32(int32(cluster.CalculateQuorumSize())))
 	}
 	ctx, err = contextWithGVK(ctx, pdb, rclient.Scheme())
 	if err != nil {

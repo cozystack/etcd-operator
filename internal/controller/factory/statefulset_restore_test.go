@@ -24,7 +24,6 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/utils/ptr"
 	. "sigs.k8s.io/controller-runtime/pkg/envtest/komega"
 
 	etcdaenixiov1alpha1 "github.com/aenix-io/etcd-operator/api/v1alpha1"
@@ -52,7 +51,7 @@ var _ = Describe("StatefulSet restore init containers", func() {
 					UID:          types.UID(uuid.NewString()),
 				},
 				Spec: etcdaenixiov1alpha1.EtcdClusterSpec{
-					Replicas: ptr.To(int32(3)),
+					Replicas: new(int32(3)),
 				},
 			}
 			Expect(k8sClient.Create(ctx, cluster)).Should(Succeed())
@@ -83,7 +82,7 @@ var _ = Describe("StatefulSet restore init containers", func() {
 					UID:          types.UID(uuid.NewString()),
 				},
 				Spec: etcdaenixiov1alpha1.EtcdClusterSpec{
-					Replicas: ptr.To(int32(3)),
+					Replicas: new(int32(3)),
 					Bootstrap: &etcdaenixiov1alpha1.BootstrapSpec{
 						Restore: &etcdaenixiov1alpha1.RestoreSpec{
 							Source: etcdaenixiov1alpha1.BackupDestination{
@@ -157,7 +156,7 @@ var _ = Describe("StatefulSet restore init containers", func() {
 					UID:          types.UID(uuid.NewString()),
 				},
 				Spec: etcdaenixiov1alpha1.EtcdClusterSpec{
-					Replicas: ptr.To(int32(3)),
+					Replicas: new(int32(3)),
 					Bootstrap: &etcdaenixiov1alpha1.BootstrapSpec{
 						Restore: &etcdaenixiov1alpha1.RestoreSpec{
 							Source: etcdaenixiov1alpha1.BackupDestination{
@@ -232,7 +231,7 @@ var _ = Describe("StatefulSet restore init containers", func() {
 					UID:          types.UID(uuid.NewString()),
 				},
 				Spec: etcdaenixiov1alpha1.EtcdClusterSpec{
-					Replicas: ptr.To(int32(3)),
+					Replicas: new(int32(3)),
 					Bootstrap: &etcdaenixiov1alpha1.BootstrapSpec{
 						Restore: &etcdaenixiov1alpha1.RestoreSpec{
 							Source: etcdaenixiov1alpha1.BackupDestination{

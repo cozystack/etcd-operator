@@ -27,7 +27,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
-	"k8s.io/utils/ptr"
 	. "sigs.k8s.io/controller-runtime/pkg/envtest/komega"
 )
 
@@ -60,7 +59,7 @@ var _ = Describe("CreateOrUpdatePdb handlers", func() {
 					UID:          types.UID(uuid.NewString()),
 				},
 				Spec: etcdaenixiov1alpha1.EtcdClusterSpec{
-					Replicas:                    ptr.To(int32(3)),
+					Replicas:                    new(int32(3)),
 					PodDisruptionBudgetTemplate: &etcdaenixiov1alpha1.EmbeddedPodDisruptionBudget{},
 				},
 			}
@@ -86,7 +85,7 @@ var _ = Describe("CreateOrUpdatePdb handlers", func() {
 		})
 
 		It("should create PDB with pre-filled data", func() {
-			etcdcluster.Spec.PodDisruptionBudgetTemplate.Spec.MinAvailable = ptr.To(intstr.FromInt32(int32(3)))
+			etcdcluster.Spec.PodDisruptionBudgetTemplate.Spec.MinAvailable = new(intstr.FromInt32(int32(3)))
 			Expect(CreateOrUpdatePdb(ctx, &etcdcluster, k8sClient)).To(Succeed())
 			Eventually(Get(&podDisruptionBudget)).Should(Succeed())
 			Expect(podDisruptionBudget.Spec.MinAvailable).NotTo(BeNil())

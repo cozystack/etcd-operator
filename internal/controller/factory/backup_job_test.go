@@ -26,7 +26,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
-	"k8s.io/utils/ptr"
 )
 
 func TestCreateBackupJob_PVC(t *testing.T) {
@@ -40,7 +39,7 @@ func TestCreateBackupJob_PVC(t *testing.T) {
 			Namespace: "default",
 		},
 		Spec: etcdaenixiov1alpha1.EtcdClusterSpec{
-			Replicas: ptr.To(int32(3)),
+			Replicas: new(int32(3)),
 			Storage: etcdaenixiov1alpha1.StorageSpec{
 				EmptyDir: &corev1.EmptyDirVolumeSource{},
 			},
@@ -150,7 +149,7 @@ func TestCreateBackupJob_S3(t *testing.T) {
 			Namespace: "default",
 		},
 		Spec: etcdaenixiov1alpha1.EtcdClusterSpec{
-			Replicas: ptr.To(int32(3)),
+			Replicas: new(int32(3)),
 			Storage: etcdaenixiov1alpha1.StorageSpec{
 				EmptyDir: &corev1.EmptyDirVolumeSource{},
 			},
@@ -231,7 +230,7 @@ func TestCreateBackupJob_WithTLS(t *testing.T) {
 			Namespace: "default",
 		},
 		Spec: etcdaenixiov1alpha1.EtcdClusterSpec{
-			Replicas: ptr.To(int32(3)),
+			Replicas: new(int32(3)),
 			Storage: etcdaenixiov1alpha1.StorageSpec{
 				EmptyDir: &corev1.EmptyDirVolumeSource{},
 			},
@@ -337,7 +336,7 @@ func TestCreateBackupJob_PVCSubPath(t *testing.T) {
 			Namespace: "default",
 		},
 		Spec: etcdaenixiov1alpha1.EtcdClusterSpec{
-			Replicas: ptr.To(int32(1)),
+			Replicas: new(int32(1)),
 			Storage: etcdaenixiov1alpha1.StorageSpec{
 				EmptyDir: &corev1.EmptyDirVolumeSource{},
 			},
@@ -402,7 +401,7 @@ func TestGetEffectiveDBQuota(t *testing.T) {
 				Spec: etcdaenixiov1alpha1.EtcdClusterSpec{
 					Storage: etcdaenixiov1alpha1.StorageSpec{
 						EmptyDir: &corev1.EmptyDirVolumeSource{
-							SizeLimit: ptr.To(resource.MustParse("4Gi")),
+							SizeLimit: new(resource.MustParse("4Gi")),
 						},
 					},
 				},
@@ -446,7 +445,7 @@ func TestGetEffectiveDBQuota(t *testing.T) {
 					Options: map[string]string{"quota-backend-bytes": "not-a-number"},
 					Storage: etcdaenixiov1alpha1.StorageSpec{
 						EmptyDir: &corev1.EmptyDirVolumeSource{
-							SizeLimit: ptr.To(resource.MustParse("4Gi")),
+							SizeLimit: new(resource.MustParse("4Gi")),
 						},
 					},
 				},

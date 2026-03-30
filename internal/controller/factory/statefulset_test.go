@@ -23,7 +23,6 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/apimachinery/pkg/util/intstr"
-	"k8s.io/utils/ptr"
 	. "sigs.k8s.io/controller-runtime/pkg/envtest/komega"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -65,7 +64,7 @@ var _ = Describe("CreateOrUpdateStatefulSet handler", func() {
 					UID:          types.UID(uuid.NewString()),
 				},
 				Spec: etcdaenixiov1alpha1.EtcdClusterSpec{
-					Replicas: ptr.To(int32(3)),
+					Replicas: new(int32(3)),
 					Options: map[string]string{
 						"foo":  "bar",
 						"key1": "value1",
@@ -261,7 +260,7 @@ var _ = Describe("CreateOrUpdateStatefulSet handler", func() {
 							VolumeSource: corev1.VolumeSource{
 								Secret: &corev1.SecretVolumeSource{
 									SecretName:  "peer-ca-secret",
-									DefaultMode: ptr.To(int32(420)),
+									DefaultMode: new(int32(420)),
 								},
 							},
 						},
@@ -270,7 +269,7 @@ var _ = Describe("CreateOrUpdateStatefulSet handler", func() {
 							VolumeSource: corev1.VolumeSource{
 								Secret: &corev1.SecretVolumeSource{
 									SecretName:  "peer-cert-secret",
-									DefaultMode: ptr.To(int32(420)),
+									DefaultMode: new(int32(420)),
 								},
 							},
 						},
@@ -279,7 +278,7 @@ var _ = Describe("CreateOrUpdateStatefulSet handler", func() {
 							VolumeSource: corev1.VolumeSource{
 								Secret: &corev1.SecretVolumeSource{
 									SecretName:  "server-cert-secret",
-									DefaultMode: ptr.To(int32(420)),
+									DefaultMode: new(int32(420)),
 								},
 							},
 						},
@@ -288,7 +287,7 @@ var _ = Describe("CreateOrUpdateStatefulSet handler", func() {
 							VolumeSource: corev1.VolumeSource{
 								Secret: &corev1.SecretVolumeSource{
 									SecretName:  "client-ca-secret",
-									DefaultMode: ptr.To(int32(420)),
+									DefaultMode: new(int32(420)),
 								},
 							},
 						}},
@@ -378,7 +377,7 @@ var _ = Describe("CreateOrUpdateStatefulSet handler", func() {
 			size := resource.MustParse("1Gi")
 			etcdcluster.Spec.Storage = etcdaenixiov1alpha1.StorageSpec{
 				EmptyDir: &corev1.EmptyDirVolumeSource{
-					SizeLimit: ptr.To(size),
+					SizeLimit: new(size),
 				},
 			}
 			Expect(CreateOrUpdateStatefulSet(ctx, &etcdcluster, k8sClient, "")).To(Succeed())
@@ -421,7 +420,7 @@ var _ = Describe("CreateOrUpdateStatefulSet handler", func() {
 					},
 					Storage: etcdaenixiov1alpha1.StorageSpec{
 						EmptyDir: &corev1.EmptyDirVolumeSource{
-							SizeLimit: ptr.To(resource.MustParse("2Gi")),
+							SizeLimit: new(resource.MustParse("2Gi")),
 						},
 					},
 				},
@@ -434,7 +433,7 @@ var _ = Describe("CreateOrUpdateStatefulSet handler", func() {
 				Spec: etcdaenixiov1alpha1.EtcdClusterSpec{
 					Storage: etcdaenixiov1alpha1.StorageSpec{
 						EmptyDir: &corev1.EmptyDirVolumeSource{
-							SizeLimit: ptr.To(resource.MustParse("2Gi")),
+							SizeLimit: new(resource.MustParse("2Gi")),
 						},
 					},
 				},
@@ -450,7 +449,7 @@ var _ = Describe("CreateOrUpdateStatefulSet handler", func() {
 						VolumeClaimTemplate: etcdaenixiov1alpha1.EmbeddedPersistentVolumeClaim{
 							Spec: corev1.PersistentVolumeClaimSpec{
 								AccessModes:      []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
-								StorageClassName: ptr.To("local-path"),
+								StorageClassName: new("local-path"),
 								Resources: corev1.VolumeResourceRequirements{
 									Requests: map[corev1.ResourceName]resource.Quantity{
 										corev1.ResourceStorage: resource.MustParse("2Gi"),
@@ -674,7 +673,7 @@ var _ = Describe("CreateOrUpdateStatefulSet handler", func() {
 				UID:       "test-uid",
 			},
 			Spec: etcdaenixiov1alpha1.EtcdClusterSpec{
-				Replicas: ptr.To(int32(3)),
+				Replicas: new(int32(3)),
 			},
 		}
 		etcdCluster.Default()
