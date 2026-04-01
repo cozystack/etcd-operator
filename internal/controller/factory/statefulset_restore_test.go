@@ -22,6 +22,7 @@ import (
 	. "github.com/onsi/gomega"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	. "sigs.k8s.io/controller-runtime/pkg/envtest/komega"
@@ -52,6 +53,18 @@ var _ = Describe("StatefulSet restore init containers", func() {
 				},
 				Spec: etcdaenixiov1alpha1.EtcdClusterSpec{
 					Replicas: new(int32(3)),
+					Storage: etcdaenixiov1alpha1.StorageSpec{
+						VolumeClaimTemplate: etcdaenixiov1alpha1.EmbeddedPersistentVolumeClaim{
+							Spec: corev1.PersistentVolumeClaimSpec{
+								AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
+								Resources: corev1.VolumeResourceRequirements{
+									Requests: corev1.ResourceList{
+										corev1.ResourceStorage: resource.MustParse("1Gi"),
+									},
+								},
+							},
+						},
+					},
 				},
 			}
 			Expect(k8sClient.Create(ctx, cluster)).Should(Succeed())
@@ -83,6 +96,18 @@ var _ = Describe("StatefulSet restore init containers", func() {
 				},
 				Spec: etcdaenixiov1alpha1.EtcdClusterSpec{
 					Replicas: new(int32(3)),
+					Storage: etcdaenixiov1alpha1.StorageSpec{
+						VolumeClaimTemplate: etcdaenixiov1alpha1.EmbeddedPersistentVolumeClaim{
+							Spec: corev1.PersistentVolumeClaimSpec{
+								AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
+								Resources: corev1.VolumeResourceRequirements{
+									Requests: corev1.ResourceList{
+										corev1.ResourceStorage: resource.MustParse("1Gi"),
+									},
+								},
+							},
+						},
+					},
 					Bootstrap: &etcdaenixiov1alpha1.BootstrapSpec{
 						Restore: &etcdaenixiov1alpha1.RestoreSpec{
 							Source: etcdaenixiov1alpha1.BackupDestination{
@@ -157,6 +182,18 @@ var _ = Describe("StatefulSet restore init containers", func() {
 				},
 				Spec: etcdaenixiov1alpha1.EtcdClusterSpec{
 					Replicas: new(int32(3)),
+					Storage: etcdaenixiov1alpha1.StorageSpec{
+						VolumeClaimTemplate: etcdaenixiov1alpha1.EmbeddedPersistentVolumeClaim{
+							Spec: corev1.PersistentVolumeClaimSpec{
+								AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
+								Resources: corev1.VolumeResourceRequirements{
+									Requests: corev1.ResourceList{
+										corev1.ResourceStorage: resource.MustParse("1Gi"),
+									},
+								},
+							},
+						},
+					},
 					Bootstrap: &etcdaenixiov1alpha1.BootstrapSpec{
 						Restore: &etcdaenixiov1alpha1.RestoreSpec{
 							Source: etcdaenixiov1alpha1.BackupDestination{
@@ -232,6 +269,18 @@ var _ = Describe("StatefulSet restore init containers", func() {
 				},
 				Spec: etcdaenixiov1alpha1.EtcdClusterSpec{
 					Replicas: new(int32(3)),
+					Storage: etcdaenixiov1alpha1.StorageSpec{
+						VolumeClaimTemplate: etcdaenixiov1alpha1.EmbeddedPersistentVolumeClaim{
+							Spec: corev1.PersistentVolumeClaimSpec{
+								AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
+								Resources: corev1.VolumeResourceRequirements{
+									Requests: corev1.ResourceList{
+										corev1.ResourceStorage: resource.MustParse("1Gi"),
+									},
+								},
+							},
+						},
+					},
 					Bootstrap: &etcdaenixiov1alpha1.BootstrapSpec{
 						Restore: &etcdaenixiov1alpha1.RestoreSpec{
 							Source: etcdaenixiov1alpha1.BackupDestination{
