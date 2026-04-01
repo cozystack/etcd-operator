@@ -244,6 +244,8 @@ _Appears in:_
 
 
 
+
+
 #### EtcdBackupSpec
 
 
@@ -273,6 +275,8 @@ _Underlying type:_ _string_
 
 _Appears in:_
 - [EtcdBackupStatus](#etcdbackupstatus)
+
+
 
 
 
@@ -316,6 +320,8 @@ _Appears in:_
 | `storage` _[StorageSpec](#storagespec)_ |  |  |  |
 | `security` _[SecuritySpec](#securityspec)_ | Security describes security settings of etcd (authentication, certificates, rbac) |  | Optional: {} <br /> |
 | `bootstrap` _[BootstrapSpec](#bootstrapspec)_ | Bootstrap defines initialization from an existing data source (e.g., snapshot restore).<br />This is only used during initial cluster creation and is ignored afterward. |  | Optional: {} <br /> |
+
+
 
 
 
