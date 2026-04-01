@@ -78,7 +78,7 @@ var _ = Describe("EtcdBackupSchedule Controller", func() {
 				NamespacedName: types.NamespacedName{Name: schedule.Name, Namespace: schedule.Namespace},
 			})
 			Expect(err).NotTo(HaveOccurred())
-			Expect(result.Requeue).To(BeFalse())
+			Expect(result.RequeueAfter).To(BeZero())
 
 			// Verify CronJob was created
 			cronJob := getScheduleCronJob(ctx, schedule.Name)
@@ -125,7 +125,7 @@ var _ = Describe("EtcdBackupSchedule Controller", func() {
 				NamespacedName: types.NamespacedName{Name: "nonexistent", Namespace: testNamespace},
 			})
 			Expect(err).NotTo(HaveOccurred())
-			Expect(result.Requeue).To(BeFalse())
+			Expect(result.RequeueAfter).To(BeZero())
 		})
 	})
 
@@ -215,7 +215,7 @@ var _ = Describe("EtcdBackupSchedule Controller", func() {
 				NamespacedName: types.NamespacedName{Name: schedule.Name, Namespace: schedule.Namespace},
 			})
 			Expect(err).NotTo(HaveOccurred())
-			Expect(result.Requeue).To(BeFalse())
+			Expect(result.RequeueAfter).To(BeZero())
 
 			updatedSchedule := &etcdaenixiov1alpha1.EtcdBackupSchedule{}
 			Expect(getK8sClient().Get(ctx, types.NamespacedName{Name: schedule.Name, Namespace: testNamespace}, updatedSchedule)).To(Succeed())

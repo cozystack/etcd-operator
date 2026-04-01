@@ -678,7 +678,7 @@ func (r *EtcdClusterReconciler) ensureUnconditionalObjects(ctx context.Context, 
 }
 
 // TODO!
-// nolint:unused
+// nolint:staticcheck,unused
 func (r *EtcdClusterReconciler) patchOrCreateObject(ctx context.Context, obj client.Object) error {
 	err := r.Patch(ctx, obj, client.Apply, &client.PatchOptions{FieldManager: "etcd-operator"}, client.ForceOwnership)
 	if err == nil {
@@ -691,7 +691,7 @@ func (r *EtcdClusterReconciler) patchOrCreateObject(ctx context.Context, obj cli
 }
 
 // TODO!
-// nolint:unparam,unused
+// nolint:staticcheck,unparam,unused
 func (r *EtcdClusterReconciler) createClusterFromScratch(ctx context.Context, state *observables) (ctrl.Result, error) {
 	cm := factory.TemplateClusterStateConfigMap(state.instance, "new", state.desiredReplicas())
 	err := ctrl.SetControllerReference(state.instance, cm, r.Scheme)
@@ -706,7 +706,7 @@ func (r *EtcdClusterReconciler) createClusterFromScratch(ctx context.Context, st
 }
 
 // TODO!
-// nolint:unused
+// nolint:staticcheck,unused
 func (r *EtcdClusterReconciler) scaleUpFromZero(ctx context.Context, state *observables) (ctrl.Result, error) {
 	panic("not yet implemented")
 }

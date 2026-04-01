@@ -82,7 +82,7 @@ var _ = Describe("EtcdBackup Controller", func() {
 				NamespacedName: types.NamespacedName{Name: backup.Name, Namespace: backup.Namespace},
 			})
 			Expect(err).NotTo(HaveOccurred())
-			Expect(result.Requeue).To(BeFalse())
+			Expect(result.RequeueAfter).To(BeZero())
 
 			// Verify Job was created
 			job := getBackupJob(ctx, backup.Name)
@@ -113,7 +113,7 @@ var _ = Describe("EtcdBackup Controller", func() {
 				NamespacedName: types.NamespacedName{Name: backup.Name, Namespace: backup.Namespace},
 			})
 			Expect(err).NotTo(HaveOccurred())
-			Expect(result.Requeue).To(BeFalse())
+			Expect(result.RequeueAfter).To(BeZero())
 
 			job := getBackupJob(ctx, backup.Name)
 
@@ -138,7 +138,7 @@ var _ = Describe("EtcdBackup Controller", func() {
 				NamespacedName: types.NamespacedName{Name: backup.Name, Namespace: backup.Namespace},
 			})
 			Expect(err).NotTo(HaveOccurred())
-			Expect(result.Requeue).To(BeFalse())
+			Expect(result.RequeueAfter).To(BeZero())
 
 			updatedBackup := &etcdaenixiov1alpha1.EtcdBackup{}
 			Expect(getK8sClient().Get(ctx, types.NamespacedName{Name: backup.Name, Namespace: testNamespace}, updatedBackup)).To(Succeed())
@@ -242,7 +242,7 @@ var _ = Describe("EtcdBackup Controller", func() {
 				NamespacedName: types.NamespacedName{Name: backup.Name, Namespace: backup.Namespace},
 			})
 			Expect(err).NotTo(HaveOccurred())
-			Expect(result.Requeue).To(BeFalse())
+			Expect(result.RequeueAfter).To(BeZero())
 
 			// Verify no Job was created
 			jobList := &batchv1.JobList{}
@@ -260,7 +260,7 @@ var _ = Describe("EtcdBackup Controller", func() {
 				NamespacedName: types.NamespacedName{Name: "nonexistent", Namespace: testNamespace},
 			})
 			Expect(err).NotTo(HaveOccurred())
-			Expect(result.Requeue).To(BeFalse())
+			Expect(result.RequeueAfter).To(BeZero())
 		})
 	})
 
@@ -321,7 +321,7 @@ var _ = Describe("EtcdBackup Controller", func() {
 				NamespacedName: types.NamespacedName{Name: backup.Name, Namespace: backup.Namespace},
 			})
 			Expect(err).NotTo(HaveOccurred())
-			Expect(result.Requeue).To(BeFalse())
+			Expect(result.RequeueAfter).To(BeZero())
 
 			// Verify no Job was created
 			jobList := &batchv1.JobList{}
