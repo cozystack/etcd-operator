@@ -11,6 +11,8 @@ import (
 	"github.com/aenix-io/etcd-operator/api/v1alpha1"
 	clientv3 "go.etcd.io/etcd/client/v3"
 	v1 "k8s.io/api/core/v1"
+	discoveryv1 "k8s.io/api/discovery/v1"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
@@ -42,27 +44,32 @@ func NewEtcdClientSet(ctx context.Context, cluster *v1alpha1.EtcdCluster, cli cl
 }
 
 func configFromCluster(ctx context.Context, cluster *v1alpha1.EtcdCluster, cli client.Client) (clientv3.Config, error) {
-	ep := v1.Endpoints{}
-	err := cli.Get(ctx, types.NamespacedName{Name: GetHeadlessServiceName(cluster), Namespace: cluster.Namespace}, &ep)
-	if client.IgnoreNotFound(err) != nil {
+	var sliceList discoveryv1.EndpointSliceList
+	serviceName := GetHeadlessServiceName(cluster)
+	err := cli.List(ctx, &sliceList,
+		client.InNamespace(cluster.Namespace),
+		client.MatchingLabelsSelector{Selector: labels.SelectorFromSet(labels.Set{
+			discoveryv1.LabelServiceName: serviceName,
+		})},
+	)
+	if err != nil {
 		return clientv3.Config{}, err
 	}
-	if err != nil {
+	if len(sliceList.Items) == 0 {
 		return clientv3.Config{Endpoints: []string{}}, nil
 	}
 
 	names := map[string]struct{}{}
 	urls := make([]string, 0, 8)
-	for _, v := range ep.Subsets {
-		for _, addr := range v.Addresses {
-			names[addr.Hostname] = struct{}{}
-		}
-		for _, addr := range v.NotReadyAddresses {
-			names[addr.Hostname] = struct{}{}
+	for _, slice := range sliceList.Items {
+		for _, ep := range slice.Endpoints {
+			if ep.Hostname != nil {
+				names[*ep.Hostname] = struct{}{}
+			}
 		}
 	}
 	for name := range names {
-		urls = append(urls, fmt.Sprintf("%s.%s.%s.svc:%s", name, ep.Name, ep.Namespace, "2379"))
+		urls = append(urls, fmt.Sprintf("%s.%s.%s.svc:%s", name, serviceName, cluster.Namespace, "2379"))
 	}
 	etcdClient := clientv3.Config{Endpoints: urls, DialTimeout: 5 * time.Second}
 
