@@ -15,9 +15,11 @@ jobs:
     strategy:
       matrix:
         k8s:
-          - version: v1.28.0
+          - version: v1.31.0
             attribute: penultimate
-          - version: v1.29.0
+          - version: v1.32.0
+            attribute: penultimate
+          - version: v1.33.0
             attribute: previous
           - version: default
             attribute: latest
@@ -30,7 +32,7 @@ jobs:
       - uses: docker/setup-buildx-action@v3.3.0
       - uses: tale/kubectl-action@v1.4.0
         with:
-          kubectl-version: v1.30.0
+          kubectl-version: v1.34.0
           # Empty kubeconfig file
           base64-kube-config: "YXBpVmVyc2lvbjogdjEKa2luZDogQ29uZmlnCnByZWZlcmVuY2VzOiB7fQo="
       - run: |

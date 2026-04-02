@@ -3,7 +3,7 @@
 IMG ?= ghcr.io/aenix-io/etcd-operator:latest
 # K8S_VERSION refers to the version of kubebuilder assets to be downloaded by envtest binary.
 # renovate: datasource=github-tags depName=kubernetes/kubernetes
-K8S_VERSION ?= v1.35.0
+K8S_VERSION ?= v1.34.0
 K8S_VERSION_TRIMMED_V = $(subst v,,$(K8S_VERSION))
 
 # Get the currently used golang install path (in GOPATH/bin, unless GOBIN is set)
