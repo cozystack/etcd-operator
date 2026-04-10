@@ -84,7 +84,7 @@ var _ = Describe("UpdatePersistentVolumeClaims", func() {
 					Namespace: ns.Name,
 					Labels: map[string]string{
 						"app.kubernetes.io/instance":   cluster.Name,
-						"app.kubernetes.io/managed-by": "etcd-operator",
+						"app.kubernetes.io/managed-by": etcdOperatorName,
 						"app.kubernetes.io/name":       "etcd",
 					},
 				},
@@ -121,7 +121,7 @@ var _ = Describe("UpdatePersistentVolumeClaims", func() {
 					Namespace: ns.Name,
 					Labels: map[string]string{
 						"app.kubernetes.io/instance":   cluster.Name,
-						"app.kubernetes.io/managed-by": "etcd-operator",
+						"app.kubernetes.io/managed-by": etcdOperatorName,
 						"app.kubernetes.io/name":       "etcd",
 					},
 				},

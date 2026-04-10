@@ -315,6 +315,149 @@ var _ = Describe("EtcdCluster Webhook", func() {
 
 	})
 
+	Context("Validate Bootstrap", func() {
+		It("Should admit cluster without bootstrap", func() {
+			cluster := &EtcdCluster{
+				Spec: EtcdClusterSpec{
+					Replicas: ptr.To(int32(3)),
+				},
+			}
+			errs := cluster.validateBootstrap()
+			Expect(errs).To(BeEmpty())
+		})
+
+		It("Should admit valid bootstrap with PVC source", func() {
+			cluster := &EtcdCluster{
+				Spec: EtcdClusterSpec{
+					Replicas: ptr.To(int32(3)),
+					Bootstrap: &BootstrapSpec{
+						Restore: &RestoreSpec{
+							Source: BackupDestination{
+								PVC: &PVCBackupDestination{
+									ClaimName: "my-pvc",
+									SubPath:   "backup.db",
+								},
+							},
+						},
+					},
+				},
+			}
+			errs := cluster.validateBootstrap()
+			Expect(errs).To(BeEmpty())
+		})
+
+		It("Should admit valid bootstrap with S3 source", func() {
+			cluster := &EtcdCluster{
+				Spec: EtcdClusterSpec{
+					Replicas: ptr.To(int32(3)),
+					Bootstrap: &BootstrapSpec{
+						Restore: &RestoreSpec{
+							Source: BackupDestination{
+								S3: &S3BackupDestination{
+									Endpoint:             "https://s3.example.com",
+									Bucket:               "my-bucket",
+									Key:                  "backup.db",
+									CredentialsSecretRef: corev1.LocalObjectReference{Name: "creds"},
+								},
+							},
+						},
+					},
+				},
+			}
+			errs := cluster.validateBootstrap()
+			Expect(errs).To(BeEmpty())
+		})
+
+		It("Should reject bootstrap with both S3 and PVC", func() {
+			cluster := &EtcdCluster{
+				Spec: EtcdClusterSpec{
+					Replicas: ptr.To(int32(3)),
+					Bootstrap: &BootstrapSpec{
+						Restore: &RestoreSpec{
+							Source: BackupDestination{
+								S3:  &S3BackupDestination{Endpoint: "e", Bucket: "b", Key: "k", CredentialsSecretRef: corev1.LocalObjectReference{Name: "c"}},
+								PVC: &PVCBackupDestination{ClaimName: "pvc"},
+							},
+						},
+					},
+				},
+			}
+			errs := cluster.validateBootstrap()
+			Expect(errs).NotTo(BeEmpty())
+		})
+
+		It("Should reject bootstrap with empty source", func() {
+			cluster := &EtcdCluster{
+				Spec: EtcdClusterSpec{
+					Replicas: ptr.To(int32(3)),
+					Bootstrap: &BootstrapSpec{
+						Restore: &RestoreSpec{
+							Source: BackupDestination{},
+						},
+					},
+				},
+			}
+			errs := cluster.validateBootstrap()
+			Expect(errs).NotTo(BeEmpty())
+		})
+
+		It("Should reject update changing bootstrap", func() {
+			newCluster := &EtcdCluster{
+				Spec: EtcdClusterSpec{
+					Replicas: ptr.To(int32(3)),
+					Bootstrap: &BootstrapSpec{
+						Restore: &RestoreSpec{
+							Source: BackupDestination{
+								PVC: &PVCBackupDestination{ClaimName: "new-pvc"},
+							},
+						},
+					},
+				},
+			}
+			oldCluster := &EtcdCluster{
+				Spec: EtcdClusterSpec{
+					Replicas: ptr.To(int32(3)),
+					Bootstrap: &BootstrapSpec{
+						Restore: &RestoreSpec{
+							Source: BackupDestination{
+								PVC: &PVCBackupDestination{ClaimName: "old-pvc"},
+							},
+						},
+					},
+				},
+			}
+			_, err := newCluster.ValidateUpdate(oldCluster)
+			if Expect(err).To(HaveOccurred()) {
+				statusErr := err.(*errors.StatusError)
+				Expect(statusErr.ErrStatus.Message).To(ContainSubstring("immutable"))
+			}
+		})
+
+		It("Should allow update not changing bootstrap", func() {
+			bootstrap := &BootstrapSpec{
+				Restore: &RestoreSpec{
+					Source: BackupDestination{
+						PVC: &PVCBackupDestination{ClaimName: "same-pvc"},
+					},
+				},
+			}
+			newCluster := &EtcdCluster{
+				Spec: EtcdClusterSpec{
+					Replicas:  ptr.To(int32(3)),
+					Bootstrap: bootstrap.DeepCopy(),
+				},
+			}
+			oldCluster := &EtcdCluster{
+				Spec: EtcdClusterSpec{
+					Replicas:  ptr.To(int32(3)),
+					Bootstrap: bootstrap.DeepCopy(),
+				},
+			}
+			_, err := newCluster.ValidateUpdate(oldCluster)
+			Expect(err).To(Succeed())
+		})
+	})
+
 	Context("Validate PDB", func() {
 		etcdCluster := &EtcdCluster{
 			Spec: EtcdClusterSpec{

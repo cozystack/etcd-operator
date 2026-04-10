@@ -50,6 +50,23 @@ type EtcdClusterSpec struct {
 	// Security describes security settings of etcd (authentication, certificates, rbac)
 	// +optional
 	Security *SecuritySpec `json:"security,omitempty"`
+	// Bootstrap defines initialization from an existing data source (e.g., snapshot restore).
+	// This is only used during initial cluster creation and is ignored afterward.
+	// +optional
+	Bootstrap *BootstrapSpec `json:"bootstrap,omitempty"`
+}
+
+// BootstrapSpec defines how to initialize a new EtcdCluster from an existing data source.
+type BootstrapSpec struct {
+	// Restore configures cluster initialization from an etcd snapshot.
+	// +optional
+	Restore *RestoreSpec `json:"restore,omitempty"`
+}
+
+// RestoreSpec defines how to restore a cluster from a snapshot.
+type RestoreSpec struct {
+	// Source defines where to get the snapshot for restoration.
+	Source BackupDestination `json:"source"`
 }
 
 const (
