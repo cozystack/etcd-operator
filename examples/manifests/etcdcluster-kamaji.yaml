@@ -140,20 +140,21 @@ spec:
     - "signing"
     - "key encipherment"
   dnsNames:
-  - etcd-0
-  - etcd-0.etcd-headless
-  - etcd-0.etcd-headless.kamaji-system.svc
-  - etcd-0.etcd-headless.kamaji-system.svc.cluster.local
-  - etcd-1
-  - etcd-1.etcd-headless
-  - etcd-1.etcd-headless.kamaji-system.svc
-  - etcd-1.etcd-headless.kamaji-system.svc.cluster.local
-  - etcd-2
-  - etcd-2.etcd-headless
-  - etcd-2.etcd-headless.kamaji-system.svc
-  - etcd-2.etcd-headless.kamaji-system.svc.cluster.local
-  - localhost
-  - "127.0.0.1"
+    - etcd-0
+    - etcd-0.etcd-headless
+    - etcd-0.etcd-headless.kamaji-system.svc
+    - etcd-0.etcd-headless.kamaji-system.svc.cluster.local
+    - etcd-1
+    - etcd-1.etcd-headless
+    - etcd-1.etcd-headless.kamaji-system.svc
+    - etcd-1.etcd-headless.kamaji-system.svc.cluster.local
+    - etcd-2
+    - etcd-2.etcd-headless
+    - etcd-2.etcd-headless.kamaji-system.svc
+    - etcd-2.etcd-headless.kamaji-system.svc.cluster.local
+    - localhost
+  ipAddresses:
+    - 127.0.0.1
   privateKey:
     rotationPolicy: Always
     algorithm: RSA
