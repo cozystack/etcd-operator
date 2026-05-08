@@ -153,7 +153,8 @@ spec:
   - etcd-2.etcd-headless.kamaji-system.svc
   - etcd-2.etcd-headless.kamaji-system.svc.cluster.local
   - localhost
-  - "127.0.0.1"
+  ipAddresses:
+  - 127.0.0.1
   privateKey:
     rotationPolicy: Always
     algorithm: RSA
