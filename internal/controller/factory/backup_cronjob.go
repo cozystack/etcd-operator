@@ -35,6 +35,11 @@ func CreateBackupCronJob(
 	operatorImage string,
 	scheme *runtime.Scheme,
 ) (*batchv1.CronJob, error) {
+	if pvc := schedule.Spec.Destination.PVC; pvc != nil {
+		if err := validatePVCSubPath(pvc.SubPath); err != nil {
+			return nil, err
+		}
+	}
 	labels := NewLabelsBuilder().WithName().WithInstance(cluster.Name).WithManagedBy()
 	labels["etcd.aenix.io/etcdbackupschedule-name"] = schedule.Name
 

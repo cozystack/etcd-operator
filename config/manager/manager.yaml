@@ -105,5 +105,16 @@ spec:
             fieldRef:
               apiVersion: v1
               fieldPath: metadata.namespace
+        # OPERATOR_IMAGE must match the manager container's image
+        # because the controller stamps it onto backup/restore Jobs
+        # it spawns (those Jobs run the same image, executing
+        # /backup-agent or /restore-agent instead of /manager). The
+        # kustomization.yaml `replacements:` block keeps this value
+        # in sync with `spec.containers[name=manager].image` whenever
+        # `kustomize edit set image` rewrites the deployment, so a
+        # default deploy + a `make deploy IMG=...` override both
+        # land matching values without a second `kustomize edit`.
+        - name: OPERATOR_IMAGE
+          value: ghcr.io/aenix-io/etcd-operator:latest
       serviceAccountName: controller-manager
       terminationGracePeriodSeconds: 10

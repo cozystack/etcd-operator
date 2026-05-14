@@ -28,6 +28,7 @@ import (
 	"github.com/go-logr/logr"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
+	"k8s.io/client-go/kubernetes"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 
 	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
@@ -119,6 +120,16 @@ func main() {
 		log.Info(ctx, "OPERATOR_IMAGE not set; backup, restore, and scheduled backup features will be unavailable")
 	}
 
+	// Build a typed Clientset for the EtcdBackup controller's
+	// post-success pod-log scan (controller-runtime's typed Client
+	// does not stream pods/log). Sharing the manager's rest.Config
+	// means we inherit the same auth + leader-election context.
+	clientset, err := kubernetes.NewForConfig(mgr.GetConfig())
+	if err != nil {
+		log.Error(ctx, err, "unable to create kubernetes Clientset for pod-log access")
+		os.Exit(1)
+	}
+
 	if err = (&controller.EtcdClusterReconciler{
 		Client:        mgr.GetClient(),
 		Scheme:        mgr.GetScheme(),
@@ -128,9 +139,16 @@ func main() {
 		os.Exit(1)
 	}
 	if err = (&controller.EtcdBackupReconciler{
-		Client:        mgr.GetClient(),
+		Client: mgr.GetClient(),
+		// APIReader bypasses the manager's cache for the per-Job
+		// backup-agent pod List, so the controller does NOT need
+		// namespace-wide pods/watch RBAC just to populate
+		// status.snapshot once per EtcdBackup. See EtcdBackup
+		// Reconciler.APIReader for the full rationale.
+		APIReader:     mgr.GetAPIReader(),
 		Scheme:        mgr.GetScheme(),
 		OperatorImage: operatorImage,
+		Clientset:     clientset,
 	}).SetupWithManager(mgr); err != nil {
 		log.Error(ctx, err, "unable to create controller", "controller", "EtcdBackup")
 		os.Exit(1)

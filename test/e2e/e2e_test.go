@@ -199,6 +199,187 @@ allowVolumeExpansion: true
 		})
 	})
 
+	// Pins the agent → controller wire contract end-to-end. Unit
+	// tests stub LogStreamer, so the production code that opens
+	// PodLogOptions{Container: "backup-agent"} and Streams via
+	// Clientset is otherwise uncovered — if the container name ever
+	// drifts between factory/backup_job.go and the controller, all
+	// unit tests still pass while every real backup silently leaves
+	// status.snapshot empty. This e2e test exercises that path
+	// against a running apiserver + kubelet + agent and asserts the
+	// resulting status fields.
+	Context("With PVC backup", func() {
+		const namespace = "test-pvc-backup-etcd-cluster"
+		// Tear down everything this spec creates regardless of
+		// pass/fail so a re-run does not see stale EtcdBackup /
+		// EtcdCluster / PVC objects from a previous failed iteration.
+		// kubectl delete namespace cascades to all child objects.
+		// `--ignore-not-found` keeps the cleanup idempotent if the
+		// spec aborts before resources land. `--wait=false` decouples
+		// the next spec's start from this one's GC.
+		AfterEach(func() {
+			// On failure, dump everything we'd otherwise need to
+			// kubectl-ssh into the runner to see: the EtcdBackup
+			// object itself (status/conditions explain the
+			// reconcile decision), the spawned backup Job + pod
+			// (phase/events explain whether the agent ran at all),
+			// the agent container's pod log (explains whether the
+			// terminal marker was emitted), and the operator's
+			// own log (explains why an apparently-complete backup
+			// finalized with empty status.snapshot — extraction
+			// race vs torn log vs genuine no-marker). All output
+			// goes through GinkgoWriter so it shows up under the
+			// failing spec in CI logs.
+			if CurrentSpecReport().Failed() {
+				dumpCmds := [][]string{
+					{"kubectl", "-n", namespace, "get", "etcdbackup", "-o", "yaml"},
+					{"kubectl", "-n", namespace, "get", "job,pod", "-o", "wide"},
+					{"kubectl", "-n", namespace, "describe", "job"},
+					{"kubectl", "-n", namespace, "describe", "pod"},
+					{"kubectl", "-n", namespace, "logs", "-l",
+						"etcd.aenix.io/etcdbackup-name=e2e-pvc-backup",
+						"--tail=-1", "--all-containers"},
+					{"kubectl", "-n", "etcd-operator-system", "logs",
+						"deployment/etcd-operator-controller-manager",
+						"-c", "manager", "--tail=200"},
+				}
+				for _, c := range dumpCmds {
+					_, _ = fmt.Fprintf(GinkgoWriter, "\n=== %s ===\n", strings.Join(c, " "))
+					out, _ := exec.Command(c[0], c[1:]...).CombinedOutput()
+					_, _ = GinkgoWriter.Write(out)
+				}
+			}
+			cmd := exec.Command("kubectl", "delete", "namespace", namespace,
+				"--ignore-not-found", "--wait=false")
+			_, _ = utils.Run(cmd)
+		})
+		It("should populate status.snapshot.uri/checksum after a successful backup", func() {
+			var err error
+
+			By("create namespace", func() {
+				cmd := exec.Command("sh", "-c",
+					fmt.Sprintf("kubectl create namespace %s --dry-run=client -o yaml | kubectl apply -f -", namespace)) //nolint:lll
+				_, err = utils.Run(cmd)
+				ExpectWithOffset(1, err).NotTo(HaveOccurred())
+			})
+
+			By("deploy emptyDir etcd cluster", func() {
+				dir, _ := utils.GetProjectDir()
+				cmd := exec.Command("kubectl", "apply",
+					"--filename", dir+"/examples/manifests/etcdcluster-emptydir.yaml",
+					"--namespace", namespace,
+				)
+				_, err = utils.Run(cmd)
+				ExpectWithOffset(1, err).NotTo(HaveOccurred())
+			})
+
+			By("wait for etcd statefulset ready", func() {
+				Eventually(func() error {
+					cmd := exec.Command("kubectl", "wait",
+						"statefulset/test",
+						"--for", "jsonpath={.status.readyReplicas}=3",
+						"--namespace", namespace,
+						"--timeout", "5m",
+					)
+					_, err = utils.Run(cmd)
+					return err
+				}, 5*time.Minute, 10*time.Second).Should(Succeed())
+			})
+
+			// Backup PVC. kind's bundled standard StorageClass
+			// (rancher.io/local-path) provisions on first attach.
+			const backupPVC = `
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: etcd-backup-pvc
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 1Gi
+  storageClassName: standard
+`
+			By("create backup PVC", func() {
+				cmd := exec.Command("kubectl", "apply", "--namespace", namespace, "-f", "-")
+				cmd.Stdin = strings.NewReader(backupPVC)
+				_, err = utils.Run(cmd)
+				Expect(err).NotTo(HaveOccurred())
+			})
+
+			const backupCR = `
+apiVersion: etcd.aenix.io/v1alpha1
+kind: EtcdBackup
+metadata:
+  name: e2e-pvc-backup
+spec:
+  clusterRef:
+    name: test
+  destination:
+    pvc:
+      claimName: etcd-backup-pvc
+`
+			By("create EtcdBackup", func() {
+				cmd := exec.Command("kubectl", "apply", "--namespace", namespace, "-f", "-")
+				cmd.Stdin = strings.NewReader(backupCR)
+				_, err = utils.Run(cmd)
+				Expect(err).NotTo(HaveOccurred())
+			})
+
+			By("wait for status.phase=Complete", func() {
+				Eventually(func() string {
+					cmd := exec.Command("kubectl", "get", "etcdbackup", "e2e-pvc-backup",
+						"--namespace", namespace,
+						"-o", "jsonpath={.status.phase}",
+					)
+					out, runErr := utils.Run(cmd)
+					if runErr != nil {
+						return ""
+					}
+					return strings.TrimSpace(string(out))
+				}, 5*time.Minute, 10*time.Second).Should(Equal("Complete"),
+					"EtcdBackup did not reach Complete in time")
+			})
+
+			By("status.snapshot.uri must be a file:// URI populated by the agent", func() {
+				cmd := exec.Command("kubectl", "get", "etcdbackup", "e2e-pvc-backup",
+					"--namespace", namespace,
+					"-o", "jsonpath={.status.snapshot.uri}",
+				)
+				out, runErr := utils.Run(cmd)
+				Expect(runErr).NotTo(HaveOccurred())
+				uri := strings.TrimSpace(string(out))
+				Expect(uri).To(HavePrefix("file:///"),
+					"status.snapshot.uri must start with file:/// (got %q)", uri)
+			})
+
+			By("status.snapshot.checksum must be a sha256:<hex> populated by the agent", func() {
+				cmd := exec.Command("kubectl", "get", "etcdbackup", "e2e-pvc-backup",
+					"--namespace", namespace,
+					"-o", "jsonpath={.status.snapshot.checksum}",
+				)
+				out, runErr := utils.Run(cmd)
+				Expect(runErr).NotTo(HaveOccurred())
+				checksum := strings.TrimSpace(string(out))
+				Expect(checksum).To(HavePrefix("sha256:"),
+					"status.snapshot.checksum must start with sha256: (got %q)", checksum)
+				Expect(len(checksum)).To(BeNumerically(">", len("sha256:")),
+					"status.snapshot.checksum must have hex content after the prefix (got %q)", checksum)
+			})
+
+			By("status.snapshot.sizeBytes must be non-zero", func() {
+				cmd := exec.Command("kubectl", "get", "etcdbackup", "e2e-pvc-backup",
+					"--namespace", namespace,
+					"-o", "jsonpath={.status.snapshot.sizeBytes}",
+				)
+				out, runErr := utils.Run(cmd)
+				Expect(runErr).NotTo(HaveOccurred())
+				Expect(strings.TrimSpace(string(out))).NotTo(Or(BeEmpty(), Equal("0")),
+					"status.snapshot.sizeBytes must be set")
+			})
+		})
+	})
+
 	Context("TLS and enabled auth", func() {
 		It("should deploy etcd cluster with auth", func() {
 			var err error

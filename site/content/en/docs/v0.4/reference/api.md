@@ -41,6 +41,24 @@ _Appears in:_
 | `pvc` _[PVCBackupDestination](#pvcbackupdestination)_ | PVC defines a PersistentVolumeClaim as the backup destination. |  | Optional: {} <br /> |
 
 
+#### BackupSnapshot
+
+
+
+BackupSnapshot describes the artefact produced by a successful
+EtcdBackup.
+
+
+
+
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `uri` _string_ | URI is an OBSERVATIONAL identifier of the snapshot the agent<br />wrote — intended for humans, dashboards, and out-of-band<br />tooling. For S3 destinations: "s3://<bucket>/<key>" where<br /><key> is the FULL object name (with any BACKUP_INCLUDE_REVISION<br />/ BACKUP_TIMESTAMP suffix the agent injected at write time).<br />For PVC destinations: "file:///<abs-path>" — note the triple<br />slash, which is the literal output of joining the "file://"<br />scheme with an absolute in-container path. The path is<br />in-container (rooted at the operator-injected /backup/data<br />mount of spec.destination.pvc.claimName) and is not directly<br />readable from outside the pod.<br />This field is NOT a stable contract for programmatic restore<br />callers. The S3 form omits endpoint / region / path-style flags<br />that are required to address non-AWS endpoints (MinIO, Ceph<br />RGW, Wasabi, ...) and the PVC form omits the PVC claimName and<br />namespace. A future RestoreSpec consumer must read those values<br />from the originating EtcdBackup.spec.destination — not from<br />this string. The URI format may evolve in subsequent versions<br />to expose richer addressing; consumers should treat unfamiliar<br />schemes as opaque rather than parsing.<br />KEEP IN SYNC with the SnapshotURIPrefixPattern constant in this<br />package — the controller compiles its defense-in-depth regex<br />from that constant; if this marker drifts, the controller will<br />admit URIs that the apiserver refuses to write and reconciles<br />will spin on Status().Update validation errors. |  | Pattern: `^(s3\|file)://.+` <br /> |
+| `sizeBytes` _integer_ | SizeBytes is the snapshot size in bytes, as observed by the<br />backup-agent at write time. Populated whenever the enclosing<br />BackupSnapshot is set: a successful marker parse always<br />produces a value here. The only way SizeBytes==0 lands with<br />BackupSnapshot set is the strconv.ParseInt overflow fallback<br />in the marker scanner — i.e. an agent-emitted size larger<br />than int64, which is unreachable in practice. In that one<br />case the scanner deliberately STILL lands a populated<br />BackupSnapshot (with SizeBytes=0, URI and Checksum<br />preserved) rather than discarding it: the URI + checksum are<br />the load-bearing fields for a future restore, and a<br />reviewer reading status sees the snapshot exists. When the<br />agent log was GC'd or never contained a marker, the entire<br />BackupSnapshot stays nil rather than being set with a zero<br />SizeBytes. |  | Optional: {} <br /> |
+| `checksum` _string_ | Checksum is "<algo>:<hex>" of the snapshot bytes, computed by<br />the agent while streaming. Currently always "sha256:<hex>"<br />(64 hex chars) when the controller populates BackupSnapshot at<br />all; consumers MUST tolerate other algorithms via the prefix.<br />The controller's marker regex requires sha256=<64 hex> to be<br />present, so this field is non-empty whenever the enclosing<br />BackupSnapshot is set.<br />The pattern admits hyphenated algorithm names (e.g.<br />"sha3-256:...", "blake2b-256:...", "blake3-256:...") so a<br />future agent build can adopt a stronger hash without an API<br />break, and bounds the hex run to 32–128 chars (128-bit to<br />512-bit digests) so a truncated emit cannot satisfy the<br />pattern with a meaningless short hash. |  | Pattern: `^[a-z0-9][a-z0-9-]*:[a-f0-9]{32,128}$` <br />Optional: {} <br /> |
+
+
 #### BootstrapSpec
 
 
@@ -271,8 +289,7 @@ _Underlying type:_ _string_
 
 
 
-_Appears in:_
-- [EtcdBackupStatus](#etcdbackupstatus)
+
 
 
 

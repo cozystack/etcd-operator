@@ -15,9 +15,24 @@ _Validation:_
 {{- end }}
 {{- end }}
 
-{{ if $type.References -}}
+{{/*
+Filter SortedReferences down to ones that will actually have a
+heading in this document. Without the filter, a referencing
+type that crd-ref-docs decides not to render (e.g. EtcdBackupStatus
+under our .crd-docs.yaml `ignoreFields: status$`) leaves behind a
+markdown link to a non-existent anchor — flagged by MD051 / markdown
+review tooling and broken for human readers clicking the
+"Appears in:" line.
+*/}}
+{{- $rendered := list -}}
+{{- range $type.SortedReferences -}}
+{{- if markdownShouldRenderType . -}}
+{{- $rendered = append $rendered . -}}
+{{- end -}}
+{{- end -}}
+{{ if $rendered -}}
 _Appears in:_
-{{- range $type.SortedReferences }}
+{{- range $rendered }}
 - {{ markdownRenderTypeLink . }}
 {{- end }}
 {{- end }}
@@ -31,7 +46,7 @@ _Appears in:_
 {{ end -}}
 
 {{ range $type.Members -}}
-| `{{ .Name  }}` _{{ markdownRenderType .Type }}_ | {{ template "type_members" . }} | {{ markdownRenderDefault .Default }} | {{ range .Validation -}} {{ . }} <br />{{ end }} |
+| `{{ .Name  }}` _{{ markdownRenderType .Type }}_ | {{ template "type_members" . }} | {{ markdownRenderDefault .Default }} | {{ range .Validation -}} {{ . | replace "|" "\\|" }} <br />{{ end }} |
 {{ end -}}
 
 {{ end -}}

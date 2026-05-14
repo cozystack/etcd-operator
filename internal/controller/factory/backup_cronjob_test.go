@@ -17,6 +17,7 @@ limitations under the License.
 package factory
 
 import (
+	"errors"
 	"testing"
 
 	etcdaenixiov1alpha1 "github.com/aenix-io/etcd-operator/api/v1alpha1"
@@ -91,6 +92,15 @@ func TestCreateBackupCronJob_PVC(t *testing.T) {
 	}
 	if len(container.Command) != 1 || container.Command[0] != "/backup-agent" {
 		t.Errorf("expected command [/backup-agent], got %v", container.Command)
+	}
+	// Pull-policy propagates through the shared buildBackupContainer
+	// helper. See backup_job_test.go for the full rationale — same
+	// reasoning applies to scheduled backups: a CronJob-spawned
+	// backup-agent must run the same image bytes as the deployed
+	// manager, not whatever the registry currently serves under the
+	// configured tag.
+	if container.ImagePullPolicy != corev1.PullIfNotPresent {
+		t.Errorf("expected ImagePullPolicy=IfNotPresent, got %q", container.ImagePullPolicy)
 	}
 
 	// Check PVC volume
@@ -238,5 +248,107 @@ func TestCreateBackupCronJob_HistoryLimits(t *testing.T) {
 	}
 	if cronJob.Spec.FailedJobsHistoryLimit == nil || *cronJob.Spec.FailedJobsHistoryLimit != 2 {
 		t.Errorf("expected FailedJobsHistoryLimit=2, got %v", cronJob.Spec.FailedJobsHistoryLimit)
+	}
+}
+
+// TestCreateBackupCronJob_RejectsTraversalSubPath mirrors the
+// Job-side hardening for the CronJob factory. CreateBackupCronJob
+// has its own call to validatePVCSubPath; if a future refactor
+// drops it the test suite must fail, otherwise scheduled backups
+// silently regress to accepting "../../etc" SubPaths and the URI
+// we report into status.snapshot can advertise an out-of-mount
+// location.
+func TestCreateBackupCronJob_RejectsTraversalSubPath(t *testing.T) {
+	scheme := runtime.NewScheme()
+	_ = clientgoscheme.AddToScheme(scheme)
+	_ = etcdaenixiov1alpha1.AddToScheme(scheme)
+
+	cluster := &etcdaenixiov1alpha1.EtcdCluster{
+		ObjectMeta: metav1.ObjectMeta{Name: "my-etcd", Namespace: "default"},
+		Spec: etcdaenixiov1alpha1.EtcdClusterSpec{
+			Replicas: ptr.To(int32(1)),
+			Storage:  etcdaenixiov1alpha1.StorageSpec{EmptyDir: &corev1.EmptyDirVolumeSource{}},
+		},
+	}
+
+	cases := []struct {
+		name    string
+		subPath string
+	}{
+		{"parent traversal", "../../etc"},
+		{"hidden parent in middle", "good/../bad"},
+		{"single dot dot", ".."},
+		{"single dot segment", "good/./bad"},
+		{"lone dot", "."},
+		{"absolute path", "/etc"},
+		{"empty segment trailing", "trailing/"},
+		{"double slash", "good//bad"},
+		{"backslash", `bad\path`},
+		{"null byte", "good\x00bad"},
+		{"newline", "good\nbad"},
+		{"DEL", "good\x7fbad"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			schedule := &etcdaenixiov1alpha1.EtcdBackupSchedule{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "trav-schedule",
+					Namespace: "default",
+					UID:       "trav-cron-uid",
+				},
+				Spec: etcdaenixiov1alpha1.EtcdBackupScheduleSpec{
+					ClusterRef: corev1.LocalObjectReference{Name: "my-etcd"},
+					Schedule:   "0 */6 * * *",
+					Destination: etcdaenixiov1alpha1.BackupDestination{
+						PVC: &etcdaenixiov1alpha1.PVCBackupDestination{
+							ClaimName: "backup-pvc",
+							SubPath:   tc.subPath,
+						},
+					},
+				},
+			}
+			_, err := CreateBackupCronJob(schedule, cluster, "test-image:latest", scheme)
+			if err == nil {
+				t.Fatalf("CreateBackupCronJob accepted SubPath=%q; want rejection", tc.subPath)
+			}
+			if !errors.Is(err, ErrInvalidSpec) {
+				t.Fatalf("err is %v; want errors.Is(_, ErrInvalidSpec)", err)
+			}
+		})
+	}
+}
+
+// TestCreateBackupCronJob_AcceptsValidSubPath sanity-checks that
+// the CronJob hardening doesn't over-reject legitimate sub-paths.
+func TestCreateBackupCronJob_AcceptsValidSubPath(t *testing.T) {
+	scheme := runtime.NewScheme()
+	_ = clientgoscheme.AddToScheme(scheme)
+	_ = etcdaenixiov1alpha1.AddToScheme(scheme)
+
+	cluster := &etcdaenixiov1alpha1.EtcdCluster{
+		ObjectMeta: metav1.ObjectMeta{Name: "my-etcd", Namespace: "default"},
+		Spec: etcdaenixiov1alpha1.EtcdClusterSpec{
+			Replicas: ptr.To(int32(1)),
+			Storage:  etcdaenixiov1alpha1.StorageSpec{EmptyDir: &corev1.EmptyDirVolumeSource{}},
+		},
+	}
+
+	schedule := &etcdaenixiov1alpha1.EtcdBackupSchedule{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "ok-schedule", Namespace: "default", UID: "ok-cron-uid",
+		},
+		Spec: etcdaenixiov1alpha1.EtcdBackupScheduleSpec{
+			ClusterRef: corev1.LocalObjectReference{Name: "my-etcd"},
+			Schedule:   "0 */6 * * *",
+			Destination: etcdaenixiov1alpha1.BackupDestination{
+				PVC: &etcdaenixiov1alpha1.PVCBackupDestination{
+					ClaimName: "backup-pvc",
+					SubPath:   "prod/etcd/daily",
+				},
+			},
+		},
+	}
+	if _, err := CreateBackupCronJob(schedule, cluster, "test-image:latest", scheme); err != nil {
+		t.Fatalf("CreateBackupCronJob rejected legitimate SubPath: %v", err)
 	}
 }

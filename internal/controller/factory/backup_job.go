@@ -17,6 +17,7 @@ limitations under the License.
 package factory
 
 import (
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -38,6 +39,20 @@ const (
 	// defaultEtcdQuotaBytes is etcd's default backend quota (2 GiB).
 	defaultEtcdQuotaBytes int64 = 2 * 1024 * 1024 * 1024
 )
+
+// ErrInvalidSpec is the sentinel wrap for user-input validation
+// failures surfaced by CreateBackupJob / CreateBackupCronJob (and
+// any future builder in this package). The wrap lets controllers
+// distinguish "this EtcdBackup/EtcdBackupSchedule will NEVER
+// succeed without user action" from generic transient build
+// failures (apiserver hiccup, controller-reference fault) — the
+// former must be reported as a terminal Failed status condition
+// so the user can see and fix it; the latter must be retried by
+// the workqueue. Callers branch with `errors.Is(err,
+// factory.ErrInvalidSpec)`. Use `fmt.Errorf("%w: …", ErrInvalidSpec, …)`
+// to wrap at the validation boundary so the underlying message is
+// preserved for the Failed condition's user-facing Message field.
+var ErrInvalidSpec = errors.New("invalid backup spec")
 
 // getEffectiveDBQuota returns the maximum etcd DB size for the given cluster,
 // used to set ephemeral-storage requests/limits on backup Jobs.
@@ -64,6 +79,65 @@ func getEffectiveDBQuota(cluster *etcdaenixiov1alpha1.EtcdCluster) resource.Quan
 	return *resource.NewQuantity(defaultEtcdQuotaBytes, resource.BinarySI)
 }
 
+// validatePVCSubPath rejects user-supplied SubPath values that would
+// let the agent's /backup/data/<subPath>/<file>.db join escape the
+// in-container backup mount, OR produce a URI that does not match
+// the actual on-disk path the agent writes to. The agent runs as
+// non-root inside its own pod (no other writeable host paths) so
+// escape is contained to the PVC, but a URI we publish to
+// status.snapshot.uri that disagrees with where the file actually
+// lands misleads out-of-band tooling and any future RestoreSpec
+// consumer.
+//
+// All rejections are wrapped with ErrInvalidSpec so the controller
+// can surface them as a terminal Failed status condition (these are
+// user-input errors that no amount of reconciler retry can fix).
+//
+// Rules:
+//   - empty → allowed (the "no sub-path" case).
+//   - leading "/" → absolute paths are not sub-paths; reject.
+//   - any segment == ".." → escapes the mount; reject.
+//   - any segment == "." → does not escape, but the agent's path
+//     concatenation preserves the literal "." while the on-disk
+//     join collapses it, so the published URI disagrees with the
+//     filesystem reality. Reject.
+//   - empty segment (consecutive or leading/trailing slash) → would
+//     produce a malformed agent path; reject.
+//   - backslash → forbidden so a future agent build on a filesystem
+//     that honors `\` as a separator cannot be tricked.
+//   - any C0 control byte (0x00–0x1f, including LF/CR/TAB) or DEL
+//     (0x7f) → forbidden. NUL is the C-string-truncation footgun;
+//     LF/CR would split the agent's terminal-marker line that the
+//     controller parses (breaking the regex's `^…` anchor and the
+//     marker's "one line wins" contract); the rest are shell-active
+//     in downstream tooling that may consume the published URI.
+//     Easier to forbid the whole C0 + DEL range than to enumerate.
+func validatePVCSubPath(subPath string) error {
+	if subPath == "" {
+		return nil
+	}
+	if strings.HasPrefix(subPath, "/") {
+		return fmt.Errorf("%w: pvc.subPath %q must not be absolute", ErrInvalidSpec, subPath)
+	}
+	if strings.ContainsRune(subPath, '\\') {
+		return fmt.Errorf("%w: pvc.subPath %q must not contain backslashes", ErrInvalidSpec, subPath)
+	}
+	if i := strings.IndexFunc(subPath, func(r rune) bool {
+		return r <= 0x1f || r == 0x7f
+	}); i >= 0 {
+		return fmt.Errorf("%w: pvc.subPath %q must not contain control characters (offset %d)", ErrInvalidSpec, subPath, i)
+	}
+	for _, seg := range strings.Split(subPath, "/") {
+		if seg == "" {
+			return fmt.Errorf("%w: pvc.subPath %q must not contain empty path segments", ErrInvalidSpec, subPath)
+		}
+		if seg == ".." || seg == "." {
+			return fmt.Errorf("%w: pvc.subPath %q must not contain '.' or '..' segments", ErrInvalidSpec, subPath)
+		}
+	}
+	return nil
+}
+
 // CreateBackupJob builds a Job that runs the backup-agent to take an etcd snapshot
 // and store it to the configured destination.
 func CreateBackupJob(
@@ -72,6 +146,11 @@ func CreateBackupJob(
 	operatorImage string,
 	scheme *runtime.Scheme,
 ) (*batchv1.Job, error) {
+	if pvc := backup.Spec.Destination.PVC; pvc != nil {
+		if err := validatePVCSubPath(pvc.SubPath); err != nil {
+			return nil, err
+		}
+	}
 	labels := NewLabelsBuilder().WithName().WithInstance(cluster.Name).WithManagedBy()
 	labels["etcd.aenix.io/etcdbackup-name"] = backup.Name
 
@@ -240,11 +319,32 @@ func buildBackupContainer(
 
 	ephemeralStorage := getEffectiveDBQuota(cluster)
 	container := corev1.Container{
-		Name:         "backup-agent",
-		Image:        operatorImage,
-		Command:      []string{"/backup-agent"},
-		Env:          envVars,
-		VolumeMounts: volumeMounts,
+		Name: "backup-agent",
+		// Pin pull policy to IfNotPresent so the backup-agent
+		// container runs the SAME image bytes the manager pod
+		// runs — i.e. whatever was loaded onto the node at
+		// install/upgrade time, mirroring the manager pod's own
+		// imagePullPolicy in config/manager/manager.yaml. Without
+		// this, kubernetes defaults to "Always" whenever the image
+		// tag is "latest" (or absent), which then short-circuits
+		// the node's local image and re-pulls from the registry
+		// — silently substituting the running operator's binary
+		// with whatever the registry currently serves under that
+		// tag. That divergence is fatal for the marker parser: a
+		// pre-marker agent build emits "snapshot written
+		// successfully (N bytes)" which the controller's terminal-
+		// marker regex does not recognise, leading to
+		// status.snapshot=nil for a backup that otherwise
+		// completed cleanly. It is also load-bearing for e2e: kind
+		// loads the freshly-built image onto its nodes, and the
+		// test expects the agent to be the just-built binary; an
+		// implicit "Always" turns the test into a check of the
+		// last-published "latest" tag instead.
+		ImagePullPolicy: corev1.PullIfNotPresent,
+		Image:           operatorImage,
+		Command:         []string{"/backup-agent"},
+		Env:             envVars,
+		VolumeMounts:    volumeMounts,
 		Resources: corev1.ResourceRequirements{
 			Requests: corev1.ResourceList{
 				corev1.ResourceCPU:              resource.MustParse("100m"),

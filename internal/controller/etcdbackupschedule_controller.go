@@ -18,6 +18,7 @@ package controller
 
 import (
 	"context"
+	stderrors "errors"
 	"fmt"
 	"time"
 
@@ -181,6 +182,9 @@ func (r *EtcdBackupScheduleReconciler) Reconcile(ctx context.Context, req ctrl.R
 
 	cronJob, err := factory.CreateBackupCronJob(schedule, cluster, r.OperatorImage, r.Scheme)
 	if err != nil {
+		if stderrors.Is(err, factory.ErrInvalidSpec) {
+			return r.markInvalidSpec(ctx, schedule, err)
+		}
 		return ctrl.Result{}, fmt.Errorf("failed to build backup CronJob: %w", err)
 	}
 
@@ -211,6 +215,9 @@ func (r *EtcdBackupScheduleReconciler) reconcileExistingCronJob(
 	// Build desired CronJob to detect spec changes
 	desiredCronJob, err := factory.CreateBackupCronJob(schedule, cluster, r.OperatorImage, r.Scheme)
 	if err != nil {
+		if stderrors.Is(err, factory.ErrInvalidSpec) {
+			return r.markInvalidSpec(ctx, schedule, err)
+		}
 		return ctrl.Result{}, fmt.Errorf("failed to build desired CronJob: %w", err)
 	}
 
@@ -241,6 +248,34 @@ func (r *EtcdBackupScheduleReconciler) reconcileExistingCronJob(
 	})
 	meta.RemoveStatusCondition(&schedule.Status.Conditions, etcdaenixiov1alpha1.EtcdBackupScheduleConditionFailed)
 
+	return r.updateStatus(ctx, schedule)
+}
+
+// markInvalidSpec writes a terminal Failed condition for a builder
+// validation error (factory.ErrInvalidSpec) and clears Ready. The
+// condition is what the user sees on `kubectl get
+// etcdbackupschedule` / `kubectl describe`; without it the same
+// rejection silently spins on the workqueue forever, masking a
+// genuine user-input bug as a generic apiserver hiccup.
+func (r *EtcdBackupScheduleReconciler) markInvalidSpec(
+	ctx context.Context,
+	schedule *etcdaenixiov1alpha1.EtcdBackupSchedule,
+	cause error,
+) (ctrl.Result, error) {
+	meta.SetStatusCondition(&schedule.Status.Conditions, metav1.Condition{
+		Type:               etcdaenixiov1alpha1.EtcdBackupScheduleConditionFailed,
+		Status:             metav1.ConditionTrue,
+		Reason:             "InvalidSpec",
+		Message:            cause.Error(),
+		ObservedGeneration: schedule.Generation,
+	})
+	meta.SetStatusCondition(&schedule.Status.Conditions, metav1.Condition{
+		Type:               etcdaenixiov1alpha1.EtcdBackupScheduleConditionReady,
+		Status:             metav1.ConditionFalse,
+		Reason:             "InvalidSpec",
+		Message:            cause.Error(),
+		ObservedGeneration: schedule.Generation,
+	})
 	return r.updateStatus(ctx, schedule)
 }
 

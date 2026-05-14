@@ -17,6 +17,7 @@ limitations under the License.
 package factory
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
@@ -93,6 +94,21 @@ func TestCreateBackupJob_PVC(t *testing.T) {
 	}
 	if len(container.Command) != 1 || container.Command[0] != "/backup-agent" {
 		t.Errorf("expected command [/backup-agent], got %v", container.Command)
+	}
+	// Pin ImagePullPolicy=IfNotPresent: kubernetes defaults
+	// :latest tags to Always, which would short-circuit a node's
+	// kind-loaded image and re-pull from the registry — silently
+	// running an OLDER operator binary as the backup-agent than
+	// what the freshly-deployed manager pod runs. That divergence
+	// is fatal for the marker parser (a pre-this-PR agent emits
+	// "snapshot written successfully (N bytes)" which the
+	// terminal-marker regex does not recognise) and turns the e2e
+	// "With PVC backup" spec into a check of whatever was last
+	// published under :latest. Mirroring the manager pod's policy
+	// (config/manager/manager.yaml) keeps the two pods using the
+	// SAME image bytes at install/upgrade time.
+	if container.ImagePullPolicy != corev1.PullIfNotPresent {
+		t.Errorf("expected ImagePullPolicy=IfNotPresent (must match manager pod's policy so the backup-agent runs the same image bytes as the just-deployed manager); got %q", container.ImagePullPolicy)
 	}
 
 	// Check PVC volume mount
@@ -375,6 +391,134 @@ func TestCreateBackupJob_PVCSubPath(t *testing.T) {
 	expected := "/backup/data/daily/subpath-backup.db"
 	if envMap["PVC_BACKUP_PATH"].Value != expected {
 		t.Errorf("expected PVC_BACKUP_PATH=%q, got %q", expected, envMap["PVC_BACKUP_PATH"].Value)
+	}
+}
+
+// TestCreateBackupJob_RejectsTraversalSubPath pins the SubPath
+// hardening: a user-supplied PVC SubPath containing path-escape
+// patterns (../, leading /, empty components, backslashes) must
+// fail at factory time so the agent never sees PVC_BACKUP_PATH
+// that escapes /backup/data — and the URI we report into
+// status.snapshot can't advertise an out-of-mount location.
+func TestCreateBackupJob_RejectsTraversalSubPath(t *testing.T) {
+	scheme := runtime.NewScheme()
+	_ = clientgoscheme.AddToScheme(scheme)
+	_ = etcdaenixiov1alpha1.AddToScheme(scheme)
+
+	cluster := &etcdaenixiov1alpha1.EtcdCluster{
+		ObjectMeta: metav1.ObjectMeta{Name: "my-etcd", Namespace: "default"},
+		Spec: etcdaenixiov1alpha1.EtcdClusterSpec{
+			Replicas: ptr.To(int32(1)),
+			Storage:  etcdaenixiov1alpha1.StorageSpec{EmptyDir: &corev1.EmptyDirVolumeSource{}},
+		},
+	}
+
+	cases := []struct {
+		name    string
+		subPath string
+	}{
+		{"parent traversal", "../../etc"},
+		{"leading parent", "../escape"},
+		{"hidden parent in middle", "good/../bad"},
+		{"single dot dot", ".."},
+		{"single dot segment", "good/./bad"},
+		{"lone dot", "."},
+		{"leading dot segment", "./bad"},
+		{"trailing dot segment", "good/."},
+		{"absolute path", "/etc"},
+		{"empty segment leading", "/leading"},
+		{"empty segment trailing", "trailing/"},
+		{"double slash", "good//bad"},
+		{"backslash", `bad\path`},
+		{"null byte", "good\x00bad"},
+		// C0 controls + DEL: must be rejected so the agent's
+		// terminal "snapshot written: …" marker line cannot be
+		// torn by an embedded LF / CR / TAB in PVC_BACKUP_PATH
+		// (the controller parses one marker line, the URI cell is
+		// %q-quoted but a downstream tool that strips quotes would
+		// resplit on these). NUL is the C-string-truncation
+		// footgun; the rest are shell-active.
+		{"newline (LF)", "good\nbad"},
+		{"carriage return (CR)", "good\rbad"},
+		{"tab", "good\tbad"},
+		{"low control byte", "good\x01bad"},
+		{"escape control byte", "good\x1bbad"},
+		{"DEL", "good\x7fbad"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			backup := &etcdaenixiov1alpha1.EtcdBackup{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "trav-backup",
+					Namespace: "default",
+					UID:       "trav-uid",
+				},
+				Spec: etcdaenixiov1alpha1.EtcdBackupSpec{
+					ClusterRef: corev1.LocalObjectReference{Name: "my-etcd"},
+					Destination: etcdaenixiov1alpha1.BackupDestination{
+						PVC: &etcdaenixiov1alpha1.PVCBackupDestination{
+							ClaimName: "backup-pvc",
+							SubPath:   tc.subPath,
+						},
+					},
+				},
+			}
+			_, err := CreateBackupJob(backup, cluster, "test-image:latest", scheme)
+			if err == nil {
+				t.Fatalf("CreateBackupJob accepted SubPath=%q; want rejection", tc.subPath)
+			}
+			// The controller branches on this sentinel to surface
+			// a terminal Phase=Failed condition; unwrapping breaks
+			// the user-facing error reporting path.
+			if !errors.Is(err, ErrInvalidSpec) {
+				t.Fatalf("err is %v; want errors.Is(_, ErrInvalidSpec) so controllers can surface as terminal Failed", err)
+			}
+		})
+	}
+}
+
+// TestCreateBackupJob_AcceptsValidSubPath sanity-checks that the
+// hardening doesn't over-reject legitimate sub-paths (multi-segment,
+// dots within a segment, hyphens, numbers).
+func TestCreateBackupJob_AcceptsValidSubPath(t *testing.T) {
+	scheme := runtime.NewScheme()
+	_ = clientgoscheme.AddToScheme(scheme)
+	_ = etcdaenixiov1alpha1.AddToScheme(scheme)
+
+	cluster := &etcdaenixiov1alpha1.EtcdCluster{
+		ObjectMeta: metav1.ObjectMeta{Name: "my-etcd", Namespace: "default"},
+		Spec: etcdaenixiov1alpha1.EtcdClusterSpec{
+			Replicas: ptr.To(int32(1)),
+			Storage:  etcdaenixiov1alpha1.StorageSpec{EmptyDir: &corev1.EmptyDirVolumeSource{}},
+		},
+	}
+
+	cases := []string{
+		"daily",
+		"prod/etcd",
+		"backups-2025/april",
+		"v3.5.12/rev42",
+	}
+	for _, sp := range cases {
+		t.Run(sp, func(t *testing.T) {
+			backup := &etcdaenixiov1alpha1.EtcdBackup{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: "ok-backup", Namespace: "default", UID: "ok-uid",
+				},
+				Spec: etcdaenixiov1alpha1.EtcdBackupSpec{
+					ClusterRef: corev1.LocalObjectReference{Name: "my-etcd"},
+					Destination: etcdaenixiov1alpha1.BackupDestination{
+						PVC: &etcdaenixiov1alpha1.PVCBackupDestination{
+							ClaimName: "backup-pvc",
+							SubPath:   sp,
+						},
+					},
+				},
+			}
+			if _, err := CreateBackupJob(backup, cluster, "test-image:latest", scheme); err != nil {
+				t.Fatalf("CreateBackupJob rejected legitimate SubPath=%q: %v", sp, err)
+			}
+		})
 	}
 }
 
