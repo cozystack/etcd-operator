@@ -6,3 +6,23 @@ images:
 - name: ghcr.io/aenix-io/etcd-operator
   newName: ghcr.io/aenix-io/etcd-operator
   newTag: latest
+# Propagate the resolved manager-container image into the
+# OPERATOR_IMAGE env var so the controller stamps the SAME image
+# onto every backup/restore Job it spawns. Without this, a
+# `kustomize edit set image ... =my-fork:dev` would rewrite the
+# Deployment's container image but leave OPERATOR_IMAGE pointing
+# at the upstream default — and an unset OPERATOR_IMAGE causes
+# the controller to fail every EtcdBackup with
+# Reason=ConfigurationError (which is what the test_pvc_backup
+# e2e spec was hitting in CI).
+replacements:
+- source:
+    kind: Deployment
+    name: controller-manager
+    fieldPath: spec.template.spec.containers.[name=manager].image
+  targets:
+  - select:
+      kind: Deployment
+      name: controller-manager
+    fieldPaths:
+    - spec.template.spec.containers.[name=manager].env.[name=OPERATOR_IMAGE].value

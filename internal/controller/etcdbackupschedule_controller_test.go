@@ -242,6 +242,65 @@ var _ = Describe("EtcdBackupSchedule Controller", func() {
 		})
 	})
 
+	// Mirror of the EtcdBackup-controller InvalidSpec test. A
+	// schedule whose CronJob would carry a traversal SubPath must
+	// surface terminal Failed/InvalidSpec on the schedule object
+	// AND must NOT create the CronJob (the schedule would then
+	// repeatedly spawn invalid Jobs forever). The branch covers
+	// BOTH the "fresh schedule" path (no existing CronJob, via the
+	// initial Create call site) — the "update" path is covered by
+	// a parallel test below.
+	Context("When schedule spec is invalid (PVC SubPath traversal)", func() {
+		It("Should set Failed/InvalidSpec without creating a CronJob", func() {
+			cluster := createTestCluster(ctx, scheduleClusterName+"-invalid", nil)
+			schedule := &etcdaenixiov1alpha1.EtcdBackupSchedule{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      scheduleName + "-invalid",
+					Namespace: testNamespace,
+				},
+				Spec: etcdaenixiov1alpha1.EtcdBackupScheduleSpec{
+					ClusterRef: corev1.LocalObjectReference{Name: cluster.Name},
+					Schedule:   "0 */6 * * *",
+					Destination: etcdaenixiov1alpha1.BackupDestination{
+						PVC: &etcdaenixiov1alpha1.PVCBackupDestination{
+							ClaimName: "test-backup-pvc",
+							SubPath:   "../../escape",
+						},
+					},
+				},
+			}
+			Expect(getK8sClient().Create(ctx, schedule)).To(Succeed())
+
+			_, err := reconciler.Reconcile(ctx, ctrl.Request{
+				NamespacedName: types.NamespacedName{Name: schedule.Name, Namespace: schedule.Namespace},
+			})
+			Expect(err).NotTo(HaveOccurred(),
+				"validation failure must NOT be returned to the workqueue — that would spin on a user-input error forever")
+
+			updated := &etcdaenixiov1alpha1.EtcdBackupSchedule{}
+			Expect(getK8sClient().Get(ctx, types.NamespacedName{Name: schedule.Name, Namespace: testNamespace}, updated)).To(Succeed())
+			failedCond := meta.FindStatusCondition(updated.Status.Conditions, etcdaenixiov1alpha1.EtcdBackupScheduleConditionFailed)
+			Expect(failedCond).NotTo(BeNil())
+			Expect(failedCond.Status).To(Equal(metav1.ConditionTrue))
+			Expect(failedCond.Reason).To(Equal("InvalidSpec"))
+			Expect(failedCond.Message).To(ContainSubstring("subPath"))
+
+			readyCond := meta.FindStatusCondition(updated.Status.Conditions, etcdaenixiov1alpha1.EtcdBackupScheduleConditionReady)
+			Expect(readyCond).NotTo(BeNil())
+			Expect(readyCond.Status).To(Equal(metav1.ConditionFalse))
+			Expect(readyCond.Reason).To(Equal("InvalidSpec"))
+
+			// No CronJob owned by this schedule must have been
+			// created — validation runs before the Create call.
+			cronJobList := &batchv1.CronJobList{}
+			Expect(getK8sClient().List(ctx, cronJobList,
+				client.InNamespace(testNamespace),
+				client.MatchingLabels{"etcd.aenix.io/etcdbackupschedule-name": schedule.Name},
+			)).To(Succeed())
+			Expect(cronJobList.Items).To(BeEmpty())
+		})
+	})
+
 	Context("With TLS-enabled cluster", func() {
 		It("Should create CronJob with TLS volume mounts", func() {
 			security := &etcdaenixiov1alpha1.SecuritySpec{

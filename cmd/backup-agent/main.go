@@ -18,8 +18,10 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"os"
@@ -199,7 +201,13 @@ func uploadToS3(ctx context.Context, reader io.Reader, revision int64) error {
 		_ = os.Remove(tmpFile.Name())
 	}()
 
-	written, err := io.Copy(tmpFile, reader)
+	// Tee the snapshot bytes into a sha256 hasher while writing to the
+	// temp file. Single pass over the stream - the temp file already
+	// has to read the data once for Content-Length. The hash lands in
+	// the terminal log marker so the controller can publish it on
+	// EtcdBackup.status.snapshot.checksum.
+	hasher := sha256.New()
+	written, err := io.Copy(io.MultiWriter(tmpFile, hasher), reader)
 	if err != nil {
 		return fmt.Errorf("failed to write snapshot to temp file: %w", err)
 	}
@@ -237,7 +245,15 @@ func uploadToS3(ctx context.Context, reader io.Reader, revision int64) error {
 		return fmt.Errorf("failed to upload to S3: %w", err)
 	}
 
-	fmt.Println("snapshot uploaded successfully")
+	// Terminal structured marker — parsed by EtcdBackupReconciler
+	// (internal/controller/etcdbackup_controller.go) to populate
+	// EtcdBackup.status.snapshot. The URI is emitted as a Go-quoted
+	// string (%q) so S3 keys / PVC paths containing whitespace or
+	// other shell-active characters round-trip safely; the controller
+	// regex captures the quoted form and strconv.Unquote()s it. Field
+	// order (uri/size/sha256) is load-bearing.
+	fmt.Printf("snapshot uploaded: uri=%q size=%d sha256=%s\n",
+		fmt.Sprintf("s3://%s/%s", bucket, key), written, hex.EncodeToString(hasher.Sum(nil)))
 	return nil
 }
 
@@ -263,7 +279,11 @@ func writeToPVC(reader io.Reader, revision int64) error {
 		return fmt.Errorf("failed to create file %s: %w", backupPath, err)
 	}
 
-	written, err := io.Copy(f, reader)
+	// Stream into a sha256 hasher alongside the on-disk file so the
+	// terminal marker can publish the integrity hash to
+	// EtcdBackup.status.snapshot.checksum.
+	hasher := sha256.New()
+	written, err := io.Copy(io.MultiWriter(f, hasher), reader)
 	if err != nil {
 		_ = f.Close()
 		_ = os.Remove(backupPath)
@@ -287,6 +307,12 @@ func writeToPVC(reader io.Reader, revision int64) error {
 		return fmt.Errorf("failed to close snapshot file: %w", err)
 	}
 
-	fmt.Printf("snapshot written successfully (%d bytes)\n", written)
+	// Terminal structured marker — see uploadToS3 for the parser
+	// contract. URI is Go-quoted so a backup path with whitespace
+	// round-trips. Resulting literal shape is
+	// "file:///<abs-path>" (three slashes — "file://" prefix plus the
+	// absolute path's leading "/").
+	fmt.Printf("snapshot written: uri=%q size=%d sha256=%s\n",
+		"file://"+backupPath, written, hex.EncodeToString(hasher.Sum(nil)))
 	return nil
 }

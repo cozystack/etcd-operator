@@ -17,7 +17,16 @@ limitations under the License.
 package main
 
 import (
+	"bytes"
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"fmt"
+	"io"
+	"os"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -129,5 +138,191 @@ func TestBuildTLSConfig_InvalidCAPath(t *testing.T) {
 	_, err := buildTLSConfig()
 	if err == nil {
 		t.Error("expected error for invalid CA path")
+	}
+}
+
+// TestWriteToPVC_EmitsSnapshotMarkerWithSHA256 pins the agent → controller
+// contract: writeToPVC writes the snapshot bytes verbatim AND emits a
+// terminal `snapshot written: uri="file://..." size=... sha256=...` marker
+// (URI emitted via %q so whitespace round-trips) whose sha256 matches the
+// input bytes. EtcdBackupReconciler parses this exact marker with
+// snapshotMarkerRegexp in internal/controller/etcdbackup_controller.go;
+// a drift here breaks the status.snapshot wire-up silently.
+func TestWriteToPVC_EmitsSnapshotMarkerWithSHA256(t *testing.T) {
+	payload := []byte("this is a fake etcd snapshot\n")
+
+	dir := t.TempDir()
+	backupPath := filepath.Join(dir, "snap.db")
+	t.Setenv("PVC_BACKUP_PATH", backupPath)
+	t.Setenv("BACKUP_INCLUDE_REVISION", "")
+	t.Setenv("BACKUP_TIMESTAMP", "")
+
+	// Capture stdout — writeToPVC emits the terminal marker via fmt.Printf.
+	origStdout := os.Stdout
+	rPipe, wPipe, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe: %v", err)
+	}
+	os.Stdout = wPipe
+	defer func() { os.Stdout = origStdout }()
+
+	// writeToPVC takes io.Reader. Use a bytes.Reader over the payload.
+	if err := writeToPVC(bytes.NewReader(payload), 0); err != nil {
+		_ = wPipe.Close()
+		t.Fatalf("writeToPVC: %v", err)
+	}
+	if err := wPipe.Close(); err != nil {
+		t.Fatalf("close pipe writer: %v", err)
+	}
+	captured, err := io.ReadAll(rPipe)
+	if err != nil {
+		t.Fatalf("read captured stdout: %v", err)
+	}
+
+	// Verify the file landed with the right bytes.
+	got, err := os.ReadFile(backupPath)
+	if err != nil {
+		t.Fatalf("read backup file: %v", err)
+	}
+	if !bytes.Equal(got, payload) {
+		t.Fatalf("backup file mismatch:\nwant %q\ngot  %q", payload, got)
+	}
+
+	// Verify the marker line is present and well-formed.
+	h := sha256.New()
+	_, _ = h.Write(payload)
+	wantSHA := hex.EncodeToString(h.Sum(nil))
+
+	markerRE := regexp.MustCompile(
+		`(?m)^snapshot written: uri=("(?:[^"\\]|\\.)*") size=(\d+) sha256=([a-f0-9]+)$`,
+	)
+	m := markerRE.FindSubmatch(captured)
+	if m == nil {
+		t.Fatalf("terminal marker not found in stdout; captured:\n%s", captured)
+	}
+	gotURI, err := strconv.Unquote(string(m[1]))
+	if err != nil {
+		t.Fatalf("uri capture %q does not unquote: %v", m[1], err)
+	}
+	wantURI := "file://" + backupPath
+	if gotURI != wantURI {
+		t.Errorf("uri: got %q want %q", gotURI, wantURI)
+	}
+	if string(m[2]) != fmt.Sprintf("%d", len(payload)) {
+		t.Errorf("size: got %s want %d", m[2], len(payload))
+	}
+	if string(m[3]) != wantSHA {
+		t.Errorf("sha256: got %s want %s", m[3], wantSHA)
+	}
+}
+
+// TestWriteToPVC_PathWithSpace_MarkerSurvivesWhitespace pins blocker
+// 3's fix: an in-container backup path containing a literal space
+// must round-trip through the marker line. Before quoting the URI,
+// the agent emitted `uri=file:///dir with space/snap.db` and the
+// controller-side regex captured `uri=file:///dir` (greedy \S+
+// stopped at the first space), silently truncating the URI. The
+// %q-encoded marker preserves the entire path, and strconv.Unquote
+// on the controller recovers it byte-for-byte.
+func TestWriteToPVC_PathWithSpace_MarkerSurvivesWhitespace(t *testing.T) {
+	payload := []byte("snapshot bytes with whitespace path\n")
+
+	parent := t.TempDir()
+	// Embed a literal space in the directory name on the agent's
+	// side of the pipe; mirrors a PVC SubPath like "etcd backups".
+	dirWithSpace := filepath.Join(parent, "etcd backups")
+	if err := os.MkdirAll(dirWithSpace, 0o700); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	backupPath := filepath.Join(dirWithSpace, "snap.db")
+	t.Setenv("PVC_BACKUP_PATH", backupPath)
+	t.Setenv("BACKUP_INCLUDE_REVISION", "")
+	t.Setenv("BACKUP_TIMESTAMP", "")
+
+	origStdout := os.Stdout
+	rPipe, wPipe, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe: %v", err)
+	}
+	os.Stdout = wPipe
+	defer func() { os.Stdout = origStdout }()
+
+	if err := writeToPVC(bytes.NewReader(payload), 0); err != nil {
+		_ = wPipe.Close()
+		t.Fatalf("writeToPVC: %v", err)
+	}
+	if err := wPipe.Close(); err != nil {
+		t.Fatalf("close pipe writer: %v", err)
+	}
+	captured, err := io.ReadAll(rPipe)
+	if err != nil {
+		t.Fatalf("read captured stdout: %v", err)
+	}
+
+	markerRE := regexp.MustCompile(
+		`(?m)^snapshot written: uri=("(?:[^"\\]|\\.)*") size=(\d+) sha256=([a-f0-9]+)$`,
+	)
+	m := markerRE.FindSubmatch(captured)
+	if m == nil {
+		t.Fatalf("terminal marker not found in stdout; captured:\n%s", captured)
+	}
+	gotURI, err := strconv.Unquote(string(m[1]))
+	if err != nil {
+		t.Fatalf("uri capture %q does not unquote: %v", m[1], err)
+	}
+	wantURI := "file://" + backupPath
+	if gotURI != wantURI {
+		t.Errorf("uri (with space) round-trip failed:\n  got  %q\n  want %q", gotURI, wantURI)
+	}
+}
+
+// TestUploadToS3_EmptyPayloadAborts mirrors TestWriteToPVC_Empty
+// PayloadAborts for the S3 destination: an empty etcd Snapshot()
+// stream must bail BEFORE any S3 call. We don't need to mock S3 — the
+// guard runs immediately after io.Copy finishes (written == 0), so
+// constructing the S3 client and PutObject are never reached and no
+// network address is contacted. Pinning this in a test makes the
+// hashing-and-empty-check ordering load-bearing: moving the empty
+// check below the S3 upload would silently upload zero-byte
+// "snapshots" to production buckets.
+func TestUploadToS3_EmptyPayloadAborts(t *testing.T) {
+	t.Setenv("S3_BUCKET", "test-bucket")
+	t.Setenv("S3_KEY", "backups/snap.db")
+	t.Setenv("AWS_ACCESS_KEY_ID", "test-access")
+	t.Setenv("AWS_SECRET_ACCESS_KEY", "test-secret")
+	// Point at a guaranteed-unreachable endpoint. If the empty-payload
+	// guard ever regressed and the function tried to upload, the error
+	// would be a network/DNS failure with a different message.
+	t.Setenv("S3_ENDPOINT", "http://127.0.0.1:1")
+	t.Setenv("S3_REGION", "us-east-1")
+	t.Setenv("BACKUP_INCLUDE_REVISION", "")
+	t.Setenv("BACKUP_TIMESTAMP", "")
+
+	err := uploadToS3(context.Background(), bytes.NewReader(nil), 0)
+	if err == nil {
+		t.Fatal("expected error for empty payload")
+	}
+	if !strings.Contains(err.Error(), "empty") {
+		t.Errorf("expected 'empty' in error message, got: %v", err)
+	}
+}
+
+// TestWriteToPVC_EmptyPayloadAborts pins the "empty snapshot aborts"
+// guard — important because the prior contract was the only safety net
+// against a misbehaving etcd Snapshot() returning an empty stream. The
+// sha256 hasher must NOT see any bytes in that case, and no marker is
+// emitted.
+func TestWriteToPVC_EmptyPayloadAborts(t *testing.T) {
+	dir := t.TempDir()
+	backupPath := filepath.Join(dir, "empty.db")
+	t.Setenv("PVC_BACKUP_PATH", backupPath)
+	t.Setenv("BACKUP_INCLUDE_REVISION", "")
+	t.Setenv("BACKUP_TIMESTAMP", "")
+
+	if err := writeToPVC(bytes.NewReader(nil), 0); err == nil {
+		t.Fatal("expected error for empty payload")
+	}
+	if _, err := os.Stat(backupPath); !os.IsNotExist(err) {
+		t.Errorf("expected backup file to be cleaned up on empty-payload abort; stat err: %v", err)
 	}
 }
