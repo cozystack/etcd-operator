@@ -160,7 +160,7 @@ If quorum is already lost across multiple simultaneous failures, `MemberRemove` 
 Two things are not yet auto-emitted and matter for production memory clusters — both tracked in [issue #16](https://github.com/lllamnyp/etcd-operator/issues/16):
 
 - **Pod anti-affinity**. Without it, scheduling can co-locate voters on one node; a single node failure then loses quorum on a 3-member cluster.
-- **Container memory limits**. Without `limits.memory`, tmpfs writes count against node memory rather than the pod's cgroup and the etcd container ends up in BestEffort/Burstable QoS — first to be evicted under pressure. Workaround: deploy a `LimitRange` in the cluster's namespace until a `spec.resources` field exists.
+- **Container memory limits**. Without `limits.memory`, tmpfs writes count against node memory rather than the pod's cgroup and the etcd container ends up in BestEffort/Burstable QoS — first to be evicted under pressure. Set `spec.resources.limits.memory` ≥ `spec.storage.size` + ~128Mi for etcd headroom on memory-backed clusters.
 
 The `PodDisruptionBudget` *is* auto-emitted now — see the [PodDisruptionBudget section](#poddisruptionbudget) below.
 
@@ -223,9 +223,7 @@ The cluster DNS suffix is environment-dependent — `cluster.local` on most upst
 
 ### Readiness probe under TLS
 
-When client TLS is on, the kubelet readiness probe can't dial `/health` on 2379: it has no client cert to present (in mTLS mode etcd rejects it) and `InsecureSkipVerify` HTTPS probes are noisy on some kubelet versions. The operator routes around this by adding `--listen-metrics-urls=http://0.0.0.0:2381` and pointing the readiness probe at port 2381. Bound to `0.0.0.0` rather than `localhost` because kubelet's HTTPGet probe dials the Pod IP, not loopback — a `127.0.0.1`-only listener is unreachable from the kubelet. This is the standard etcd-on-k8s idiom; it decouples the probe from the TLS configuration and the only thing newly exposed is `/health` plus the Prometheus metrics, both of which are already accessible via the client API.
-
-Plaintext clusters keep probing `2379/health` directly — no behavioural change.
+Every member Pod exposes a plaintext metrics listener on container port 2381 (named `metrics`) regardless of TLS state. etcd is started with `--listen-metrics-urls=http://0.0.0.0:2381`; the readiness probe targets `:2381/health` unconditionally. Bound to `0.0.0.0` rather than `localhost` because kubelet's HTTPGet probe dials the Pod IP, not loopback — a `127.0.0.1`-only listener would be unreachable from the kubelet. The same listener is what Prometheus-style scrapers (Cozystack's `VMPodScrape`, kube-prometheus's `PodMonitor`, etc.) target via the named `metrics` port. `/health` and `/metrics` are the only things exposed on this port; neither is sensitive (both are already reachable via the TLS-protected client API).
 
 ### What the operator does NOT manage (Phase 1)
 

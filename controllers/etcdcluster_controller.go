@@ -25,6 +25,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	policyv1 "k8s.io/api/policy/v1"
+	"k8s.io/apimachinery/pkg/api/equality"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -350,6 +351,7 @@ func (r *EtcdClusterReconciler) bootstrap(
 				ClusterName:  cluster.Name,
 				Version:      cluster.Status.Observed.Version,
 				Storage:      cluster.Status.Observed.Storage,
+				Resources:    cluster.Status.Observed.Resources,
 				Bootstrap:    true,
 				ClusterToken: cluster.Status.ClusterToken,
 				TLS:          deriveMemberTLS(cluster),
@@ -658,6 +660,7 @@ func (r *EtcdClusterReconciler) scaleUp(
 			ClusterName:  cluster.Name,
 			Version:      cluster.Status.Observed.Version,
 			Storage:      cluster.Status.Observed.Storage,
+			Resources:    cluster.Status.Observed.Resources,
 			Bootstrap:    false,
 			ClusterToken: cluster.Status.ClusterToken,
 			TLS:          deriveMemberTLS(cluster),
@@ -1013,6 +1016,17 @@ func (r *EtcdClusterReconciler) updateStatus(
 	changed := false
 	if cluster.Status.ReadyMembers != ready {
 		cluster.Status.ReadyMembers = ready
+		changed = true
+	}
+
+	// /scale subresource: the VPA admission controller fetches this via
+	// Scales().Get() to know which Pods to inject resource recommendations
+	// into. clusterLabels stamps LabelCluster on every Pod the operator
+	// emits, so the minimal selector keyed on that label matches the
+	// whole cluster's Pod set.
+	wantSelector := fmt.Sprintf("%s=%s", LabelCluster, cluster.Name)
+	if cluster.Status.Selector != wantSelector {
+		cluster.Status.Selector = wantSelector
 		changed = true
 	}
 
@@ -1442,9 +1456,10 @@ func snapshotSpecIntoObserved(cluster *lll.EtcdCluster) {
 		replicas = *cluster.Spec.Replicas
 	}
 	cluster.Status.Observed = &lll.ObservedClusterSpec{
-		Replicas: replicas,
-		Version:  cluster.Spec.Version,
-		Storage:  cluster.Spec.Storage,
+		Replicas:  replicas,
+		Version:   cluster.Spec.Version,
+		Storage:   cluster.Spec.Storage,
+		Resources: cluster.Spec.Resources,
 	}
 }
 
@@ -1460,7 +1475,8 @@ func specEqualsObserved(cluster *lll.EtcdCluster) bool {
 	return o.Replicas == specReplicas &&
 		o.Version == cluster.Spec.Version &&
 		o.Storage.Size.Cmp(cluster.Spec.Storage.Size) == 0 &&
-		o.Storage.Medium == cluster.Spec.Storage.Medium
+		o.Storage.Medium == cluster.Spec.Storage.Medium &&
+		equality.Semantic.DeepEqual(o.Resources, cluster.Spec.Resources)
 }
 
 func reconciliationComplete(cluster *lll.EtcdCluster, members []lll.EtcdMember) bool {

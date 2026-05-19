@@ -250,6 +250,21 @@ type EtcdClusterSpec struct {
 	// want to reject that direction too.
 	// +optional
 	TLS *EtcdClusterTLS `json:"tls,omitempty"`
+
+	// Resources sets the etcd container's resource requests and limits.
+	// When omitted, the operator falls back to a conservative default
+	// (100m CPU + 128Mi memory requests, no limits) suitable for
+	// kicking the tyres but not for production. Memory-backed clusters
+	// specifically should set limits.memory covering the tmpfs SizeLimit
+	// plus etcd's own headroom.
+	//
+	// Updates take effect on newly-created members (scale-up,
+	// replacement). The operator does not roll existing Pods to apply
+	// a resource change in place — wire a VerticalPodAutoscaler at
+	// targetRef={kind: EtcdCluster, name: <cluster>} for that, or
+	// delete one Pod at a time to recreate them with the new spec.
+	// +optional
+	Resources corev1.ResourceRequirements `json:"resources,omitempty"`
 }
 
 // ObservedClusterSpec is the locked-in target the controller is currently
@@ -270,12 +285,30 @@ type ObservedClusterSpec struct {
 	// can't change at all post-create — that's enforced by spec-level
 	// CEL.)
 	Storage StorageSpec `json:"storage"`
+
+	// Resources is the locked target etcd container resources. The
+	// locking pattern prevents a mid-flight resource change from being
+	// honoured on newly-created members until the current target is
+	// reached or its deadline expires.
+	// +optional
+	Resources corev1.ResourceRequirements `json:"resources,omitempty"`
 }
 
 // EtcdClusterStatus defines the observed state of an etcd cluster.
 type EtcdClusterStatus struct {
 	// ReadyMembers is the count of members that are healthy and serving.
+	// Also exposed as Scale.Status.Replicas via the /scale subresource so
+	// kubectl scale and clients like VerticalPodAutoscaler can read
+	// "current scale" without a custom status field.
 	ReadyMembers int32 `json:"readyMembers,omitempty"`
+
+	// Selector is the label-selector form ("etcd.lllamnyp.su/cluster=<name>")
+	// matching every Pod owned by this cluster. Surfaced for the /scale
+	// subresource — the VPA admission controller reads it via Scales().Get()
+	// to know which Pods to inject recommendations into. Plain users won't
+	// see this field directly.
+	// +optional
+	Selector string `json:"selector,omitempty"`
 
 	// BrokenMembers is the count of members the operator considers broken.
 	// While the auto-replacement predicate is a stub it is always 0; surfaced
@@ -318,6 +351,7 @@ type EtcdClusterStatus struct {
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
+// +kubebuilder:subresource:scale:specpath=.spec.replicas,statuspath=.status.readyMembers,selectorpath=.status.selector
 // +kubebuilder:printcolumn:name="Version",type=string,JSONPath=`.spec.version`
 // +kubebuilder:printcolumn:name="Replicas",type=integer,JSONPath=`.spec.replicas`
 // +kubebuilder:printcolumn:name="Ready",type=integer,JSONPath=`.status.readyMembers`

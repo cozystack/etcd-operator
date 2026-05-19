@@ -71,6 +71,15 @@ type EtcdMemberSpec struct {
 	// immutable per-member spec.
 	Storage StorageSpec `json:"storage"`
 
+	// Resources mirrors EtcdCluster.spec.resources at the time this
+	// member was created. The cluster controller copies it onto each
+	// member at creation. The member controller passes the value
+	// straight to the etcd container's resources field at Pod-build
+	// time; existing members are not re-templated when the cluster
+	// spec changes.
+	// +optional
+	Resources corev1.ResourceRequirements `json:"resources,omitempty"`
+
 	// Bootstrap indicates this member is part of the initial cluster formation.
 	// When true the member starts with --initial-cluster-state=new.
 	// +optional

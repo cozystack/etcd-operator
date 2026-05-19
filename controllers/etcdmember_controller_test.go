@@ -1817,8 +1817,11 @@ func TestBuildPod_PlaintextHasNoTLSFlags(t *testing.T) {
 	if mountFor(pod, "tls-client") != nil || mountFor(pod, "tls-peer") != nil {
 		t.Fatalf("plaintext pod must not mount TLS volumes")
 	}
-	if pod.Spec.Containers[0].ReadinessProbe.HTTPGet.Port.IntValue() != 2379 {
-		t.Fatalf("plaintext readiness probe should target 2379; got %v", pod.Spec.Containers[0].ReadinessProbe.HTTPGet.Port)
+	if pod.Spec.Containers[0].ReadinessProbe.HTTPGet.Port.IntValue() != 2381 {
+		t.Fatalf("readiness probe should target the plaintext metrics port 2381; got %v", pod.Spec.Containers[0].ReadinessProbe.HTTPGet.Port)
+	}
+	if !cmdContains(cmd, "--listen-metrics-urls=http://0.0.0.0:2381") {
+		t.Fatalf("plaintext pod must always expose the metrics URL: %v", cmd)
 	}
 }
 
@@ -1919,6 +1922,147 @@ func TestBuildPod_PeerTLSAlwaysMTLS(t *testing.T) {
 	}
 	if v := volumeFor(pod, "tls-peer"); v == nil || v.Secret == nil || v.Secret.SecretName != "peer" {
 		t.Fatalf("expected tls-peer volume backed by Secret %q; got %+v", "peer", v)
+	}
+}
+
+// TestBuildPod_AlwaysExposesMetricsPort guards the cozystack-shaped
+// monitoring contract: VMPodScrape (and equivalent Prometheus scrapers)
+// target the named "metrics" container port unconditionally, and the
+// --listen-metrics-urls flag must be set regardless of TLS state so the
+// /health and /metrics endpoints are reachable on a plaintext port.
+func TestBuildPod_AlwaysExposesMetricsPort(t *testing.T) {
+	r := &EtcdMemberReconciler{}
+	cases := []struct {
+		name   string
+		member *lll.EtcdMember
+	}{
+		{
+			name: "plaintext",
+			member: &lll.EtcdMember{
+				ObjectMeta: metav1.ObjectMeta{Name: "m", Namespace: "ns"},
+				Spec:       lll.EtcdMemberSpec{ClusterName: "test", Version: "3.5.17", Storage: lll.StorageSpec{Size: quickQty(t, "1Gi")}},
+			},
+		},
+		{
+			name: "client TLS only",
+			member: &lll.EtcdMember{
+				ObjectMeta: metav1.ObjectMeta{Name: "m", Namespace: "ns"},
+				Spec: lll.EtcdMemberSpec{
+					ClusterName: "test", Version: "3.5.17", Storage: lll.StorageSpec{Size: quickQty(t, "1Gi")},
+					TLS: &lll.EtcdMemberTLS{ClientServerSecretRef: &corev1.LocalObjectReference{Name: "srv"}},
+				},
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			pod := r.buildPod(tc.member)
+			var foundPort *corev1.ContainerPort
+			for i, p := range pod.Spec.Containers[0].Ports {
+				if p.Name == "metrics" {
+					foundPort = &pod.Spec.Containers[0].Ports[i]
+					break
+				}
+			}
+			if foundPort == nil {
+				t.Fatalf("named 'metrics' container port missing; got %+v", pod.Spec.Containers[0].Ports)
+			}
+			if foundPort.ContainerPort != 2381 {
+				t.Fatalf("metrics port = %d; want 2381", foundPort.ContainerPort)
+			}
+			if !cmdContains(pod.Spec.Containers[0].Command, "--listen-metrics-urls=http://0.0.0.0:2381") {
+				t.Fatalf("--listen-metrics-urls flag missing: %v", pod.Spec.Containers[0].Command)
+			}
+		})
+	}
+}
+
+// TestBuildPod_UsesSpecResources verifies that spec.resources flows
+// through to the etcd container's resources field unchanged. Without
+// this wiring, custom CPU/memory sizing — including VPA recommendations
+// applied to the cluster — never reaches the Pod.
+func TestBuildPod_UsesSpecResources(t *testing.T) {
+	r := &EtcdMemberReconciler{}
+	want := corev1.ResourceRequirements{
+		Requests: corev1.ResourceList{
+			corev1.ResourceCPU:    resource.MustParse("500m"),
+			corev1.ResourceMemory: resource.MustParse("1Gi"),
+		},
+		Limits: corev1.ResourceList{
+			corev1.ResourceCPU:    resource.MustParse("2"),
+			corev1.ResourceMemory: resource.MustParse("4Gi"),
+		},
+	}
+	pod := r.buildPod(&lll.EtcdMember{
+		ObjectMeta: metav1.ObjectMeta{Name: "m", Namespace: "ns"},
+		Spec: lll.EtcdMemberSpec{
+			ClusterName: "test", Version: "3.5.17",
+			Storage:   lll.StorageSpec{Size: quickQty(t, "1Gi")},
+			Resources: want,
+		},
+	})
+	got := pod.Spec.Containers[0].Resources
+	if got.Requests.Cpu().Cmp(*want.Requests.Cpu()) != 0 ||
+		got.Requests.Memory().Cmp(*want.Requests.Memory()) != 0 ||
+		got.Limits.Cpu().Cmp(*want.Limits.Cpu()) != 0 ||
+		got.Limits.Memory().Cmp(*want.Limits.Memory()) != 0 {
+		t.Fatalf("Resources mismatch:\n got = %+v\nwant = %+v", got, want)
+	}
+}
+
+// TestBuildPod_ClaimsOnlyResourcesNotDroppedToDefault covers the
+// edge case where a user sets ResourceRequirements.Claims (the
+// DynamicResourceAllocation axis) but leaves Requests and Limits
+// empty. A naive `len(Requests) > 0 || len(Limits) > 0` predicate
+// would mistake that for "user set nothing" and silently drop the
+// claims onto the floor; containerResources uses semantic deep-equality
+// against the zero value to avoid the trap.
+func TestBuildPod_ClaimsOnlyResourcesNotDroppedToDefault(t *testing.T) {
+	r := &EtcdMemberReconciler{}
+	in := corev1.ResourceRequirements{
+		Claims: []corev1.ResourceClaim{{Name: "gpu"}},
+	}
+	pod := r.buildPod(&lll.EtcdMember{
+		ObjectMeta: metav1.ObjectMeta{Name: "m", Namespace: "ns"},
+		Spec: lll.EtcdMemberSpec{
+			ClusterName: "test", Version: "3.5.17",
+			Storage:   lll.StorageSpec{Size: quickQty(t, "1Gi")},
+			Resources: in,
+		},
+	})
+	got := pod.Spec.Containers[0].Resources
+	if len(got.Claims) != 1 || got.Claims[0].Name != "gpu" {
+		t.Fatalf("Claims dropped on the floor; got %+v", got.Claims)
+	}
+	if len(got.Requests) != 0 || len(got.Limits) != 0 {
+		t.Fatalf("default-fallthrough should not fire when only Claims is set; got %+v", got)
+	}
+}
+
+// TestBuildPod_DefaultsResourcesWhenUnset preserves the pre-existing
+// 100m/128Mi request defaults for clusters that don't opt into custom
+// sizing. The fall-through behaviour matters: regressing to "no
+// requests at all" would silently demote etcd Pods to BestEffort QoS
+// (first-evicted under memory pressure).
+func TestBuildPod_DefaultsResourcesWhenUnset(t *testing.T) {
+	r := &EtcdMemberReconciler{}
+	pod := r.buildPod(&lll.EtcdMember{
+		ObjectMeta: metav1.ObjectMeta{Name: "m", Namespace: "ns"},
+		Spec: lll.EtcdMemberSpec{
+			ClusterName: "test", Version: "3.5.17",
+			Storage: lll.StorageSpec{Size: quickQty(t, "1Gi")},
+			// Resources intentionally zero.
+		},
+	})
+	got := pod.Spec.Containers[0].Resources
+	if got.Requests.Cpu().Cmp(resource.MustParse("100m")) != 0 {
+		t.Fatalf("default CPU request = %v; want 100m", got.Requests.Cpu())
+	}
+	if got.Requests.Memory().Cmp(resource.MustParse("128Mi")) != 0 {
+		t.Fatalf("default memory request = %v; want 128Mi", got.Requests.Memory())
+	}
+	if len(got.Limits) != 0 {
+		t.Fatalf("default Limits must be empty; got %+v", got.Limits)
 	}
 }
 

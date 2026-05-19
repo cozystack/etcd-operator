@@ -24,6 +24,7 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/equality"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -535,6 +536,30 @@ func (r *EtcdMemberReconciler) ensurePodAbsent(ctx context.Context, member *lll.
 	return nil
 }
 
+// containerResources returns the resource requirements for the etcd
+// container, with a conservative fall-through default when the user
+// hasn't set spec.resources on the cluster. The fall-through (100m
+// CPU + 128Mi memory requests, no limits) preserves the operator's
+// pre-existing default behaviour for clusters that don't opt into
+// per-cluster sizing.
+//
+// The "user set anything" check is structural deep-equality against
+// the zero value rather than just `len(Requests) > 0 || len(Limits) > 0`
+// — DynamicResourceAllocation's Claims field is the third axis of
+// ResourceRequirements and would otherwise be silently swallowed by
+// the default fall-through.
+func containerResources(member *lll.EtcdMember) corev1.ResourceRequirements {
+	if !equality.Semantic.DeepEqual(member.Spec.Resources, corev1.ResourceRequirements{}) {
+		return *member.Spec.Resources.DeepCopy()
+	}
+	return corev1.ResourceRequirements{
+		Requests: corev1.ResourceList{
+			corev1.ResourceCPU:    resource.MustParse("100m"),
+			corev1.ResourceMemory: resource.MustParse("128Mi"),
+		},
+	}
+}
+
 func (r *EtcdMemberReconciler) buildPod(member *lll.EtcdMember) *corev1.Pod {
 	clusterState := "new"
 	if !member.Spec.Bootstrap {
@@ -594,6 +619,13 @@ func (r *EtcdMemberReconciler) buildPod(member *lll.EtcdMember) *corev1.Pod {
 		"--initial-cluster=" + member.Spec.InitialCluster,
 		"--initial-cluster-token=" + member.Spec.ClusterToken,
 		"--initial-cluster-state=" + clusterState,
+		// Plaintext metrics + /health listener on a separate port,
+		// bound to 0.0.0.0 so kubelet HTTPGet probes (which dial the
+		// Pod IP, not loopback) and Prometheus-style scrapers can both
+		// reach it. Always on, regardless of TLS — Prometheus
+		// integrations like cozystack's VMPodScrape target the named
+		// "metrics" container port unconditionally.
+		"--listen-metrics-urls=http://0.0.0.0:2381",
 	}
 
 	volumes := []corev1.Volume{{Name: "data", VolumeSource: dataVolumeSource}}
@@ -610,13 +642,6 @@ func (r *EtcdMemberReconciler) buildPod(member *lll.EtcdMember) *corev1.Pod {
 				"--trusted-ca-file=/etc/etcd/tls/client/ca.crt",
 			)
 		}
-		// Kubelet readiness probe can't present a client cert when
-		// --client-cert-auth=true, and even in server-TLS-only mode the
-		// SchemeHTTPS probe is awkward. Expose /health on a separate
-		// plaintext metrics listener — the standard etcd-on-k8s idiom —
-		// and point the readiness probe at port 2381. Binds 0.0.0.0
-		// because kubelet probes dial the Pod IP, not loopback.
-		cmd = append(cmd, "--listen-metrics-urls=http://0.0.0.0:2381")
 		volumes = append(volumes, corev1.Volume{
 			Name: "tls-client",
 			VolumeSource: corev1.VolumeSource{
@@ -647,13 +672,6 @@ func (r *EtcdMemberReconciler) buildPod(member *lll.EtcdMember) *corev1.Pod {
 		mounts = append(mounts, corev1.VolumeMount{
 			Name: "tls-peer", MountPath: "/etc/etcd/tls/peer", ReadOnly: true,
 		})
-	}
-
-	// Readiness target: when client TLS is on, the localhost metrics
-	// listener on 2381; otherwise the regular client port on 2379.
-	readinessPort := 2379
-	if clientTLS {
-		readinessPort = 2381
 	}
 
 	return &corev1.Pod{
@@ -687,14 +705,10 @@ func (r *EtcdMemberReconciler) buildPod(member *lll.EtcdMember) *corev1.Pod {
 				Ports: []corev1.ContainerPort{
 					{Name: "client", ContainerPort: 2379},
 					{Name: "peer", ContainerPort: 2380},
+					{Name: "metrics", ContainerPort: 2381},
 				},
 				VolumeMounts: mounts,
-				Resources: corev1.ResourceRequirements{
-					Requests: corev1.ResourceList{
-						corev1.ResourceCPU:    resource.MustParse("100m"),
-						corev1.ResourceMemory: resource.MustParse("128Mi"),
-					},
-				},
+				Resources:    containerResources(member),
 				// Liveness MUST NOT require quorum. /health returns non-200
 				// on a member that can't reach peers — if we put HTTPGet on
 				// /health here, a transient partition cascade-kills every
@@ -716,7 +730,7 @@ func (r *EtcdMemberReconciler) buildPod(member *lll.EtcdMember) *corev1.Pod {
 					ProbeHandler: corev1.ProbeHandler{
 						HTTPGet: &corev1.HTTPGetAction{
 							Path: "/health",
-							Port: intstr.FromInt(readinessPort),
+							Port: intstr.FromInt(2381),
 						},
 					},
 					InitialDelaySeconds: 5,

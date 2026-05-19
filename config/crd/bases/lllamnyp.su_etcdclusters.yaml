@@ -91,6 +91,77 @@ spec:
                 format: int32
                 minimum: 0
                 type: integer
+              resources:
+                description: |-
+                  Resources sets the etcd container's resource requests and limits.
+                  When omitted, the operator falls back to a conservative default
+                  (100m CPU + 128Mi memory requests, no limits) suitable for
+                  kicking the tyres but not for production. Memory-backed clusters
+                  specifically should set limits.memory covering the tmpfs SizeLimit
+                  plus etcd's own headroom.
+
+                  Updates take effect on newly-created members (scale-up,
+                  replacement). The operator does not roll existing Pods to apply
+                  a resource change in place — wire a VerticalPodAutoscaler at
+                  targetRef={kind: EtcdCluster, name: <cluster>} for that, or
+                  delete one Pod at a time to recreate them with the new spec.
+                properties:
+                  claims:
+                    description: |-
+                      Claims lists the names of resources, defined in spec.resourceClaims,
+                      that are used by this container.
+
+                      This is an alpha field and requires enabling the
+                      DynamicResourceAllocation feature gate.
+
+                      This field is immutable. It can only be set for containers.
+                    items:
+                      description: ResourceClaim references one entry in PodSpec.ResourceClaims.
+                      properties:
+                        name:
+                          description: |-
+                            Name must match the name of one entry in pod.spec.resourceClaims of
+                            the Pod where this field is used. It makes that resource available
+                            inside a container.
+                          type: string
+                        request:
+                          description: |-
+                            Request is the name chosen for a request in the referenced claim.
+                            If empty, everything from the claim is made available, otherwise
+                            only the result of this request.
+                          type: string
+                      required:
+                      - name
+                      type: object
+                    type: array
+                    x-kubernetes-list-map-keys:
+                    - name
+                    x-kubernetes-list-type: map
+                  limits:
+                    additionalProperties:
+                      anyOf:
+                      - type: integer
+                      - type: string
+                      pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                      x-kubernetes-int-or-string: true
+                    description: |-
+                      Limits describes the maximum amount of compute resources allowed.
+                      More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
+                    type: object
+                  requests:
+                    additionalProperties:
+                      anyOf:
+                      - type: integer
+                      - type: string
+                      pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                      x-kubernetes-int-or-string: true
+                    description: |-
+                      Requests describes the minimum amount of compute resources required.
+                      If Requests is omitted for a container, it defaults to Limits if that is explicitly specified,
+                      otherwise to an implementation-defined value. Requests cannot exceed Limits.
+                      More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
+                    type: object
+                type: object
               storage:
                 default:
                   medium: ""
@@ -369,6 +440,69 @@ spec:
                     description: Replicas is the locked target replica count.
                     format: int32
                     type: integer
+                  resources:
+                    description: |-
+                      Resources is the locked target etcd container resources. The
+                      locking pattern prevents a mid-flight resource change from being
+                      honoured on newly-created members until the current target is
+                      reached or its deadline expires.
+                    properties:
+                      claims:
+                        description: |-
+                          Claims lists the names of resources, defined in spec.resourceClaims,
+                          that are used by this container.
+
+                          This is an alpha field and requires enabling the
+                          DynamicResourceAllocation feature gate.
+
+                          This field is immutable. It can only be set for containers.
+                        items:
+                          description: ResourceClaim references one entry in PodSpec.ResourceClaims.
+                          properties:
+                            name:
+                              description: |-
+                                Name must match the name of one entry in pod.spec.resourceClaims of
+                                the Pod where this field is used. It makes that resource available
+                                inside a container.
+                              type: string
+                            request:
+                              description: |-
+                                Request is the name chosen for a request in the referenced claim.
+                                If empty, everything from the claim is made available, otherwise
+                                only the result of this request.
+                              type: string
+                          required:
+                          - name
+                          type: object
+                        type: array
+                        x-kubernetes-list-map-keys:
+                        - name
+                        x-kubernetes-list-type: map
+                      limits:
+                        additionalProperties:
+                          anyOf:
+                          - type: integer
+                          - type: string
+                          pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                          x-kubernetes-int-or-string: true
+                        description: |-
+                          Limits describes the maximum amount of compute resources allowed.
+                          More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
+                        type: object
+                      requests:
+                        additionalProperties:
+                          anyOf:
+                          - type: integer
+                          - type: string
+                          pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                          x-kubernetes-int-or-string: true
+                        description: |-
+                          Requests describes the minimum amount of compute resources required.
+                          If Requests is omitted for a container, it defaults to Limits if that is explicitly specified,
+                          otherwise to an implementation-defined value. Requests cannot exceed Limits.
+                          More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
+                        type: object
+                    type: object
                   storage:
                     description: |-
                       Storage is the locked target storage configuration. The locking
@@ -451,13 +585,28 @@ spec:
                 format: date-time
                 type: string
               readyMembers:
-                description: ReadyMembers is the count of members that are healthy
-                  and serving.
+                description: |-
+                  ReadyMembers is the count of members that are healthy and serving.
+                  Also exposed as Scale.Status.Replicas via the /scale subresource so
+                  kubectl scale and clients like VerticalPodAutoscaler can read
+                  "current scale" without a custom status field.
                 format: int32
                 type: integer
+              selector:
+                description: |-
+                  Selector is the label-selector form ("etcd.lllamnyp.su/cluster=<name>")
+                  matching every Pod owned by this cluster. Surfaced for the /scale
+                  subresource — the VPA admission controller reads it via Scales().Get()
+                  to know which Pods to inject recommendations into. Plain users won't
+                  see this field directly.
+                type: string
             type: object
         type: object
     served: true
     storage: true
     subresources:
+      scale:
+        labelSelectorPath: .status.selector
+        specReplicasPath: .spec.replicas
+        statusReplicasPath: .status.readyMembers
       status: {}

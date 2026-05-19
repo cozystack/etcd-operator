@@ -340,22 +340,21 @@ The `PodDisruptionBudget` is auto-emitted now (see [Draining nodes](#draining-no
              topologyKey: kubernetes.io/hostname
    ```
 
-2. **Container memory limit** — a `LimitRange` in the namespace covers it pending a `spec.resources` field on the CR:
+2. **Container memory limit** — set `spec.resources.limits.memory` on the cluster so tmpfs writes account against the Pod's cgroup, not node memory:
 
    ```yaml
-   apiVersion: v1
-   kind: LimitRange
-   metadata:
-     name: etcd-mem
-     namespace: default
    spec:
-     limits:
-       - type: Container
-         default:
-           memory: 512Mi   # >= spec.storage.size + ~128Mi for etcd headroom
+     storage:
+       size: 256Mi
+       medium: Memory
+     resources:
+       requests:
+         memory: 384Mi
+       limits:
+         memory: 512Mi   # >= spec.storage.size + ~128Mi for etcd headroom
    ```
 
-   Without this, tmpfs writes count against node memory not the pod's cgroup, the pod is in BestEffort/Burstable QoS, and it is first in line for eviction under pressure — the exact failure mode that destroys memory members.
+   Without a limit, tmpfs writes count against node memory rather than the Pod's cgroup, the Pod runs in BestEffort/Burstable QoS, and it is first in line for eviction under pressure — the exact failure mode that destroys memory members. `spec.resources` updates take effect on newly-created members; existing Pods keep their original sizing until rolled.
 
 ### Pod loss and auto-replacement
 
