@@ -272,7 +272,7 @@ GOLANGCI_LINT_VERSION ?= v1.60.0
 # renovate: datasource=github-tags depName=kubernetes-sigs/kind
 KIND_VERSION ?= v0.23.0
 # renovate: datasource=github-tags depName=helm/helm
-HELM_VERSION ?= v3.15.2
+HELM_VERSION ?= v4.2.0
 # renovate: datasource=github-tags depName=losisin/helm-values-schema-json
 HELM_SCHEMA_VERSION ?= v1.4.1
 # renovate: datasource=github-tags depName=norwoodj/helm-docs
