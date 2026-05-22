@@ -185,14 +185,19 @@ These rules live in the CRD itself; the apiserver enforces them with no separate
 
 `spec.tls` configures transport-layer security for the cluster's two etcd surfaces: the client API (port 2379) and the peer API (port 2380). Each subtree is independently optional — you can opt one surface into TLS without the other. The whole `tls` subtree is immutable post-create (see the validation table above): toggling TLS on an existing cluster is a rolling change that v1 doesn't perform, so the policy is delete-and-recreate.
 
+Material can come from one of two sources per subtree, mutually exclusive:
+
+- **BYO Secrets** — user provides `kubernetes.io/tls`-shaped Secrets and points `serverSecretRef` / `operatorClientSecretRef` / `secretRef` at them.
+- **cert-manager** — user provides an Issuer or ClusterIssuer and the operator emits `cert-manager.io/v1` `Certificate` resources at reconcile time. See [cert-manager-driven TLS](#cert-manager-driven-tls) below.
+
 ### Census of certs
 
-| Artifact | Mount / location | etcd flag | Source |
-|---|---|---|---|
-| Server cert + key (client API) | each etcd Pod, `/etc/etcd/tls/client/{tls.crt,tls.key}` | `--cert-file`, `--key-file` | `spec.tls.client.serverSecretRef` |
-| Client trust bundle (client API) | each etcd Pod, `/etc/etcd/tls/client/ca.crt` | `--trusted-ca-file` (mTLS only) | `ca.crt` key of `serverSecretRef`'s Secret |
-| Operator's client cert + key | operator Pod (not mounted into etcd Pods — read by the operator's etcd client) | n/a (Go `tls.Config.Certificates`) | `spec.tls.client.operatorClientSecretRef` |
-| Peer cert + key + trust | each etcd Pod, `/etc/etcd/tls/peer/{tls.crt,tls.key,ca.crt}` | `--peer-cert-file`, `--peer-key-file`, `--peer-trusted-ca-file` | `spec.tls.peer.secretRef` |
+| Artifact | Mount / location | etcd flag | Source (BYO) | Source (cert-manager) |
+|---|---|---|---|---|
+| Server cert + key (client API) | each etcd Pod, `/etc/etcd/tls/client/{tls.crt,tls.key}` | `--cert-file`, `--key-file` | `spec.tls.client.serverSecretRef` | Secret `<cluster>-server-tls` produced by a Certificate signed by `serverIssuerRef` |
+| Client trust bundle (client API) | each etcd Pod, `/etc/etcd/tls/client/ca.crt` | `--trusted-ca-file` (mTLS only) | `ca.crt` key of `serverSecretRef`'s Secret | `ca.crt` key of `<cluster>-server-tls` (the Issuer's CA cert) |
+| Operator's client cert + key | operator Pod (not mounted into etcd Pods — read by the operator's etcd client) | n/a (Go `tls.Config.Certificates`) | `spec.tls.client.operatorClientSecretRef` | Secret `<cluster>-operator-client-tls` produced by a Certificate signed by `operatorClientIssuerRef` |
+| Peer cert + key + trust | each etcd Pod, `/etc/etcd/tls/peer/{tls.crt,tls.key,ca.crt}` | `--peer-cert-file`, `--peer-key-file`, `--peer-trusted-ca-file` | `spec.tls.peer.secretRef` | Secret `<cluster>-peer-tls` produced by a Certificate signed by `issuerRef` |
 
 The cluster controller propagates the per-Pod secret references (server, peer) onto each `EtcdMember` at creation, so the member controller builds Pods without re-reading the cluster spec. Operator-side material (the operator-client secret) stays on the parent cluster — the member controller fetches the cluster only when it needs an etcd client itself.
 
@@ -225,11 +230,41 @@ The cluster DNS suffix is environment-dependent — `cluster.local` on most upst
 
 Every member Pod exposes a plaintext metrics listener on container port 2381 (named `metrics`) regardless of TLS state. etcd is started with `--listen-metrics-urls=http://0.0.0.0:2381`; the readiness probe targets `:2381/health` unconditionally. Bound to `0.0.0.0` rather than `localhost` because kubelet's HTTPGet probe dials the Pod IP, not loopback — a `127.0.0.1`-only listener would be unreachable from the kubelet. The same listener is what Prometheus-style scrapers (Cozystack's `VMPodScrape`, kube-prometheus's `PodMonitor`, etc.) target via the named `metrics` port. `/health` and `/metrics` are the only things exposed on this port; neither is sensitive (both are already reachable via the TLS-protected client API).
 
-### What the operator does NOT manage (Phase 1)
+### cert-manager-driven TLS
 
-- **Cert issuance.** The user creates the Secrets out-of-band. cert-manager integration is a Phase 2 follow-up.
-- **Cert rotation.** Renewing a cert means updating the Secret and bouncing the Pods. Until the operator watches the referenced Secrets and rolls Pods on RV change, rotation is a manual one-Pod-at-a-time `kubectl delete pod`.
-- **SAN validation.** The operator does not parse the user's cert to verify SANs cover the required DNS / IP names; etcd will fail to start (or self-dial loops will spam logs) if the cert is wrong. Required SANs are listed in `docs/installation.md`.
+Instead of authoring Secrets out-of-band, point each subtree at a cert-manager Issuer (or ClusterIssuer) under `spec.tls.{client,peer}.certManager`:
+
+```yaml
+spec:
+  tls:
+    client:
+      certManager:
+        serverIssuerRef:         { name: my-ca, kind: Issuer }
+        operatorClientIssuerRef: { name: my-ca, kind: Issuer }   # presence ⇒ mTLS on
+    peer:
+      certManager:
+        issuerRef: { name: my-peer-ca, kind: Issuer }
+```
+
+The cluster controller emits up to three `cert-manager.io/v1` `Certificate` resources per cluster (server, optional operator-client, peer). Each `Certificate`:
+
+- Is owned by the `EtcdCluster` (cascading GC on cluster delete, which also GCs the resulting Secret).
+- Specifies the SANs, EKUs, and `ipAddresses` etcd needs (server gets the wildcard short + FQDN, the headless and client service DNS, `localhost`, `127.0.0.1`; peer gets the wildcard short + FQDN; operator-client has no SAN).
+- Writes the cert into a conventionally-named Secret (`<cluster>-server-tls`, `<cluster>-operator-client-tls`, `<cluster>-peer-tls`) which the rest of the operator consumes the same way it consumes a BYO Secret — `buildPod` and `buildOperatorTLSConfig` are source-agnostic.
+
+The CRD shape enforces exactly one source per subtree via CEL (`secretRef` XOR `certManager`), and `tls.client.operatorClientSecretRef` cannot coexist with `tls.client.certManager` — the mTLS toggle in cert-manager mode lives at `certManager.operatorClientIssuerRef`.
+
+**Cluster DNS suffix.** The FQDN form of the emitted SANs (`*.<cluster>.<ns>.svc.<cluster-domain>`) needs the cluster's actual DNS suffix. The operator auto-discovers it from `/etc/resolv.conf`'s `search` line at startup — covering `cluster.local`, Cozystack's `cozy.local`, and any other kubelet-injected suffix for normal cluster-pod deployments — and falls back to `cluster.local` only when auto-discovery yields nothing (hostNetwork pods, custom `dnsPolicy`). Override explicitly with `--cluster-domain=<suffix>` when neither path finds the right value. See [installation: prerequisites for cert-manager mode](installation.md#prerequisites-for-cert-manager-mode).
+
+**Single-Issuer assumption.** In the happy path the same Issuer signs both the server cert and the operator-client cert, so the CA visible in each Secret's `ca.crt` is the same content — doubling as etcd's `--trusted-ca-file`. Splitting the two Issuers across different root CAs would require the user to ensure both root CAs reach the server's trust bundle; that case is an edge to discuss later.
+
+**cert-manager not installed.** The operator probes the discovery API for `cert-manager.io/v1` at startup. When it isn't registered, a cluster whose `spec.tls` references `certManager` is parked at `Available=False / CertManagerNotInstalled` and the operator never touches the cert-manager.io GVK — avoiding the controller-runtime cached-client failure mode where a missing CRD traps the reflector in a permanent LIST retry. Recovery is "install cert-manager, restart the operator"; the discovery probe re-runs at every operator start.
+
+### What the operator does NOT manage (yet)
+
+- **Cert rotation.** cert-manager handles renewal of operator-emitted Certificates automatically (the resulting Secret gets new bytes); the operator does NOT yet watch the Secret and roll Pods. In-place rotation requires manual one-Pod-at-a-time `kubectl delete pod`.
+- **Trust-bundle separate ref.** Use cases like multi-CA trust during rotation or cert-manager `trust-manager` `Bundle` resources still require a custom BYO Secret with a hand-constructed `ca.crt`. Not in the happy path.
+- **SAN validation on BYO certs.** The operator does not parse the user's cert to verify SANs cover the required DNS / IP names; etcd will fail to start (or self-dial loops will spam logs) if the cert is wrong. Required SANs are listed in [`docs/installation.md`](installation.md#tls-enabled-variant).
 
 ## PodDisruptionBudget
 
@@ -296,6 +331,6 @@ A few things that recur in similar operators but are intentionally absent here:
 
 - **No automatic broken-member replacement for PVC clusters.** `isBroken` is a real predicate only for memory-backed members (Pod lost → memory gone → member replaced); for PVC-backed members it stays a stub. The replacement policy (corruption? irrecoverable crashloop? quorum-loss handling?) is a richer decision and not yet wired up. Broken PVC members stay broken and require an explicit user action (see [operations.md](operations.md#broken-member)).
 - **No leader-aware client routing.** Each etcd-client call balanced by clientv3 lands on whatever endpoint is first responsive. Filtering to non-learner endpoints (the issue #12 fix) handles the "rpc not supported for learner" case, but heavy `MemberList` traffic can still spread across followers. A leader-aware proxy or a sidecar that intercepts apiserver→etcd traffic is the proper fix; not in scope here.
-- **No TLS, no auth/RBAC inside etcd.** v1alpha2 ships HTTP-only. Adding TLS means wiring cert-manager (or equivalent), rotating certs, and threading them through the Pod spec. Doable but a separate concern.
+- **No auth/RBAC inside etcd.** Transport TLS is supported (BYO Secrets or operator-emitted cert-manager Certificates — see [TLS](#tls)), but etcd's own username/password and role-based authorization layer is not wired up. A separate concern from transport security.
 
 See [`What's not supported`](../README.md#whats-not-supported-yet) in the README for the running follow-up list.

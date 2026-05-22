@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	lll "github.com/lllamnyp/etcd-operator/api/v1alpha2"
@@ -88,6 +89,11 @@ func buildInitialCluster(peerScheme string, names []string, cluster, namespace s
 // deriveMemberTLS produces the per-member TLS view from a cluster's TLS
 // spec. Mirrors only the secret references plus the mTLS flag; the operator-
 // side operator-client secret stays on the parent cluster.
+//
+// Both BYO (Secret refs) and cert-manager (operator-emitted Certificate)
+// modes are flattened here: the member-side fields hold the resolved
+// Secret names regardless of source, so buildPod / ensurePod /
+// buildOperatorTLSConfig stay source-agnostic.
 func deriveMemberTLS(cluster *lll.EtcdCluster) *lll.EtcdMemberTLS {
 	if cluster == nil || cluster.Spec.TLS == nil {
 		return nil
@@ -96,16 +102,64 @@ func deriveMemberTLS(cluster *lll.EtcdCluster) *lll.EtcdMemberTLS {
 		return nil
 	}
 	out := &lll.EtcdMemberTLS{}
-	if cluster.Spec.TLS.Client != nil {
-		ref := cluster.Spec.TLS.Client.ServerSecretRef
-		out.ClientServerSecretRef = &ref
-		out.ClientMTLS = cluster.Spec.TLS.Client.OperatorClientSecretRef != nil
+	if name := serverSecretName(cluster); name != "" {
+		out.ClientServerSecretRef = &corev1.LocalObjectReference{Name: name}
+		out.ClientMTLS = operatorClientSecretName(cluster) != ""
 	}
-	if cluster.Spec.TLS.Peer != nil {
-		ref := cluster.Spec.TLS.Peer.SecretRef
-		out.PeerSecretRef = &ref
+	if name := peerSecretName(cluster); name != "" {
+		out.PeerSecretRef = &corev1.LocalObjectReference{Name: name}
 	}
 	return out
+}
+
+// serverSecretName resolves the Secret name holding the server cert+key,
+// across the BYO and cert-manager-driven sources. Empty when the client
+// plane is plaintext.
+func serverSecretName(cluster *lll.EtcdCluster) string {
+	if cluster == nil || cluster.Spec.TLS == nil || cluster.Spec.TLS.Client == nil {
+		return ""
+	}
+	c := cluster.Spec.TLS.Client
+	if c.ServerSecretRef != nil {
+		return c.ServerSecretRef.Name
+	}
+	if c.CertManager != nil {
+		return cluster.Name + "-server-tls"
+	}
+	return ""
+}
+
+// operatorClientSecretName resolves the Secret name holding the
+// operator's etcd-client identity. Empty when mTLS is off (server-TLS-
+// only mode).
+func operatorClientSecretName(cluster *lll.EtcdCluster) string {
+	if cluster == nil || cluster.Spec.TLS == nil || cluster.Spec.TLS.Client == nil {
+		return ""
+	}
+	c := cluster.Spec.TLS.Client
+	if c.OperatorClientSecretRef != nil {
+		return c.OperatorClientSecretRef.Name
+	}
+	if c.CertManager != nil && c.CertManager.OperatorClientIssuerRef != nil {
+		return cluster.Name + "-operator-client-tls"
+	}
+	return ""
+}
+
+// peerSecretName resolves the Secret name holding the peer cert+key.
+// Empty when the peer plane is plaintext.
+func peerSecretName(cluster *lll.EtcdCluster) string {
+	if cluster == nil || cluster.Spec.TLS == nil || cluster.Spec.TLS.Peer == nil {
+		return ""
+	}
+	p := cluster.Spec.TLS.Peer
+	if p.SecretRef != nil {
+		return p.SecretRef.Name
+	}
+	if p.CertManager != nil {
+		return cluster.Name + "-peer-tls"
+	}
+	return ""
 }
 
 // memberEndpoints returns etcd client endpoints for the subset of

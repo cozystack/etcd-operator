@@ -19,14 +19,18 @@ package main
 import (
 	"flag"
 	"os"
+	"strings"
 
 	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
 	// to ensure that exec-entrypoint and run can make use of them.
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
+	"k8s.io/client-go/discovery"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	"k8s.io/client-go/rest"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
@@ -37,6 +41,8 @@ import (
 	"github.com/lllamnyp/etcd-operator/controllers"
 	//+kubebuilder:scaffold:imports
 )
+
+const defaultClusterDomain = "cluster.local"
 
 var (
 	scheme   = runtime.NewScheme()
@@ -54,11 +60,21 @@ func main() {
 	var metricsAddr string
 	var enableLeaderElection bool
 	var probeAddr string
+	var clusterDomain string
 	flag.StringVar(&metricsAddr, "metrics-bind-address", ":8080", "The address the metric endpoint binds to.")
 	flag.StringVar(&probeAddr, "health-probe-bind-address", ":8081", "The address the probe endpoint binds to.")
 	flag.BoolVar(&enableLeaderElection, "leader-elect", false,
 		"Enable leader election for controller manager. "+
 			"Enabling this will ensure there is only one active controller manager.")
+	flag.StringVar(&clusterDomain, "cluster-domain", "",
+		"DNS suffix used by the Kubernetes cluster (e.g. 'cluster.local', 'cozy.local'). "+
+			"Threaded into cert-manager-emitted Certificate SANs so the FQDN form "+
+			"matches what kube-dns returns for peer reverse-DNS verification. "+
+			"When unset, auto-discovered from /etc/resolv.conf's search list (the "+
+			"path kubelet uses to inject cluster DNS into normal pods); falls back "+
+			"to 'cluster.local' if auto-discovery yields nothing — set explicitly "+
+			"for hostNetwork or dnsPolicy:None pods, or any other environment "+
+			"where the operator's pod doesn't see kube-dns search paths.")
 	opts := zap.Options{
 		Development: true,
 	}
@@ -91,9 +107,32 @@ func main() {
 		os.Exit(1)
 	}
 
+	if clusterDomain == "" {
+		clusterDomain = discoverClusterDomain("/etc/resolv.conf")
+	}
+	if clusterDomain == "" {
+		clusterDomain = defaultClusterDomain
+		setupLog.Info("cluster domain not provided and could not be auto-discovered from /etc/resolv.conf; using default — set --cluster-domain explicitly if your cluster uses a different suffix", "clusterDomain", clusterDomain)
+	} else {
+		setupLog.Info("cluster domain resolved", "clusterDomain", clusterDomain)
+	}
+
+	certManagerAvailable, err := detectCertManager(mgr.GetConfig())
+	if err != nil {
+		setupLog.Error(err, "unable to probe discovery API for cert-manager")
+		os.Exit(1)
+	}
+	if certManagerAvailable {
+		setupLog.Info("cert-manager.io/v1 API detected; spec.tls.{client,peer}.certManager will be honored")
+	} else {
+		setupLog.Info("cert-manager.io/v1 API not detected; Reconcile will short-circuit clusters using spec.tls.{client,peer}.certManager with Available=False/CertManagerNotInstalled")
+	}
+
 	if err = (&controllers.EtcdClusterReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
+		Client:               mgr.GetClient(),
+		Scheme:               mgr.GetScheme(),
+		CertManagerAvailable: certManagerAvailable,
+		ClusterDomain:        clusterDomain,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "EtcdCluster")
 		os.Exit(1)
@@ -121,4 +160,75 @@ func main() {
 		setupLog.Error(err, "problem running manager")
 		os.Exit(1)
 	}
+}
+
+// discoverClusterDomain reads the resolv.conf at the given path and
+// extracts the cluster DNS suffix from its search list. In a normal
+// k8s pod kubelet writes a search line of the form
+// "<ns>.svc.<cluster-domain> svc.<cluster-domain> <cluster-domain>";
+// the first entry starting with "svc." gives us the suffix.
+//
+// Returns "" when:
+//   - the file can't be read (e.g. running outside a pod),
+//   - no search line exists (uncommon outside cluster contexts),
+//   - no search entry starts with "svc." (hostNetwork pods see the
+//     host's resolv.conf, which doesn't carry the cluster suffix).
+//
+// Callers fall back to defaultClusterDomain or to the --cluster-domain
+// flag in those cases.
+func discoverClusterDomain(path string) string {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		// strip trailing comments + whitespace
+		if i := strings.Index(line, "#"); i >= 0 {
+			line = line[:i]
+		}
+		fields := strings.Fields(line)
+		if len(fields) < 2 || fields[0] != "search" {
+			continue
+		}
+		for _, entry := range fields[1:] {
+			if strings.HasPrefix(entry, "svc.") && len(entry) > len("svc.") {
+				return strings.TrimPrefix(entry, "svc.")
+			}
+		}
+	}
+	return ""
+}
+
+// detectCertManager probes the apiserver's discovery API for the
+// cert-manager.io/v1 Certificate kind. We detect once at startup rather
+// than lazily on first use because:
+//
+//   - Lazily-detected absence trips controller-runtime's cached client into
+//     a permanent reflector retry loop (informer LIST keeps returning
+//     NoKindMatch). One-shot detection lets us skip the cache entirely
+//     when the CRD is missing, and use the cache normally when it isn't.
+//   - The signal is environmental: cert-manager is either installed or
+//     it isn't. Installing it after the operator starts requires an
+//     operator restart for the flag to flip — acceptable for v1, the
+//     standard deploy story has cert-manager as a Helm dep / prereq.
+func detectCertManager(cfg *rest.Config) (bool, error) {
+	dc, err := discovery.NewDiscoveryClientForConfig(cfg)
+	if err != nil {
+		return false, err
+	}
+	resources, err := dc.ServerResourcesForGroupVersion("cert-manager.io/v1")
+	if err != nil {
+		// IsNotFound — group/version isn't registered. That's the "no
+		// cert-manager" case, not an error.
+		if apierrors.IsNotFound(err) || discovery.IsGroupDiscoveryFailedError(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	for _, r := range resources.APIResources {
+		if r.Kind == "Certificate" {
+			return true, nil
+		}
+	}
+	return false, nil
 }

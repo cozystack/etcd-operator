@@ -243,6 +243,69 @@ spec:
                       Client configures TLS for the etcd client API (port 2379). Absent
                       means plaintext. See ClientTLS for the mTLS-toggle semantics.
                     properties:
+                      certManager:
+                        description: |-
+                          CertManager configures operator-driven TLS material provisioning
+                          via cert-manager.io/v1 Certificate resources. Mutually exclusive
+                          with ServerSecretRef. The operator owns the emitted Certificates
+                          (they GC with the EtcdCluster) and the resulting Secrets are
+                          mounted into the etcd Pods the same way BYO Secrets are.
+                        properties:
+                          operatorClientIssuerRef:
+                            description: |-
+                              OperatorClientIssuerRef is the Issuer or ClusterIssuer that will
+                              sign the operator's etcd-client identity. Presence ⇒ client mTLS
+                              is on; absence ⇒ server-TLS only. Resulting Secret name is
+                              "<cluster>-operator-client-tls".
+
+                              In the happy path the same Issuer signs both server and operator-
+                              client certs, so the CA visible in each Secret's ca.crt is the
+                              same content, doubling as etcd's --trusted-ca-file. Splitting the
+                              two Issuers across separate root CAs requires the user to ensure
+                              the trust bundle on the server side covers both — that case is an
+                              edge of this v1.
+                            properties:
+                              kind:
+                                default: Issuer
+                                description: |-
+                                  Kind is either "Issuer" or "ClusterIssuer". Defaults to "Issuer"
+                                  — a namespaced issuer living next to the EtcdCluster.
+                                enum:
+                                - Issuer
+                                - ClusterIssuer
+                                type: string
+                              name:
+                                description: Name is the issuer resource's name.
+                                minLength: 1
+                                type: string
+                            required:
+                            - name
+                            type: object
+                          serverIssuerRef:
+                            description: |-
+                              ServerIssuerRef is the Issuer or ClusterIssuer that will sign the
+                              etcd server cert. Resulting Secret name is
+                              "<cluster>-server-tls".
+                            properties:
+                              kind:
+                                default: Issuer
+                                description: |-
+                                  Kind is either "Issuer" or "ClusterIssuer". Defaults to "Issuer"
+                                  — a namespaced issuer living next to the EtcdCluster.
+                                enum:
+                                - Issuer
+                                - ClusterIssuer
+                                type: string
+                              name:
+                                description: Name is the issuer resource's name.
+                                minLength: 1
+                                type: string
+                            required:
+                            - name
+                            type: object
+                        required:
+                        - serverIssuerRef
+                        type: object
                       operatorClientSecretRef:
                         description: |-
                           OperatorClientSecretRef points at a Secret in the cluster's
@@ -250,6 +313,9 @@ spec:
                           tls.key). Setting this enables mTLS — etcd is started with
                           --client-cert-auth=true and the operator presents this cert when
                           dialing. Leaving it unset selects server-TLS-only mode.
+
+                          Cannot be combined with CertManager; use
+                          CertManager.OperatorClientIssuerRef instead.
                         properties:
                           name:
                             default: ""
@@ -269,6 +335,8 @@ spec:
                           shape: tls.crt, tls.key, and ca.crt. ca.crt is always required
                           (the operator's own etcd client needs it to verify the server,
                           and when mTLS is on it doubles as --trusted-ca-file).
+
+                          Mutually exclusive with CertManager.
                         properties:
                           name:
                             default: ""
@@ -281,9 +349,14 @@ spec:
                             type: string
                         type: object
                         x-kubernetes-map-type: atomic
-                    required:
-                    - serverSecretRef
                     type: object
+                    x-kubernetes-validations:
+                    - message: exactly one of spec.tls.client.serverSecretRef or spec.tls.client.certManager
+                        must be set
+                      rule: has(self.serverSecretRef) != has(self.certManager)
+                    - message: spec.tls.client.operatorClientSecretRef cannot be combined
+                        with certManager; use certManager.operatorClientIssuerRef
+                      rule: '!has(self.certManager) || !has(self.operatorClientSecretRef)'
                   peer:
                     description: |-
                       Peer configures TLS for the etcd peer API (port 2380). Absent
@@ -291,6 +364,38 @@ spec:
                       is symmetric and there is no useful encrypt-only-no-identity mode
                       for it.
                     properties:
+                      certManager:
+                        description: |-
+                          CertManager configures operator-driven TLS material provisioning
+                          for the peer plane via cert-manager.io/v1 Certificate resources.
+                          Mutually exclusive with SecretRef.
+                        properties:
+                          issuerRef:
+                            description: |-
+                              IssuerRef is the Issuer or ClusterIssuer that signs the peer cert.
+                              Peer is symmetric (same cert serves and dials), so this single
+                              Issuer covers both directions of peer mTLS. Resulting Secret name
+                              is "<cluster>-peer-tls".
+                            properties:
+                              kind:
+                                default: Issuer
+                                description: |-
+                                  Kind is either "Issuer" or "ClusterIssuer". Defaults to "Issuer"
+                                  — a namespaced issuer living next to the EtcdCluster.
+                                enum:
+                                - Issuer
+                                - ClusterIssuer
+                                type: string
+                              name:
+                                description: Name is the issuer resource's name.
+                                minLength: 1
+                                type: string
+                            required:
+                            - name
+                            type: object
+                        required:
+                        - issuerRef
+                        type: object
                       secretRef:
                         description: |-
                           SecretRef points at a Secret in the cluster's namespace holding
@@ -299,6 +404,8 @@ spec:
                           — same cert is used to serve inbound and dial outbound peer
                           connections — and --peer-trusted-ca-file is always populated).
                           The peer cert MUST carry both serverAuth and clientAuth in EKU.
+
+                          Mutually exclusive with CertManager.
                         properties:
                           name:
                             default: ""
@@ -311,9 +418,11 @@ spec:
                             type: string
                         type: object
                         x-kubernetes-map-type: atomic
-                    required:
-                    - secretRef
                     type: object
+                    x-kubernetes-validations:
+                    - message: exactly one of spec.tls.peer.secretRef or spec.tls.peer.certManager
+                        must be set
+                      rule: has(self.secretRef) != has(self.certManager)
                 type: object
               version:
                 description: Version is the desired etcd version (e.g. "3.5.17").

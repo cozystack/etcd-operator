@@ -218,7 +218,7 @@ func TestCEL_TLSAddOnExistingClusterRejected(t *testing.T) {
 	}
 	got.Spec.TLS = &lll.EtcdClusterTLS{
 		Client: &lll.ClientTLS{
-			ServerSecretRef: corev1.LocalObjectReference{Name: "fake-server-tls"},
+			ServerSecretRef: &corev1.LocalObjectReference{Name: "fake-server-tls"},
 		},
 	}
 
@@ -240,7 +240,7 @@ func TestCEL_TLSRemoveOnExistingClusterRejected(t *testing.T) {
 	c := validCluster("tls-remove")
 	c.Spec.TLS = &lll.EtcdClusterTLS{
 		Client: &lll.ClientTLS{
-			ServerSecretRef: corev1.LocalObjectReference{Name: "fake-server-tls"},
+			ServerSecretRef: &corev1.LocalObjectReference{Name: "fake-server-tls"},
 		},
 	}
 	if err := k8s.Create(ctx, c); err != nil {
@@ -274,7 +274,7 @@ func TestCEL_TLSSubfieldChangeRejected(t *testing.T) {
 	c := validCluster("tls-subfield")
 	c.Spec.TLS = &lll.EtcdClusterTLS{
 		Client: &lll.ClientTLS{
-			ServerSecretRef: corev1.LocalObjectReference{Name: "fake-server-tls"},
+			ServerSecretRef: &corev1.LocalObjectReference{Name: "fake-server-tls"},
 		},
 	}
 	if err := k8s.Create(ctx, c); err != nil {
@@ -387,6 +387,101 @@ func TestCEL_StorageClassNameChangeRejected(t *testing.T) {
 	}
 }
 
+// TestCEL_TLSClientCertManagerAndSecretRefMutuallyExclusive pins the
+// two-sources-are-an-error contract on the client subtree. Either BYO
+// secrets or operator-driven cert-manager — never both.
+func TestCEL_TLSClientCertManagerAndSecretRefMutuallyExclusive(t *testing.T) {
+	skipIfNoEnvtest(t)
+	ctx := context.Background()
+
+	c := validCluster("tls-both-client")
+	c.Spec.TLS = &lll.EtcdClusterTLS{Client: &lll.ClientTLS{
+		ServerSecretRef: &corev1.LocalObjectReference{Name: "fake-server-tls"},
+		CertManager: &lll.ClientCertManagerTLS{
+			ServerIssuerRef: lll.IssuerReference{Name: "my-ca"},
+		},
+	}}
+
+	err := k8s.Create(ctx, c)
+	if err == nil {
+		_ = k8s.Delete(ctx, c)
+		t.Fatalf("apiserver accepted both serverSecretRef and certManager; expected rejection")
+	}
+	if !strings.Contains(err.Error(), "exactly one of spec.tls.client.serverSecretRef or spec.tls.client.certManager") {
+		t.Fatalf("error did not mention mutual exclusion: %v", err)
+	}
+}
+
+// TestCEL_TLSClientNeitherSecretRefNorCertManager pins the
+// neither-source-is-an-error contract: a ClientTLS subtree with neither
+// field set is a config that produces no Secret material at all, so it
+// must be rejected at admission.
+func TestCEL_TLSClientNeitherSecretRefNorCertManager(t *testing.T) {
+	skipIfNoEnvtest(t)
+	ctx := context.Background()
+
+	c := validCluster("tls-neither-client")
+	c.Spec.TLS = &lll.EtcdClusterTLS{Client: &lll.ClientTLS{}}
+
+	err := k8s.Create(ctx, c)
+	if err == nil {
+		_ = k8s.Delete(ctx, c)
+		t.Fatalf("apiserver accepted empty ClientTLS; expected rejection")
+	}
+	if !strings.Contains(err.Error(), "exactly one of spec.tls.client.serverSecretRef or spec.tls.client.certManager") {
+		t.Fatalf("error did not mention exactly-one rule: %v", err)
+	}
+}
+
+// TestCEL_TLSClientOperatorSecretRefCannotMixWithCertManager covers the
+// finer-grained mTLS-toggle rule: even when the user picks certManager
+// as the source for the server cert, the OPERATOR client cert toggle
+// must use certManager.operatorClientIssuerRef, not the BYO
+// operatorClientSecretRef.
+func TestCEL_TLSClientOperatorSecretRefCannotMixWithCertManager(t *testing.T) {
+	skipIfNoEnvtest(t)
+	ctx := context.Background()
+
+	c := validCluster("tls-mixed-mtls")
+	c.Spec.TLS = &lll.EtcdClusterTLS{Client: &lll.ClientTLS{
+		CertManager: &lll.ClientCertManagerTLS{
+			ServerIssuerRef: lll.IssuerReference{Name: "my-ca"},
+		},
+		OperatorClientSecretRef: &corev1.LocalObjectReference{Name: "fake-op-client-tls"},
+	}}
+
+	err := k8s.Create(ctx, c)
+	if err == nil {
+		_ = k8s.Delete(ctx, c)
+		t.Fatalf("apiserver accepted operatorClientSecretRef + certManager; expected rejection")
+	}
+	if !strings.Contains(err.Error(), "operatorClientSecretRef cannot be combined with certManager") {
+		t.Fatalf("error did not mention mTLS-source mixing: %v", err)
+	}
+}
+
+// TestCEL_TLSPeerCertManagerAndSecretRefMutuallyExclusive mirrors the
+// client-side mutual-exclusion test for the peer subtree.
+func TestCEL_TLSPeerCertManagerAndSecretRefMutuallyExclusive(t *testing.T) {
+	skipIfNoEnvtest(t)
+	ctx := context.Background()
+
+	c := validCluster("tls-both-peer")
+	c.Spec.TLS = &lll.EtcdClusterTLS{Peer: &lll.PeerTLS{
+		SecretRef:   &corev1.LocalObjectReference{Name: "fake-peer-tls"},
+		CertManager: &lll.PeerCertManagerTLS{IssuerRef: lll.IssuerReference{Name: "my-peer-ca"}},
+	}}
+
+	err := k8s.Create(ctx, c)
+	if err == nil {
+		_ = k8s.Delete(ctx, c)
+		t.Fatalf("apiserver accepted both peer.secretRef and peer.certManager; expected rejection")
+	}
+	if !strings.Contains(err.Error(), "exactly one of spec.tls.peer.secretRef or spec.tls.peer.certManager") {
+		t.Fatalf("error did not mention peer mutual exclusion: %v", err)
+	}
+}
+
 // TestCEL_HappyPathAccepts is a negative-side guard: a fully valid
 // cluster spec must pass the apiserver. Catches accidental rule
 // inversions and over-broad CEL expressions.
@@ -421,11 +516,11 @@ func TestCEL_HappyPathAccepts(t *testing.T) {
 			mut: func(c *lll.EtcdCluster) {
 				c.Spec.TLS = &lll.EtcdClusterTLS{
 					Client: &lll.ClientTLS{
-						ServerSecretRef:         corev1.LocalObjectReference{Name: "fake-server-tls"},
+						ServerSecretRef:         &corev1.LocalObjectReference{Name: "fake-server-tls"},
 						OperatorClientSecretRef: &corev1.LocalObjectReference{Name: "fake-op-client-tls"},
 					},
 					Peer: &lll.PeerTLS{
-						SecretRef: corev1.LocalObjectReference{Name: "fake-peer-tls"},
+						SecretRef: &corev1.LocalObjectReference{Name: "fake-peer-tls"},
 					},
 				}
 			},
@@ -435,6 +530,34 @@ func TestCEL_HappyPathAccepts(t *testing.T) {
 			mut: func(c *lll.EtcdCluster) {
 				sc := "replicated"
 				c.Spec.Storage.StorageClassName = &sc
+			},
+		},
+		{
+			name: "cert-manager mTLS on create",
+			mut: func(c *lll.EtcdCluster) {
+				c.Spec.TLS = &lll.EtcdClusterTLS{
+					Client: &lll.ClientTLS{CertManager: &lll.ClientCertManagerTLS{
+						ServerIssuerRef:         lll.IssuerReference{Name: "my-ca"},
+						OperatorClientIssuerRef: &lll.IssuerReference{Name: "my-ca"},
+					}},
+					Peer: &lll.PeerTLS{CertManager: &lll.PeerCertManagerTLS{
+						IssuerRef: lll.IssuerReference{Name: "my-peer-ca"},
+					}},
+				}
+			},
+		},
+		{
+			name: "cert-manager mTLS with ClusterIssuer kind",
+			mut: func(c *lll.EtcdCluster) {
+				c.Spec.TLS = &lll.EtcdClusterTLS{
+					Client: &lll.ClientTLS{CertManager: &lll.ClientCertManagerTLS{
+						ServerIssuerRef:         lll.IssuerReference{Name: "shared-ca", Kind: "ClusterIssuer"},
+						OperatorClientIssuerRef: &lll.IssuerReference{Name: "shared-ca", Kind: "ClusterIssuer"},
+					}},
+					Peer: &lll.PeerTLS{CertManager: &lll.PeerCertManagerTLS{
+						IssuerRef: lll.IssuerReference{Name: "shared-peer-ca", Kind: "ClusterIssuer"},
+					}},
+				}
 			},
 		},
 	}

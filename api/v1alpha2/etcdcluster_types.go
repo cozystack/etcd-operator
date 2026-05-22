@@ -45,7 +45,12 @@ type EtcdClusterTLS struct {
 
 // ClientTLS configures TLS for the etcd client API.
 //
-// Modes (derived from which fields are populated):
+// Material can come from either a user-provided Secret (ServerSecretRef +
+// OperatorClientSecretRef) or operator-driven cert-manager issuance
+// (CertManager). Exactly one source must be set per ClientTLS subtree —
+// enforced by CEL.
+//
+// Modes (BYO):
 //
 //   - ServerSecretRef set, OperatorClientSecretRef absent → server-TLS only
 //     (encryption, no client identity). etcd serves https://. The operator
@@ -70,25 +75,72 @@ type EtcdClusterTLS struct {
 //     serverAuth — same loopback reason. The operator does not parse the
 //     cert to validate this; misconfiguration surfaces as etcd startup
 //     failure in the Pod logs.
+//
+// Modes (CertManager): the operator emits cert-manager.io/v1 Certificate
+// resources at reconcile time, the Issuer signs them, the resulting
+// Secrets have the same kubernetes.io/tls shape as BYO and the rest of
+// the wiring is identical. See ClientCertManagerTLS for the details.
+//
+// +kubebuilder:validation:XValidation:rule="has(self.serverSecretRef) != has(self.certManager)",message="exactly one of spec.tls.client.serverSecretRef or spec.tls.client.certManager must be set"
+// +kubebuilder:validation:XValidation:rule="!has(self.certManager) || !has(self.operatorClientSecretRef)",message="spec.tls.client.operatorClientSecretRef cannot be combined with certManager; use certManager.operatorClientIssuerRef"
 type ClientTLS struct {
 	// ServerSecretRef points at a Secret in the cluster's namespace
 	// holding the etcd server cert in the standard kubernetes.io/tls
 	// shape: tls.crt, tls.key, and ca.crt. ca.crt is always required
 	// (the operator's own etcd client needs it to verify the server,
 	// and when mTLS is on it doubles as --trusted-ca-file).
-	ServerSecretRef corev1.LocalObjectReference `json:"serverSecretRef"`
+	//
+	// Mutually exclusive with CertManager.
+	// +optional
+	ServerSecretRef *corev1.LocalObjectReference `json:"serverSecretRef,omitempty"`
 
 	// OperatorClientSecretRef points at a Secret in the cluster's
 	// namespace holding the operator's etcd-client identity (tls.crt,
 	// tls.key). Setting this enables mTLS — etcd is started with
 	// --client-cert-auth=true and the operator presents this cert when
 	// dialing. Leaving it unset selects server-TLS-only mode.
+	//
+	// Cannot be combined with CertManager; use
+	// CertManager.OperatorClientIssuerRef instead.
 	// +optional
 	OperatorClientSecretRef *corev1.LocalObjectReference `json:"operatorClientSecretRef,omitempty"`
+
+	// CertManager configures operator-driven TLS material provisioning
+	// via cert-manager.io/v1 Certificate resources. Mutually exclusive
+	// with ServerSecretRef. The operator owns the emitted Certificates
+	// (they GC with the EtcdCluster) and the resulting Secrets are
+	// mounted into the etcd Pods the same way BYO Secrets are.
+	// +optional
+	CertManager *ClientCertManagerTLS `json:"certManager,omitempty"`
+}
+
+// ClientCertManagerTLS configures operator-driven TLS for the client API
+// via cert-manager.io/v1 Certificate resources.
+type ClientCertManagerTLS struct {
+	// ServerIssuerRef is the Issuer or ClusterIssuer that will sign the
+	// etcd server cert. Resulting Secret name is
+	// "<cluster>-server-tls".
+	ServerIssuerRef IssuerReference `json:"serverIssuerRef"`
+
+	// OperatorClientIssuerRef is the Issuer or ClusterIssuer that will
+	// sign the operator's etcd-client identity. Presence ⇒ client mTLS
+	// is on; absence ⇒ server-TLS only. Resulting Secret name is
+	// "<cluster>-operator-client-tls".
+	//
+	// In the happy path the same Issuer signs both server and operator-
+	// client certs, so the CA visible in each Secret's ca.crt is the
+	// same content, doubling as etcd's --trusted-ca-file. Splitting the
+	// two Issuers across separate root CAs requires the user to ensure
+	// the trust bundle on the server side covers both — that case is an
+	// edge of this v1.
+	// +optional
+	OperatorClientIssuerRef *IssuerReference `json:"operatorClientIssuerRef,omitempty"`
 }
 
 // PeerTLS configures TLS for the etcd peer API. When PeerTLS is set, peer
 // is always mTLS.
+//
+// +kubebuilder:validation:XValidation:rule="has(self.secretRef) != has(self.certManager)",message="exactly one of spec.tls.peer.secretRef or spec.tls.peer.certManager must be set"
 type PeerTLS struct {
 	// SecretRef points at a Secret in the cluster's namespace holding
 	// the peer cert+key in the standard kubernetes.io/tls shape:
@@ -96,7 +148,40 @@ type PeerTLS struct {
 	// — same cert is used to serve inbound and dial outbound peer
 	// connections — and --peer-trusted-ca-file is always populated).
 	// The peer cert MUST carry both serverAuth and clientAuth in EKU.
-	SecretRef corev1.LocalObjectReference `json:"secretRef"`
+	//
+	// Mutually exclusive with CertManager.
+	// +optional
+	SecretRef *corev1.LocalObjectReference `json:"secretRef,omitempty"`
+
+	// CertManager configures operator-driven TLS material provisioning
+	// for the peer plane via cert-manager.io/v1 Certificate resources.
+	// Mutually exclusive with SecretRef.
+	// +optional
+	CertManager *PeerCertManagerTLS `json:"certManager,omitempty"`
+}
+
+// PeerCertManagerTLS configures operator-driven TLS for the peer API.
+type PeerCertManagerTLS struct {
+	// IssuerRef is the Issuer or ClusterIssuer that signs the peer cert.
+	// Peer is symmetric (same cert serves and dials), so this single
+	// Issuer covers both directions of peer mTLS. Resulting Secret name
+	// is "<cluster>-peer-tls".
+	IssuerRef IssuerReference `json:"issuerRef"`
+}
+
+// IssuerReference points at a cert-manager Issuer or ClusterIssuer in the
+// cluster's namespace (Issuer) or cluster-wide (ClusterIssuer).
+type IssuerReference struct {
+	// Name is the issuer resource's name.
+	// +kubebuilder:validation:MinLength=1
+	Name string `json:"name"`
+
+	// Kind is either "Issuer" or "ClusterIssuer". Defaults to "Issuer"
+	// — a namespaced issuer living next to the EtcdCluster.
+	// +kubebuilder:validation:Enum=Issuer;ClusterIssuer
+	// +kubebuilder:default=Issuer
+	// +optional
+	Kind string `json:"kind,omitempty"`
 }
 
 // Condition types for EtcdCluster.

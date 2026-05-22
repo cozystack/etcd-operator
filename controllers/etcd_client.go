@@ -73,7 +73,10 @@ func buildOperatorTLSConfig(ctx context.Context, c client.Reader, cluster *lll.E
 		return nil, nil
 	}
 	ns := cluster.Namespace
-	serverName := cluster.Spec.TLS.Client.ServerSecretRef.Name
+	serverName := serverSecretName(cluster)
+	if serverName == "" {
+		return nil, nil
+	}
 	serverSec := &corev1.Secret{}
 	if err := c.Get(ctx, types.NamespacedName{Namespace: ns, Name: serverName}, serverSec); err != nil {
 		return nil, fmt.Errorf("read server TLS secret %s/%s: %w", ns, serverName, err)
@@ -87,8 +90,7 @@ func buildOperatorTLSConfig(ctx context.Context, c client.Reader, cluster *lll.E
 		return nil, fmt.Errorf("server TLS secret %s/%s: ca.crt is not valid PEM", ns, serverName)
 	}
 	cfg := &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS12}
-	if cluster.Spec.TLS.Client.OperatorClientSecretRef != nil {
-		opName := cluster.Spec.TLS.Client.OperatorClientSecretRef.Name
+	if opName := operatorClientSecretName(cluster); opName != "" {
 		opSec := &corev1.Secret{}
 		if err := c.Get(ctx, types.NamespacedName{Namespace: ns, Name: opName}, opSec); err != nil {
 			return nil, fmt.Errorf("read operator client TLS secret %s/%s: %w", ns, opName, err)

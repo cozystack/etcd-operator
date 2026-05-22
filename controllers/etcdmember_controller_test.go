@@ -2072,10 +2072,17 @@ func TestBuildPod_DefaultsResourcesWhenUnset(t *testing.T) {
 // already-created member.
 func TestDeriveMemberTLS(t *testing.T) {
 	type want struct {
-		nilOut     bool
-		hasClient  bool
-		hasPeer    bool
-		clientMTLS bool
+		nilOut       bool
+		hasClient    bool
+		hasPeer      bool
+		clientMTLS   bool
+		serverSecret string
+		opSecret     string
+		peerSecret   string
+	}
+	withName := func(c *lll.EtcdCluster) *lll.EtcdCluster {
+		c.ObjectMeta.Name = "etcd"
+		return c
 	}
 	cases := []struct {
 		name string
@@ -2088,36 +2095,62 @@ func TestDeriveMemberTLS(t *testing.T) {
 			want: want{nilOut: true},
 		},
 		{
-			name: "client only, no mtls",
-			in: &lll.EtcdCluster{Spec: lll.EtcdClusterSpec{TLS: &lll.EtcdClusterTLS{
-				Client: &lll.ClientTLS{ServerSecretRef: corev1.LocalObjectReference{Name: "s"}},
-			}}},
-			want: want{hasClient: true, clientMTLS: false},
+			name: "byo client only, no mtls",
+			in: withName(&lll.EtcdCluster{Spec: lll.EtcdClusterSpec{TLS: &lll.EtcdClusterTLS{
+				Client: &lll.ClientTLS{ServerSecretRef: &corev1.LocalObjectReference{Name: "s"}},
+			}}}),
+			want: want{hasClient: true, serverSecret: "s"},
 		},
 		{
-			name: "client with mtls",
-			in: &lll.EtcdCluster{Spec: lll.EtcdClusterSpec{TLS: &lll.EtcdClusterTLS{
+			name: "byo client with mtls",
+			in: withName(&lll.EtcdCluster{Spec: lll.EtcdClusterSpec{TLS: &lll.EtcdClusterTLS{
 				Client: &lll.ClientTLS{
-					ServerSecretRef:         corev1.LocalObjectReference{Name: "s"},
+					ServerSecretRef:         &corev1.LocalObjectReference{Name: "s"},
 					OperatorClientSecretRef: &corev1.LocalObjectReference{Name: "op"},
 				},
-			}}},
-			want: want{hasClient: true, clientMTLS: true},
+			}}}),
+			want: want{hasClient: true, clientMTLS: true, serverSecret: "s", opSecret: "op"},
 		},
 		{
-			name: "peer only",
-			in: &lll.EtcdCluster{Spec: lll.EtcdClusterSpec{TLS: &lll.EtcdClusterTLS{
-				Peer: &lll.PeerTLS{SecretRef: corev1.LocalObjectReference{Name: "p"}},
-			}}},
-			want: want{hasPeer: true},
+			name: "byo peer only",
+			in: withName(&lll.EtcdCluster{Spec: lll.EtcdClusterSpec{TLS: &lll.EtcdClusterTLS{
+				Peer: &lll.PeerTLS{SecretRef: &corev1.LocalObjectReference{Name: "p"}},
+			}}}),
+			want: want{hasPeer: true, peerSecret: "p"},
 		},
 		{
-			name: "both",
-			in: &lll.EtcdCluster{Spec: lll.EtcdClusterSpec{TLS: &lll.EtcdClusterTLS{
-				Client: &lll.ClientTLS{ServerSecretRef: corev1.LocalObjectReference{Name: "s"}},
-				Peer:   &lll.PeerTLS{SecretRef: corev1.LocalObjectReference{Name: "p"}},
-			}}},
-			want: want{hasClient: true, hasPeer: true},
+			name: "byo both",
+			in: withName(&lll.EtcdCluster{Spec: lll.EtcdClusterSpec{TLS: &lll.EtcdClusterTLS{
+				Client: &lll.ClientTLS{ServerSecretRef: &corev1.LocalObjectReference{Name: "s"}},
+				Peer:   &lll.PeerTLS{SecretRef: &corev1.LocalObjectReference{Name: "p"}},
+			}}}),
+			want: want{hasClient: true, hasPeer: true, serverSecret: "s", peerSecret: "p"},
+		},
+		{
+			name: "certManager client, no mtls",
+			in: withName(&lll.EtcdCluster{Spec: lll.EtcdClusterSpec{TLS: &lll.EtcdClusterTLS{
+				Client: &lll.ClientTLS{CertManager: &lll.ClientCertManagerTLS{
+					ServerIssuerRef: lll.IssuerReference{Name: "my-ca"},
+				}},
+			}}}),
+			want: want{hasClient: true, serverSecret: "etcd-server-tls"},
+		},
+		{
+			name: "certManager client with mtls",
+			in: withName(&lll.EtcdCluster{Spec: lll.EtcdClusterSpec{TLS: &lll.EtcdClusterTLS{
+				Client: &lll.ClientTLS{CertManager: &lll.ClientCertManagerTLS{
+					ServerIssuerRef:         lll.IssuerReference{Name: "my-ca"},
+					OperatorClientIssuerRef: &lll.IssuerReference{Name: "my-ca"},
+				}},
+			}}}),
+			want: want{hasClient: true, clientMTLS: true, serverSecret: "etcd-server-tls", opSecret: "etcd-operator-client-tls"},
+		},
+		{
+			name: "certManager peer",
+			in: withName(&lll.EtcdCluster{Spec: lll.EtcdClusterSpec{TLS: &lll.EtcdClusterTLS{
+				Peer: &lll.PeerTLS{CertManager: &lll.PeerCertManagerTLS{IssuerRef: lll.IssuerReference{Name: "peer-ca"}}},
+			}}}),
+			want: want{hasPeer: true, peerSecret: "etcd-peer-tls"},
 		},
 	}
 	for _, tc := range cases {
@@ -2140,6 +2173,15 @@ func TestDeriveMemberTLS(t *testing.T) {
 			}
 			if got.ClientMTLS != tc.want.clientMTLS {
 				t.Fatalf("ClientMTLS = %v; want %v", got.ClientMTLS, tc.want.clientMTLS)
+			}
+			if tc.want.serverSecret != "" && got.ClientServerSecretRef.Name != tc.want.serverSecret {
+				t.Fatalf("ClientServerSecretRef.Name = %q; want %q", got.ClientServerSecretRef.Name, tc.want.serverSecret)
+			}
+			if tc.want.peerSecret != "" && got.PeerSecretRef.Name != tc.want.peerSecret {
+				t.Fatalf("PeerSecretRef.Name = %q; want %q", got.PeerSecretRef.Name, tc.want.peerSecret)
+			}
+			if tc.want.opSecret != "" && operatorClientSecretName(tc.in) != tc.want.opSecret {
+				t.Fatalf("operatorClientSecretName = %q; want %q", operatorClientSecretName(tc.in), tc.want.opSecret)
 			}
 		})
 	}

@@ -461,7 +461,12 @@ PodAntiAffinity is not configured by default (see [What's not supported](../READ
 
 ## TLS-enabled clusters
 
-The operator does **not** generate certs in Phase 1 — you provide them as Secrets and reference them from `spec.tls`. See [concepts: TLS](concepts.md#tls) for what each Secret needs to contain and the EKU / CA-bundle constraints.
+Two paths to a TLS-enabled cluster, mutually exclusive per subtree:
+
+- **BYO Secrets** — you create the Secrets out-of-band and reference them from `spec.tls.{client,peer}.{serverSecretRef,operatorClientSecretRef,secretRef}`. The section below covers this.
+- **cert-manager** — point `spec.tls.{client,peer}.certManager` at an Issuer/ClusterIssuer, the operator emits `cert-manager.io/v1` Certificate resources and cert-manager produces the Secrets. Skip to [cert-manager-managed clusters](#cert-manager-managed-clusters).
+
+See [concepts: TLS](concepts.md#tls) for what each Secret needs to contain and the EKU / CA-bundle constraints.
 
 ### Creating the Secrets
 
@@ -553,17 +558,30 @@ kubectl exec -n <ns> "$POD" -- etcdctl \
 
 For server-TLS-only clusters, drop `--cert` and `--key`.
 
-### Cert rotation (Phase 1)
+### cert-manager-managed clusters
 
-The operator does NOT watch the referenced Secrets. What rotation needs depends on which material changed, because Go's `crypto/tls` re-reads some files per handshake and bakes others into an `*x509.CertPool` at config time:
+When `spec.tls.{client,peer}.certManager` is set, the operator emits three `cert-manager.io/v1 Certificate` resources per cluster (server, optional operator-client, peer) at reconcile time. cert-manager then produces the matching Secrets. Inspect them like any other cert-manager resource:
+
+```sh
+kubectl get certificate -n <ns> -l app.kubernetes.io/instance=<cluster>
+kubectl describe certificate -n <ns> <cluster>-server
+```
+
+A Certificate stuck at `Ready=False` is the most common failure mode. `kubectl describe certificate <cluster>-server` surfaces cert-manager's `Issuer`-side error (no matching `Issuer`, signing back-end unreachable, CA cert expired, etc.). If the operator probe didn't find cert-manager at startup, the EtcdCluster's status will read `Available=False / CertManagerNotInstalled` and no Certificates will be created — install cert-manager, then restart the operator (the discovery probe re-runs at every operator start).
+
+`--cluster-domain` mismatches are silent and the failure mode is "second member of the cluster crashloops with `discovery failed` / `EOF`". The operator auto-discovers its DNS suffix from `/etc/resolv.conf`'s `search` line at startup, so for normal cluster-pod deployments — including Cozystack's `cozy.local` — no flag is required. If your operator runs with `hostNetwork: true` or a custom `dnsPolicy`, auto-discovery returns nothing and the operator falls back to `cluster.local`; set `--cluster-domain` explicitly in that case.
+
+### Cert rotation
+
+Go's `crypto/tls` re-reads some files per handshake and bakes others into an `*x509.CertPool` at config time. The rotation procedure depends on which material changed; for cert-manager-managed clusters, cert-manager auto-renews the Certificate (the Secret content updates) and only the Pod-side trust-bundle case still needs a manual restart.
 
 | Material | Re-read live? | Rotation procedure |
 |---|---|---|
-| `tls.crt` / `tls.key` in `serverSecretRef` (etcd's `--cert-file` / `--key-file`) | **Yes.** Wired through `tls.Config.GetCertificate`; etcd re-loads the files on every new TLS handshake. | Update the Secret. New connections pick up the new cert within a kubelet refresh cycle (~60s for the mounted volume to project). Existing keepalive connections continue with the old cert until they cycle naturally. No restart needed. |
-| `tls.crt` / `tls.key` in peer `secretRef` (etcd's `--peer-cert-file` / `--peer-key-file`) | **Yes**, same mechanism. | Same as above. |
-| `ca.crt` in `serverSecretRef` (etcd's `--trusted-ca-file`) | **No.** Loaded into an `x509.CertPool` at etcd startup and held in memory. | Update the Secret, then bounce each Pod one at a time (`kubectl delete pod <member-pod-name>`; wait for `Ready` and `member list` to confirm the rejoin before continuing). |
-| `ca.crt` in peer `secretRef` (etcd's `--peer-trusted-ca-file`) | **No**, same reason. | Same as above. |
-| `tls.crt` / `tls.key` / `ca.crt` in `operatorClientSecretRef` (operator-side, not mounted into etcd Pods) | **Yes** — the operator rebuilds its `*tls.Config` from the Secret on every reconcile, so all three rotate without an operator restart. | Update the Secret. The change takes effect on the next reconcile (~30s on idle, immediately on event-driven triggers). |
+| `tls.crt` / `tls.key` in `serverSecretRef` (BYO) or `<cluster>-server-tls` (cert-manager) — etcd's `--cert-file` / `--key-file` | **Yes.** Wired through `tls.Config.GetCertificate`; etcd re-loads the files on every new TLS handshake. | BYO: update the Secret. cert-manager: nothing — cert-manager handles renewal automatically. New connections pick up the new cert within a kubelet refresh cycle (~60s for the mounted volume to project). Existing keepalive connections continue with the old cert until they cycle naturally. |
+| `tls.crt` / `tls.key` in peer Secret (`--peer-cert-file` / `--peer-key-file`) | **Yes**, same mechanism. | Same as above. |
+| `ca.crt` in server Secret (etcd's `--trusted-ca-file`) | **No.** Loaded into an `x509.CertPool` at etcd startup and held in memory. | Update the trust bundle (BYO: edit the Secret; cert-manager: rotate the Issuer's CA), then bounce each Pod one at a time (`kubectl delete pod <member-pod-name>`; wait for `Ready` and `member list` to confirm the rejoin before continuing). |
+| `ca.crt` in peer Secret (etcd's `--peer-trusted-ca-file`) | **No**, same reason. | Same as above. |
+| `tls.crt` / `tls.key` / `ca.crt` in operator-client Secret (operator-side, not mounted into etcd Pods) | **Yes** — the operator rebuilds its `*tls.Config` from the Secret on every reconcile, so all three rotate without an operator restart. | Update the Secret (BYO) or let cert-manager renew (cert-manager). The change takes effect on the next reconcile (~30s on idle, immediately on event-driven triggers). |
 
 When in doubt: certs + keys are hot-swappable; trust bundles (the `ca.crt` consumed *as a trust anchor*) need a Pod restart. A future operator version will watch the Secrets and roll Pods on RV change so the trust-bundle case is automated too.
 

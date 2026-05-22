@@ -122,9 +122,20 @@ This trades durability for speed: a Pod that loses its tmpfs (eviction, node fai
 
 ### TLS-enabled variant
 
-You can opt the client API (2379), the peer API (2380), or both onto TLS by referencing Secrets you've created out-of-band. The operator does not issue certs in Phase 1 — see [operations: TLS-enabled clusters](operations.md#tls-enabled-clusters) for Secret-creation commands, and [concepts: TLS](concepts.md#tls) for the constraint rationale (EKU `clientAuth` on the server cert, CA-bundle topology, etc.).
+You can opt the client API (2379), the peer API (2380), or both onto TLS. Two sources per subtree, mutually exclusive:
 
-Required SANs on the per-cluster server cert (BYO must cover all of these because the cert is shared by every member):
+- **BYO Secrets** — you create `kubernetes.io/tls`-shaped Secrets out-of-band (e.g. via your own cert pipeline) and reference them via `spec.tls.client.serverSecretRef` / `operatorClientSecretRef` and `spec.tls.peer.secretRef`. See [operations: TLS-enabled clusters](operations.md#tls-enabled-clusters) for Secret-creation commands.
+- **cert-manager** — point at an `Issuer` or `ClusterIssuer` via `spec.tls.client.certManager.{serverIssuerRef,operatorClientIssuerRef}` and `spec.tls.peer.certManager.issuerRef`. The operator emits `cert-manager.io/v1 Certificate` resources, cert-manager produces the Secrets, the rest of the wiring is identical.
+
+See [concepts: TLS](concepts.md#tls) for the trade-offs (EKU `clientAuth` requirement on the server cert, CA-bundle topology, etc.) and [concepts: cert-manager-driven TLS](concepts.md#cert-manager-driven-tls) for the operator-emitted-Certificate path.
+
+#### Prerequisites for cert-manager mode
+
+- cert-manager (any v1.x release) installed on the cluster *before* the operator starts. The operator probes the discovery API for `cert-manager.io/v1` at startup; if absent, clusters with `certManager` set are parked at `Available=False / CertManagerNotInstalled` and the operator never touches the GVK. Recovery is install-cert-manager + operator restart.
+- An `Issuer` (namespaced, in the EtcdCluster's namespace) or `ClusterIssuer` for each role. Most commonly a single Issuer per plane signs both the server and operator-client certs.
+- The operator's cluster DNS suffix must match the cluster's actual suffix so the emitted SANs match what kube-dns returns for peer reverse-DNS. The operator auto-discovers it from `/etc/resolv.conf`'s `search` line at startup (covers `cluster.local`, `cozy.local`, and any other kubelet-injected suffix for normal cluster-pod deployments); falls back to `cluster.local` when auto-discovery yields nothing (hostNetwork pods, custom `dnsPolicy`). Override explicitly with `--cluster-domain=<suffix>` when neither path finds the right value.
+
+Required SANs on the per-cluster server cert (BYO must cover all of these because the cert is shared by every member; cert-manager mode emits them automatically based on `--cluster-domain`):
 
 - `*.<cluster>.<ns>.svc` (DNS SAN, wildcard — etcd ≥3.4 supports wildcard DNS SANs)
 - `*.<cluster>.<ns>.svc.<cluster-domain>` (also wildcard) — required by etcd's peer-mTLS verification, which reverse-DNS-looks-up the connecting peer's IP. Kubernetes' DNS returns the fully-qualified `<pod>.<svc>.<ns>.svc.<cluster-domain>` form, and the cert SAN has to cover it. `<cluster-domain>` is `cluster.local` on most clusters; Cozystack uses `cozy.local`. Check `kubectl exec -n kube-system <coredns-pod> -- cat /etc/coredns/Corefile` or your cluster's resolved DNS suffix if unsure.
