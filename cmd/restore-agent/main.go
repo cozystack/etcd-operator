@@ -24,17 +24,30 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"go.etcd.io/etcd/etcdutl/v3/snapshot"
+	"go.uber.org/zap"
 )
 
 const (
 	defaultDataDir   = "/var/run/etcd/default.etcd"
 	snapshotFilename = "snapshot.db"
+	// restoreCompleteFile is a sentinel written into dataDir after
+	// snapshot.Restore() returns nil. The skip-check in run() keys off
+	// this file, not member/, because etcdutl's snapshot.Restore creates
+	// member/snap/ very early — before the snapshot bytes are copied,
+	// before the SHA-256 check, and before the WAL is written. A pod
+	// killed mid-restore (OOMKill during io.Copy, ENOSPC, SHA mismatch,
+	// eviction) leaves member/ on disk in a partial state; a sentinel-
+	// based skip lets the next attempt see "incomplete" and the wipe
+	// branch in restoreDataDir() reclaim the dataDir for retry.
+	restoreCompleteFile = ".restore-complete"
 )
 
 // restoreSnapshotDir is a package-level variable (not const) so tests can override it.
@@ -53,21 +66,32 @@ func run() error {
 		dataDir = defaultDataDir
 	}
 
-	memberDir := filepath.Join(dataDir, "member")
-	if _, err := os.Stat(memberDir); err == nil {
-		fmt.Println("data directory already exists, skipping restore download")
+	sentinel := filepath.Join(dataDir, restoreCompleteFile)
+	if _, err := os.Stat(sentinel); err == nil {
+		fmt.Println("restore sentinel present, skipping restore")
 		return nil
 	}
 
+	// Previously a second initContainer (restore-datadir) ran
+	// `/bin/sh -c "etcdutl snapshot restore ..."` from the distroless
+	// quay.io/coreos/etcd image and crashed because no /bin/sh exists.
+	// This binary now does both steps: download + restore via etcdutl's
+	// Go API. One initContainer, no shell.
 	source := os.Getenv("RESTORE_SOURCE")
 	switch source {
 	case "s3":
-		return downloadFromS3()
+		if err := downloadFromS3(); err != nil {
+			return err
+		}
 	case "pvc":
-		return copyFromPVC()
+		if err := copyFromPVC(); err != nil {
+			return err
+		}
 	default:
 		return fmt.Errorf("unknown RESTORE_SOURCE: %q (expected 's3' or 'pvc')", source)
 	}
+
+	return restoreDataDir(dataDir)
 }
 
 func getTimeout() (time.Duration, error) {
@@ -214,5 +238,87 @@ func writeSnapshot(reader io.Reader) error {
 	}
 
 	fmt.Printf("snapshot downloaded successfully (%d bytes) to %s\n", written, snapshotPath)
+	return nil
+}
+
+// restoreDataDir invokes etcdutl's snapshot.Restore Go API to populate
+// the etcd member data directory from the downloaded snapshot. Replaces
+// the legacy /bin/sh -c "etcdutl snapshot restore ..." initContainer
+// that failed on distroless etcd images.
+func restoreDataDir(dataDir string) error {
+	snapshotPath := filepath.Join(restoreSnapshotDir, snapshotFilename)
+	if _, err := os.Stat(snapshotPath); err != nil {
+		return fmt.Errorf("snapshot file missing at %s: %w", snapshotPath, err)
+	}
+
+	podName := os.Getenv("POD_NAME")
+	if podName == "" {
+		return fmt.Errorf("POD_NAME env var is required")
+	}
+	podNamespace := os.Getenv("POD_NAMESPACE")
+	if podNamespace == "" {
+		return fmt.Errorf("POD_NAMESPACE env var is required")
+	}
+	// Both come from the cluster-state ConfigMap via envFrom. Trim them
+	// symmetrically — ConfigMap string values that get round-tripped
+	// through `kubectl apply -f -` heredocs can pick up trailing
+	// whitespace that breaks etcdutl's strict initial-cluster parse.
+	initialCluster := strings.TrimSpace(os.Getenv("ETCD_INITIAL_CLUSTER"))
+	if initialCluster == "" {
+		return fmt.Errorf("ETCD_INITIAL_CLUSTER env var is required (envFrom cluster-state ConfigMap)")
+	}
+	clusterToken := strings.TrimSpace(os.Getenv("ETCD_INITIAL_CLUSTER_TOKEN"))
+	if clusterToken == "" {
+		return fmt.Errorf("ETCD_INITIAL_CLUSTER_TOKEN env var is required (envFrom cluster-state ConfigMap)")
+	}
+	// HEADLESS_SVC is set unconditionally by the operator's statefulset
+	// renderer from GetHeadlessServiceName(cluster). Require it here so
+	// a missing value surfaces as an explicit error rather than a
+	// silently-wrong default that resolves DNS to nothing.
+	headlessSvc := os.Getenv("HEADLESS_SVC")
+	if headlessSvc == "" {
+		return fmt.Errorf("HEADLESS_SVC env var is required")
+	}
+	peerURL := fmt.Sprintf("https://%s.%s.%s.svc:2380", podName, headlessSvc, podNamespace)
+
+	// Partial-state recovery: dataDir may exist from a previous restore
+	// that crashed midway. etcdutl's Restore() creates member/snap/
+	// before the SHA-256 check and WAL write, so a failure between
+	// member/snap/ creation and the success write leaves the dir
+	// half-populated and Restore() refuses to overwrite on retry. The
+	// skip-check in run() keys off the .restore-complete sentinel, so
+	// reaching this point means the previous attempt did not finish —
+	// wipe whatever exists so Restore() can recreate cleanly.
+	if _, err := os.Stat(dataDir); err == nil {
+		fmt.Printf("partial restore state at %s, wiping for retry\n", dataDir)
+		if err := os.RemoveAll(dataDir); err != nil {
+			return fmt.Errorf("wipe partial data dir %s: %w", dataDir, err)
+		}
+	}
+
+	logger, err := zap.NewProduction()
+	if err != nil {
+		return fmt.Errorf("create zap logger: %w", err)
+	}
+	mgr := snapshot.NewV3(logger)
+	fmt.Printf("restoring snapshot %s -> %s (name=%s peer=%s)\n", snapshotPath, dataDir, podName, peerURL)
+	if err := mgr.Restore(snapshot.RestoreConfig{
+		SnapshotPath:        snapshotPath,
+		Name:                podName,
+		OutputDataDir:       dataDir,
+		PeerURLs:            []string{peerURL},
+		InitialCluster:      initialCluster,
+		InitialClusterToken: clusterToken,
+	}); err != nil {
+		return fmt.Errorf("etcdutl snapshot.Restore: %w", err)
+	}
+	// Mark the dataDir as fully restored. run()'s skip-check on the next
+	// pod start sees this sentinel and short-circuits; any failure path
+	// before this line leaves no sentinel and forces a wipe-and-retry.
+	sentinelPath := filepath.Join(dataDir, restoreCompleteFile)
+	if err := os.WriteFile(sentinelPath, nil, 0o600); err != nil {
+		return fmt.Errorf("write restore-complete sentinel %s: %w", sentinelPath, err)
+	}
+	fmt.Printf("snapshot restored to %s\n", dataDir)
 	return nil
 }

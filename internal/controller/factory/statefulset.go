@@ -28,6 +28,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
+	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -92,7 +93,10 @@ func CreateOrUpdateStatefulSet(
 		if operatorImage == "" {
 			return fmt.Errorf("OPERATOR_IMAGE is required for bootstrap restore but not set")
 		}
-		restoreInitContainers, restoreVolumes := generateRestoreInitContainers(cluster, operatorImage)
+		restoreInitContainers, restoreVolumes, err := generateRestoreInitContainers(cluster, operatorImage)
+		if err != nil {
+			return err
+		}
 		initContainers = restoreInitContainers
 		volumes = append(volumes, restoreVolumes...)
 	}
@@ -101,6 +105,19 @@ func CreateOrUpdateStatefulSet(
 		InitContainers: initContainers,
 		Containers:     []corev1.Container{generateContainer(cluster)},
 		Volumes:        volumes,
+	}
+	// Restore-agent ships in the operator image (distroless/static:nonroot,
+	// uid 65532) but writes into /var/run/etcd, which is the StatefulSet's
+	// PVC. On a freshly-provisioned PVC the mountpoint belongs to root:root
+	// 0755, so the agent fails with `mkdir /var/run/etcd/default.etcd:
+	// permission denied`. FSGroup tells the kubelet to recursively chgrp
+	// the mount to gid 65532 and add g+s, after which the nonroot agent
+	// can create the data dir. Same pattern is already used for the
+	// backup Job/CronJob pods in this package.
+	if cluster.Spec.Bootstrap != nil && cluster.Spec.Bootstrap.Restore != nil {
+		basePodSpec.SecurityContext = &corev1.PodSecurityContext{
+			FSGroup: ptr.To(int64(65532)),
+		}
 	}
 	if cluster.Spec.PodTemplate.Spec.Containers == nil {
 		cluster.Spec.PodTemplate.Spec.Containers = make([]corev1.Container, 0)
@@ -454,7 +471,7 @@ func getLivenessProbe() *corev1.Probe {
 func generateRestoreInitContainers(
 	cluster *etcdaenixiov1alpha1.EtcdCluster,
 	operatorImage string,
-) ([]corev1.Container, []corev1.Volume) {
+) ([]corev1.Container, []corev1.Volume, error) {
 	restore := cluster.Spec.Bootstrap.Restore
 	headlessSvc := GetHeadlessServiceName(cluster)
 
@@ -473,10 +490,16 @@ func generateRestoreInitContainers(
 		},
 	}
 
-	// Env vars for the restore-agent init container
-	restoreAgentEnv := []corev1.EnvVar{
-		{Name: "ETCD_DATA_DIR", Value: "/var/run/etcd/default.etcd"},
-	}
+	// Env vars for the restore-agent init container. restore-agent now
+	// runs etcdutl snapshot.Restore() in-process after downloading the
+	// snapshot, so it consumes POD_NAME/POD_NAMESPACE and the
+	// cluster-state values (ETCD_INITIAL_CLUSTER / token) that the
+	// dropped restore-datadir container used to read.
+	restoreAgentEnv := append([]corev1.EnvVar{}, podEnv...)
+	restoreAgentEnv = append(restoreAgentEnv,
+		corev1.EnvVar{Name: "ETCD_DATA_DIR", Value: "/var/run/etcd/default.etcd"},
+		corev1.EnvVar{Name: "HEADLESS_SVC", Value: headlessSvc},
+	)
 	restoreAgentVolumeMounts := []corev1.VolumeMount{
 		{Name: "data", MountPath: "/var/run/etcd"},
 		{Name: "restore-data", MountPath: "/restore"},
@@ -518,6 +541,19 @@ func generateRestoreInitContainers(
 	}
 
 	if pvc := restore.Source.PVC; pvc != nil {
+		// Mirror the backup-side hardening (see backup_job.go's
+		// validatePVCSubPath): the restore SubPath is interpolated into
+		// PVC_BACKUP_PATH that the agent feeds straight into os.Open.
+		// The restore PVC is read-only and the value points back into
+		// the same already-mounted volume, so the blast radius is
+		// smaller than on the backup side — but a `..` or empty segment
+		// still produces a path the agent cannot meaningfully open and
+		// a status message the user cannot recover from in-place.
+		// Apply the same rules; ErrInvalidSpec wrapping lets the
+		// caller surface the failure as a terminal spec error.
+		if err := validatePVCSubPath(pvc.SubPath); err != nil {
+			return nil, nil, err
+		}
 		backupPath := "/backup/data/snapshot.db"
 		if pvc.SubPath != "" {
 			backupPath = fmt.Sprintf("/backup/data/%s", pvc.SubPath)
@@ -541,50 +577,23 @@ func generateRestoreInitContainers(
 		})
 	}
 
-	// restore-data emptyDir shared between the two init containers
+	// restore-data emptyDir scratch space for the downloaded snapshot
 	extraVolumes = append(extraVolumes, corev1.Volume{
 		Name:         "restore-data",
 		VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}},
 	})
 
-	// Init container 1: restore-agent (downloads the snapshot)
-	restoreAgentContainer := corev1.Container{
-		Name:         "restore-agent",
-		Image:        operatorImage,
-		Command:      []string{"/restore-agent"},
-		Env:          restoreAgentEnv,
-		VolumeMounts: restoreAgentVolumeMounts,
-		Resources: corev1.ResourceRequirements{
-			Requests: corev1.ResourceList{
-				corev1.ResourceCPU:    resource.MustParse("100m"),
-				corev1.ResourceMemory: resource.MustParse("128Mi"),
-			},
-			Limits: corev1.ResourceList{
-				corev1.ResourceMemory: resource.MustParse("512Mi"),
-			},
-		},
-	}
-
-	// Init container 2: restore-datadir (runs etcdutl snapshot restore)
-	restoreScript := fmt.Sprintf(`set -e
-if [ -d /var/run/etcd/default.etcd/member ]; then
-  echo "data directory exists, skipping restore";
-  exit 0;
-fi;
-etcdutl snapshot restore /restore/snapshot.db \
-  --data-dir=/var/run/etcd/default.etcd \
-  --name=$(POD_NAME) \
-  --initial-cluster=$(ETCD_INITIAL_CLUSTER) \
-  --initial-cluster-token=$(ETCD_INITIAL_CLUSTER_TOKEN) \
-  --initial-advertise-peer-urls=https://$(POD_NAME).%s.$(POD_NAMESPACE).svc:2380`, headlessSvc)
-
+	// Single init container: restore-agent. Downloads the snapshot and
+	// runs etcdutl snapshot.Restore() in-process via the Go API. The
+	// legacy restore-datadir initContainer ran `/bin/sh -c "etcdutl
+	// snapshot restore ..."` from the upstream distroless etcd image,
+	// which has no /bin/sh, so it crash-looped on every restore.
 	clusterStateConfigMapName := GetClusterStateConfigMapName(cluster)
-	restoreDatadirContainer := corev1.Container{
-		Name:    "restore-datadir",
-		Image:   etcdaenixiov1alpha1.DefaultEtcdImage,
-		Command: []string{"/bin/sh", "-c"},
-		Args:    []string{restoreScript},
-		Env:     podEnv,
+	restoreAgentContainer := corev1.Container{
+		Name:    "restore-agent",
+		Image:   operatorImage,
+		Command: []string{"/restore-agent"},
+		Env:     restoreAgentEnv,
 		EnvFrom: []corev1.EnvFromSource{
 			{
 				ConfigMapRef: &corev1.ConfigMapEnvSource{
@@ -594,22 +603,27 @@ etcdutl snapshot restore /restore/snapshot.db \
 				},
 			},
 		},
-		VolumeMounts: []corev1.VolumeMount{
-			{Name: "data", MountPath: "/var/run/etcd"},
-			{Name: "restore-data", MountPath: "/restore"},
-		},
+		VolumeMounts: restoreAgentVolumeMounts,
+		// Memory limit covers etcdutl snapshot.Restore() running
+		// in-process: the restore materializes the entire on-disk
+		// btree in memory while replaying the WAL, so the previous
+		// 512Mi limit (sized for download-only) OOM-killed on
+		// multi-GB snapshots that etcd reaches in practice. 2Gi
+		// covers the typical operational ceiling; clusters with
+		// larger snapshots should raise this via a future
+		// EtcdCluster.spec.bootstrap.restore.resources override.
 		Resources: corev1.ResourceRequirements{
 			Requests: corev1.ResourceList{
 				corev1.ResourceCPU:    resource.MustParse("100m"),
-				corev1.ResourceMemory: resource.MustParse("128Mi"),
+				corev1.ResourceMemory: resource.MustParse("256Mi"),
 			},
 			Limits: corev1.ResourceList{
-				corev1.ResourceMemory: resource.MustParse("512Mi"),
+				corev1.ResourceMemory: resource.MustParse("2Gi"),
 			},
 		},
 	}
 
-	return []corev1.Container{restoreAgentContainer, restoreDatadirContainer}, extraVolumes
+	return []corev1.Container{restoreAgentContainer}, extraVolumes, nil
 }
 
 func GetServerProtocol(cluster *etcdaenixiov1alpha1.EtcdCluster) string {

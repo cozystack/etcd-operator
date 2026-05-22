@@ -1,0 +1,50 @@
+name: Codegen Drift Check
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - 'api/**'
+      - 'config/crd/bases/**'
+      - 'config/rbac/**'
+      - 'charts/etcd-operator/crds/**'
+      - 'hack/boilerplate.go.txt'
+      - 'Makefile'
+      - 'go.mod'
+      - 'go.sum'
+      - '.github/workflows/codegen-drift.yaml'
+
+concurrency:
+  group: codegen-drift-${{ github.workflow }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  codegen-drift:
+    name: Verify generated code is up to date
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4.1.7
+      - uses: actions/setup-go@v5.0.1
+        with:
+          go-version-file: go.mod
+          cache: true
+      # Three deterministic codegen targets:
+      #   - manifests: CRD + RBAC + webhook (controller-gen)
+      #   - generate:  zz_generated.deepcopy.go (controller-gen)
+      #   - helm-crd-copy: mirrors config/crd/bases → charts/etcd-operator/crds
+      # generate-docs is intentionally NOT included — it shells out to
+      # crd-ref-docs@latest, which is unpinned in the Makefile and so
+      # produces environment-dependent rendering differences that would
+      # flap this gate. If that ever gets pinned, add `generate-docs`
+      # to the line below and include `site/content/**` in the paths
+      # filter.
+      - name: Run codegen
+        run: make manifests generate helm-crd-copy
+      - name: Fail on drift
+        run: |
+          if [ -n "$(git status --porcelain)" ]; then
+            echo "::error::codegen produced changes. Run 'make manifests generate helm-crd-copy' locally and commit the result."
+            git status --short
+            git diff --color=always
+            exit 1
+          fi
