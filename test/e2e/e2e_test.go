@@ -193,8 +193,20 @@ allowVolumeExpansion: true
 				Expect(err).NotTo(HaveOccurred())
 			}()
 
+			// utils.GetEtcdClient starts `kubectl port-forward` in a
+			// goroutine and returns the client immediately, so the
+			// local listener may not be up yet when the first gRPC
+			// call fires — on slow CI runners the call lands while
+			// the kubectl child process is still binding the local
+			// port, and we get `connection refused` once before the
+			// 2s context inside IsEtcdClusterHealthy times out.
+			// Eventually retries past the port-forward warmup; the
+			// underlying contract (healthy=true) is unchanged.
 			By("check etcd cluster is healthy", func() {
-				Expect(utils.IsEtcdClusterHealthy(ctx, client)).To(BeTrue())
+				Eventually(func() (bool, error) {
+					return utils.IsEtcdClusterHealthy(ctx, client)
+				}, 60*time.Second, 2*time.Second).Should(BeTrue(),
+					"etcd cluster never reported healthy via port-forwarded client")
 			})
 		})
 	})
@@ -210,13 +222,16 @@ allowVolumeExpansion: true
 	// resulting status fields.
 	Context("With PVC backup", func() {
 		const namespace = "test-pvc-backup-etcd-cluster"
-		// Tear down everything this spec creates regardless of
-		// pass/fail so a re-run does not see stale EtcdBackup /
-		// EtcdCluster / PVC objects from a previous failed iteration.
-		// kubectl delete namespace cascades to all child objects.
-		// `--ignore-not-found` keeps the cleanup idempotent if the
-		// spec aborts before resources land. `--wait=false` decouples
-		// the next spec's start from this one's GC.
+		// AfterEach dumps diagnostics on per-spec failure but does NOT
+		// delete the namespace: the restore spec deliberately reuses
+		// the backup spec's namespace + etcd-backup-pvc + EtcdBackup CR
+		// (the restore reads the snapshot from that PVC). Tearing the
+		// namespace down between Its sends it into Terminating, and
+		// the next spec's `kubectl apply EtcdCluster` is then rejected
+		// with `Forbidden: namespace is being terminated`. Namespace
+		// teardown is deferred to AfterAll below — re-runs still see a
+		// clean slate because AfterAll fires after the last spec in
+		// this ordered Context.
 		AfterEach(func() {
 			// On failure, dump everything we'd otherwise need to
 			// kubectl-ssh into the runner to see: the EtcdBackup
@@ -249,6 +264,11 @@ allowVolumeExpansion: true
 					_, _ = GinkgoWriter.Write(out)
 				}
 			}
+		})
+		// Final cleanup after the last spec in this Context. `--wait=false`
+		// keeps the suite end fast; subsequent runs re-create the namespace
+		// idempotently via `kubectl create ... --dry-run | kubectl apply`.
+		AfterAll(func() {
 			cmd := exec.Command("kubectl", "delete", "namespace", namespace,
 				"--ignore-not-found", "--wait=false")
 			_, _ = utils.Run(cmd)
@@ -378,6 +398,161 @@ spec:
 					"status.snapshot.sizeBytes must be set")
 			})
 		})
+
+		// Continuation of the backup spec above: the EtcdCluster `test`,
+		// the backup PVC `etcd-backup-pvc`, and the EtcdBackup CR are
+		// still in the namespace. Exercises the full restore path so a
+		// regression in the initContainers (image distroless without
+		// /bin/sh, missing data volume, mis-named env vars from
+		// cluster-state CM) fails here instead of in production.
+		It("should restore an etcd cluster from the PVC snapshot", func() {
+			var err error
+
+			By("delete the source EtcdCluster", func() {
+				cmd := exec.Command("kubectl", "-n", namespace,
+					"delete", "etcdcluster", "test",
+					"--wait=true", "--timeout=3m")
+				_, err = utils.Run(cmd)
+				Expect(err).NotTo(HaveOccurred())
+			})
+
+			// Gate on source etcd pods only: the source cluster runs on
+			// storage.emptyDir, so CreateOrUpdateStatefulSet skips the
+			// volumeClaimTemplate and no PVC ever carries the instance
+			// label — the pod label is set unconditionally by PodLabels(),
+			// so a pod-count gate is meaningful for both emptyDir and
+			// PVC-backed source clusters.
+			//
+			// The `!batch.kubernetes.io/job-name` half is critical: the
+			// EtcdBackup controller propagates the same
+			// app.kubernetes.io/{instance,name,managed-by}=... labels onto
+			// the backup Job's pod template, so the completed backup pod
+			// from the previous spec also matches `instance=test`. It
+			// stays in the namespace for ttlSecondsAfterFinished (600s),
+			// well past this wait's 3-minute budget, and without the
+			// negative match the gate never reaches 0. Filtering on the
+			// presence of `job-name` excludes any Job-managed pod and
+			// keeps the gate scoped to StatefulSet-managed etcd pods.
+			//
+			// `-o name` is deliberate: utils.Run captures CombinedOutput,
+			// and kubectl writes "No resources found in <ns> namespace."
+			// to stderr when its human-readable printer renders an empty
+			// list (`--no-headers` included). With the warning merged
+			// into stdout, a trimmed-length gate never sees zero and
+			// the wait times out. `-o name` produces stable empty
+			// output for an empty list and writes nothing to stderr,
+			// so the trimmed gate works for both 0-pod and N-pod states.
+			By("wait for source pods to drain", func() {
+				Eventually(func() string {
+					cmd := exec.Command("kubectl", "-n", namespace, "get", "pod",
+						"-l", "app.kubernetes.io/instance=test,!batch.kubernetes.io/job-name",
+						"-o", "name")
+					out, _ := utils.Run(cmd)
+					return strings.TrimSpace(string(out))
+				}, 3*time.Minute, 5*time.Second).Should(BeEmpty())
+			})
+
+			// Resolve the actual on-PVC filename from the backup's
+			// status.snapshot.uri rather than guessing. backup_job.go
+			// always sets BACKUP_INCLUDE_REVISION=true, so the
+			// backup-agent rewrites PVC_BACKUP_PATH from
+			// "<backupName>.db" to "<backupName>-rev<N>.db" via
+			// injectRevision(). The restore-agent renderer in
+			// statefulset.go defaults PVC_BACKUP_PATH to
+			// "/backup/data/snapshot.db" when subPath is unset, which
+			// does not exist on the PVC and crash-loops the init
+			// container. Driving subPath from the recorded URI keeps
+			// the test independent of how the backup-agent picks names.
+			var restoreFilename string
+			By("read backup file path from EtcdBackup.status.snapshot.uri", func() {
+				cmd := exec.Command("kubectl", "get", "etcdbackup", "e2e-pvc-backup",
+					"--namespace", namespace,
+					"-o", "jsonpath={.status.snapshot.uri}")
+				out, runErr := utils.Run(cmd)
+				Expect(runErr).NotTo(HaveOccurred())
+				uri := strings.TrimSpace(string(out))
+				Expect(uri).To(HavePrefix("file:///backup/data/"),
+					"unexpected URI %q (expected file:///backup/data/<name>)", uri)
+				restoreFilename = strings.TrimPrefix(uri, "file:///backup/data/")
+				Expect(restoreFilename).NotTo(BeEmpty())
+				Expect(restoreFilename).NotTo(ContainSubstring("/"),
+					"filename must be a single PVC entry, not a path: %q", restoreFilename)
+			})
+
+			By("re-create EtcdCluster with bootstrap.restore", func() {
+				restoreCR := fmt.Sprintf(`
+apiVersion: etcd.aenix.io/v1alpha1
+kind: EtcdCluster
+metadata:
+  name: test
+spec:
+  replicas: 3
+  storage:
+    emptyDir: {}
+  bootstrap:
+    restore:
+      source:
+        pvc:
+          claimName: etcd-backup-pvc
+          subPath: %s
+`, restoreFilename)
+				cmd := exec.Command("kubectl", "apply",
+					"--namespace", namespace, "-f", "-")
+				cmd.Stdin = strings.NewReader(restoreCR)
+				_, err = utils.Run(cmd)
+				Expect(err).NotTo(HaveOccurred())
+			})
+
+			// Fast-fail gate: if the restore-agent initContainer crashes
+			// (e.g. missing /bin/sh on distroless image, missing
+			// volume mount, missing env var) we get CrashLoopBackOff
+			// on test-0 within seconds. Surface that as an immediate
+			// test failure instead of waiting 5 min for StatefulSet
+			// readiness to time out.
+			By("test-0 initContainer must not crash-loop", func() {
+				// Wait until the pod has been scheduled and the
+				// kubelet has populated initContainerStatuses;
+				// before that the jsonpath returns empty and any
+				// "not crash-looped" assertion is vacuous.
+				Eventually(func() string {
+					cmd := exec.Command("kubectl", "-n", namespace,
+						"get", "pod", "test-0",
+						"-o", `jsonpath={.status.initContainerStatuses[0].name}`)
+					out, _ := utils.Run(cmd)
+					return strings.TrimSpace(string(out))
+				}, 60*time.Second, 2*time.Second).ShouldNot(BeEmpty(),
+					"test-0 initContainerStatuses never populated")
+
+				// Now hold the assertion for 90s. Consistently fails
+				// on the FIRST poll that matches, so a crash-loop
+				// appearing 30s in still fails the spec — which is
+				// what we want; Eventually would have silently passed
+				// at t=0 before the pod even started.
+				Consistently(func() string {
+					cmd := exec.Command("kubectl", "-n", namespace,
+						"get", "pod", "test-0",
+						"-o", `jsonpath={range .status.initContainerStatuses[*]}{.state.waiting.reason}{","}{end}`)
+					out, _ := utils.Run(cmd)
+					return string(out)
+				}, 90*time.Second, 5*time.Second).ShouldNot(
+					Or(ContainSubstring("CrashLoopBackOff"),
+						ContainSubstring("RunContainerError")),
+					"test-0 init container crash-looped; the restore-agent likely failed")
+			})
+
+			By("wait for restored statefulset Ready", func() {
+				Eventually(func() error {
+					cmd := exec.Command("kubectl", "wait",
+						"statefulset/test",
+						"--for", "jsonpath={.status.readyReplicas}=3",
+						"--namespace", namespace,
+						"--timeout", "5m",
+					)
+					_, err = utils.Run(cmd)
+					return err
+				}, 5*time.Minute, 10*time.Second).Should(Succeed())
+			})
+		})
 	})
 
 	Context("TLS and enabled auth", func() {
@@ -432,8 +607,13 @@ spec:
 				Expect(err).NotTo(HaveOccurred())
 			}()
 
+			// Same port-forward warmup race as in the emptyDir spec
+			// above — Eventually past the dial gap.
 			By("check etcd cluster is healthy", func() {
-				Expect(utils.IsEtcdClusterHealthy(ctx, client)).To(BeTrue())
+				Eventually(func() (bool, error) {
+					return utils.IsEtcdClusterHealthy(ctx, client)
+				}, 60*time.Second, 2*time.Second).Should(BeTrue(),
+					"etcd cluster never reported healthy via port-forwarded client")
 			})
 
 			auth := clientv3.NewAuth(client)

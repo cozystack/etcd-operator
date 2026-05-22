@@ -529,6 +529,73 @@ var _ = Describe("EtcdBackup Controller", func() {
 			Expect(client.IgnoreNotFound(getK8sClient().Delete(ctx, agentPod))).To(Succeed())
 		})
 
+		// Pins the nil-CompletionTime safety branch in
+		// reconcileJobStatus's errNoMarker handler. The Job
+		// controller writes CompletionTime alongside
+		// Succeeded>=1 in practice, but if a reconcile happens
+		// to observe Succeeded set with CompletionTime still
+		// nil (a Job-controller write that races), the
+		// controller must requeue rather than fall through to
+		// finalize-with-empty-snapshot. The finalize branch is
+		// terminal, so "treat unknown timestamp as still
+		// within grace" is the only safe call.
+		It("Should requeue (not finalize) on errNoMarker when Job.CompletionTime is nil", func() {
+			cluster := createTestCluster(ctx, clusterName+"-flush-nil", nil)
+			backup := createTestPVCBackup(ctx, backupName+"-flush-nil", cluster.Name)
+			_ = cluster
+
+			reconciler.LogStreamer = func(ctx context.Context, ns, name, container string) (io.ReadCloser, error) {
+				return io.NopCloser(strings.NewReader(
+					"taking etcd snapshot...\nwriting snapshot to /backup/data/x.db\n",
+				)), nil
+			}
+
+			_, err := reconciler.Reconcile(ctx, ctrl.Request{
+				NamespacedName: types.NamespacedName{Name: backup.Name, Namespace: backup.Namespace},
+			})
+			Expect(err).NotTo(HaveOccurred())
+
+			job := getBackupJob(ctx, backup.Name)
+			job.Status.Succeeded = 1
+			// CompletionTime intentionally NOT set — the race we
+			// are guarding against.
+			Expect(getK8sClient().Status().Update(ctx, job)).To(Succeed())
+
+			agentPod := &corev1.Pod{
+				ObjectMeta: metav1.ObjectMeta{
+					Namespace: backup.Namespace,
+					Name:      job.Name + "-agent",
+					Labels:    map[string]string{"batch.kubernetes.io/job-name": job.Name},
+				},
+				Spec: corev1.PodSpec{
+					RestartPolicy: corev1.RestartPolicyNever,
+					Containers: []corev1.Container{{
+						Name:  "backup-agent",
+						Image: "ghcr.io/aenix-io/etcd-operator:test",
+					}},
+				},
+			}
+			Expect(getK8sClient().Create(ctx, agentPod)).To(Succeed())
+			agentPod.Status.Phase = corev1.PodSucceeded
+			startTime := metav1.Now()
+			agentPod.Status.StartTime = &startTime
+			Expect(getK8sClient().Status().Update(ctx, agentPod)).To(Succeed())
+
+			result, err := reconciler.Reconcile(ctx, ctrl.Request{
+				NamespacedName: types.NamespacedName{Name: backup.Name, Namespace: backup.Namespace},
+			})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.RequeueAfter).To(BeNumerically(">", 0),
+				"errNoMarker with nil CompletionTime must requeue — finalize-empty is unrecoverable")
+
+			racy := &etcdaenixiov1alpha1.EtcdBackup{}
+			Expect(getK8sClient().Get(ctx, types.NamespacedName{Name: backup.Name, Namespace: testNamespace}, racy)).To(Succeed())
+			Expect(racy.Status.Phase).NotTo(Equal(etcdaenixiov1alpha1.EtcdBackupStatusPhaseComplete))
+			Expect(racy.Status.Snapshot).To(BeNil())
+
+			Expect(client.IgnoreNotFound(getK8sClient().Delete(ctx, agentPod))).To(Succeed())
+		})
+
 		// Pins markerFlushGracePeriod's AFTER-grace branch.
 		// Once Job.Status.CompletionTime is older than the grace
 		// window, a still-marker-less log means the marker is

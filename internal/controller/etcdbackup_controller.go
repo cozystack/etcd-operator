@@ -412,8 +412,20 @@ func (r *EtcdBackupReconciler) reconcileJobStatus(
 			log.Info(ctx, "backup-agent pod GC'd before log was scanned; finalizing with empty status.snapshot",
 				"job", job.Name)
 		case errors.Is(extractErr, errNoMarker):
-			if job.Status.CompletionTime != nil &&
-				time.Since(job.Status.CompletionTime.Time) < markerFlushGracePeriod {
+			// nil CompletionTime is unreachable in practice — the Job
+			// controller writes CompletionTime alongside Succeeded>=1 —
+			// but the kubelet's log scanner has no way to verify that
+			// in advance, and the consequence of a wrong call here is
+			// permanent: a finalize-empty branch cannot be retried.
+			// Belt-and-suspenders: treat missing CompletionTime as
+			// "still inside the grace window" and requeue rather than
+			// finalize with empty snapshot.
+			switch {
+			case job.Status.CompletionTime == nil:
+				log.Info(ctx, "agent log has no marker and Job CompletionTime not yet set; requeueing",
+					"job", job.Name)
+				return ctrl.Result{RequeueAfter: extractSnapshotRetryInterval}, nil
+			case time.Since(job.Status.CompletionTime.Time) < markerFlushGracePeriod:
 				log.Info(ctx, "agent log has no marker yet; waiting for kubelet log flush",
 					"job", job.Name,
 					"sinceCompletion", time.Since(job.Status.CompletionTime.Time))

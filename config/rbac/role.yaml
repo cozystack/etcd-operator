@@ -8,6 +8,7 @@ rules:
   - ""
   resources:
   - configmaps
+  - services
   verbs:
   - create
   - delete
@@ -20,6 +21,7 @@ rules:
   - ""
   resources:
   - endpoints
+  - secrets
   verbs:
   - get
   - list
@@ -46,26 +48,6 @@ rules:
   - pods/log
   verbs:
   - get
-- apiGroups:
-  - ""
-  resources:
-  - secrets
-  verbs:
-  - get
-  - list
-  - watch
-- apiGroups:
-  - ""
-  resources:
-  - services
-  verbs:
-  - create
-  - delete
-  - get
-  - list
-  - patch
-  - update
-  - watch
 - apiGroups:
   - apps
   resources:
@@ -104,29 +86,6 @@ rules:
   - etcd.aenix.io
   resources:
   - etcdbackups
-  verbs:
-  - get
-  - list
-  - patch
-  - update
-  - watch
-- apiGroups:
-  - etcd.aenix.io
-  resources:
-  - etcdbackups/finalizers
-  verbs:
-  - update
-- apiGroups:
-  - etcd.aenix.io
-  resources:
-  - etcdbackups/status
-  verbs:
-  - get
-  - patch
-  - update
-- apiGroups:
-  - etcd.aenix.io
-  resources:
   - etcdbackupschedules
   verbs:
   - get
@@ -137,13 +96,17 @@ rules:
 - apiGroups:
   - etcd.aenix.io
   resources:
+  - etcdbackups/finalizers
   - etcdbackupschedules/finalizers
+  - etcdclusters/finalizers
   verbs:
   - update
 - apiGroups:
   - etcd.aenix.io
   resources:
+  - etcdbackups/status
   - etcdbackupschedules/status
+  - etcdclusters/status
   verbs:
   - get
   - patch
@@ -160,20 +123,6 @@ rules:
   - patch
   - update
   - watch
-- apiGroups:
-  - etcd.aenix.io
-  resources:
-  - etcdclusters/finalizers
-  verbs:
-  - update
-- apiGroups:
-  - etcd.aenix.io
-  resources:
-  - etcdclusters/status
-  verbs:
-  - get
-  - patch
-  - update
 - apiGroups:
   - policy
   resources:

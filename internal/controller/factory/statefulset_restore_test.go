@@ -71,11 +71,25 @@ var _ = Describe("StatefulSet restore init containers", func() {
 			DeferCleanup(k8sClient.Delete, sts)
 
 			Expect(sts.Spec.Template.Spec.InitContainers).To(BeEmpty())
+
+			// Without bootstrap.restore there must be no FSGroup
+			// override, since the restore-specific PodSecurityContext
+			// only exists to chgrp the freshly-provisioned PVC for the
+			// nonroot restore-agent. Asserting this locks the
+			// contract: future code that always sets FSGroup would
+			// silently change pod startup semantics (and the apparent
+			// uid/gid of every file etcd touches) for every cluster.
+			// The PodSecurityContext struct itself may be non-nil here
+			// because of strategic-merge with cluster.Spec.PodTemplate;
+			// what matters is that no FSGroup leaks in.
+			if sc := sts.Spec.Template.Spec.SecurityContext; sc != nil {
+				Expect(sc.FSGroup).To(BeNil())
+			}
 		})
 	})
 
 	Context("when bootstrap.restore with PVC source is set", func() {
-		It("should add two init containers and restore volumes", func() {
+		It("should add restore-agent init container and restore volumes", func() {
 			cluster := &etcdaenixiov1alpha1.EtcdCluster{
 				ObjectMeta: metav1.ObjectMeta{
 					GenerateName: "test-pvc-restore-",
@@ -112,9 +126,12 @@ var _ = Describe("StatefulSet restore init containers", func() {
 			DeferCleanup(k8sClient.Delete, sts)
 
 			By("Checking init containers count and names")
-			Expect(sts.Spec.Template.Spec.InitContainers).To(HaveLen(2))
+			// restore-agent now does both download AND etcdutl restore
+			// in one Go process. The legacy restore-datadir initContainer
+			// used /bin/sh -c which is unavailable in distroless etcd
+			// images, so it was dropped entirely.
+			Expect(sts.Spec.Template.Spec.InitContainers).To(HaveLen(1))
 			Expect(sts.Spec.Template.Spec.InitContainers[0].Name).To(Equal("restore-agent"))
-			Expect(sts.Spec.Template.Spec.InitContainers[1].Name).To(Equal("restore-datadir"))
 
 			By("Checking restore-agent container")
 			restoreAgent := sts.Spec.Template.Spec.InitContainers[0]
@@ -131,12 +148,13 @@ var _ = Describe("StatefulSet restore init containers", func() {
 			Expect(envMap["RESTORE_SOURCE"]).To(Equal("pvc"))
 			Expect(envMap["PVC_BACKUP_PATH"]).To(Equal("/backup/data/snapshot.db"))
 
-			By("Checking restore-datadir container")
-			restoreDatadir := sts.Spec.Template.Spec.InitContainers[1]
-			Expect(restoreDatadir.Image).To(Equal(etcdaenixiov1alpha1.DefaultEtcdImage))
-			Expect(restoreDatadir.Command).To(Equal([]string{"/bin/sh", "-c"}))
-			Expect(restoreDatadir.Args).To(HaveLen(1))
-			Expect(restoreDatadir.Args[0]).To(ContainSubstring("etcdutl snapshot restore"))
+			By("Checking restore-agent mounts the etcd data volume so etcdutl Restore() can write member/")
+			Expect(restoreAgent.VolumeMounts).To(ContainElement(
+				And(HaveField("Name", "data"), HaveField("MountPath", "/var/run/etcd"))))
+
+			By("Checking restore-agent has envFrom cluster-state ConfigMap")
+			Expect(restoreAgent.EnvFrom).To(HaveLen(1))
+			Expect(restoreAgent.EnvFrom[0].ConfigMapRef).NotTo(BeNil())
 
 			By("Checking restore volumes exist")
 			volumeNames := make([]string, 0)
@@ -145,11 +163,22 @@ var _ = Describe("StatefulSet restore init containers", func() {
 			}
 			Expect(volumeNames).To(ContainElement("restore-data"))
 			Expect(volumeNames).To(ContainElement("backup-source"))
+
+			By("Checking PodSecurityContext.FSGroup is 65532 for restore")
+			// Required so the nonroot restore-agent (uid 65532 from
+			// distroless/static:nonroot) can mkdir into a freshly
+			// provisioned PVC that kubelet mounts as root:root 0755.
+			// Without this the initContainer hard-fails with
+			// `mkdir /var/run/etcd/default.etcd: permission denied`
+			// on every restore.
+			Expect(sts.Spec.Template.Spec.SecurityContext).NotTo(BeNil())
+			Expect(sts.Spec.Template.Spec.SecurityContext.FSGroup).NotTo(BeNil())
+			Expect(*sts.Spec.Template.Spec.SecurityContext.FSGroup).To(Equal(int64(65532)))
 		})
 	})
 
 	Context("when bootstrap.restore with S3 source is set", func() {
-		It("should add two init containers with S3 env vars", func() {
+		It("should add restore-agent init container with S3 env vars", func() {
 			cluster := &etcdaenixiov1alpha1.EtcdCluster{
 				ObjectMeta: metav1.ObjectMeta{
 					GenerateName: "test-s3-restore-",
@@ -192,7 +221,7 @@ var _ = Describe("StatefulSet restore init containers", func() {
 			DeferCleanup(k8sClient.Delete, sts)
 
 			By("Checking init containers count")
-			Expect(sts.Spec.Template.Spec.InitContainers).To(HaveLen(2))
+			Expect(sts.Spec.Template.Spec.InitContainers).To(HaveLen(1))
 
 			By("Checking restore-agent S3 env vars")
 			restoreAgent := sts.Spec.Template.Spec.InitContainers[0]
@@ -267,6 +296,44 @@ var _ = Describe("StatefulSet restore init containers", func() {
 				}
 			}
 			Expect(envMap["PVC_BACKUP_PATH"]).To(Equal("/backup/data/snapshot.db"))
+		})
+	})
+
+	Context("when bootstrap.restore.source.pvc.subPath escapes the mount", func() {
+		It("should refuse to render the StatefulSet", func() {
+			// Mirrors the backup-side hardening: the restore SubPath
+			// is interpolated into PVC_BACKUP_PATH, so a `..` segment
+			// would let the agent read from a sibling of the mounted
+			// PVC. Read-only on the restore side and bounded by the
+			// pod's own filesystem, but the published spec is the
+			// place to reject it — same as backup destinations.
+			cluster := &etcdaenixiov1alpha1.EtcdCluster{
+				ObjectMeta: metav1.ObjectMeta{
+					GenerateName: "test-pvc-restore-bad-subpath-",
+					Namespace:    ns.GetName(),
+					UID:          types.UID(uuid.NewString()),
+				},
+				Spec: etcdaenixiov1alpha1.EtcdClusterSpec{
+					Replicas: ptr.To(int32(3)),
+					Bootstrap: &etcdaenixiov1alpha1.BootstrapSpec{
+						Restore: &etcdaenixiov1alpha1.RestoreSpec{
+							Source: etcdaenixiov1alpha1.BackupDestination{
+								PVC: &etcdaenixiov1alpha1.PVCBackupDestination{
+									ClaimName: "my-backup-pvc",
+									SubPath:   "../escape.db",
+								},
+							},
+						},
+					},
+				},
+			}
+			Expect(k8sClient.Create(ctx, cluster)).Should(Succeed())
+			Eventually(Get(cluster)).Should(Succeed())
+			DeferCleanup(k8sClient.Delete, cluster)
+
+			err := CreateOrUpdateStatefulSet(ctx, cluster, k8sClient, "operator:latest")
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("pvc.subPath"))
 		})
 	})
 })
