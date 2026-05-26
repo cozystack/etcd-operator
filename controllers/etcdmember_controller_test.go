@@ -961,6 +961,113 @@ func TestDiscoverMemberID_ExcludesNonVoterPeers(t *testing.T) {
 	}
 }
 
+// TestDiscoverMemberID_ExcludesSelfWhenVoterAvailable reproduces the dev4
+// wedge directly: the member whose ID we're discovering is ITSELF a freshly
+// added learner (Pod up, no MemberID, IsVoter=false). discoverMemberID must
+// not append our own client URL to the endpoint list while a voter peer is
+// reachable. Appending self lets clientv3's balancer round-robin MemberList
+// onto our own learner etcd, which returns "rpc not supported for learner",
+// stalling discovery past the progress deadline — exactly what kept the
+// third member from ever being added during the cert-manager TLS smoke.
+//
+// The earlier _ExcludesNonVoterPeers / _FallsBackToPeers tests miss this
+// because their target is a distinct member from the voter/learner peers,
+// so self being appended is never exercised against a learner.
+func TestDiscoverMemberID_ExcludesSelfWhenVoterAvailable(t *testing.T) {
+	ctx := context.Background()
+	now := metav1.Now()
+
+	cluster := &lll.EtcdCluster{ObjectMeta: metav1.ObjectMeta{Name: "test", Namespace: "ns"}}
+	voter := &lll.EtcdMember{
+		ObjectMeta: metav1.ObjectMeta{Name: "test-seed", Namespace: "ns", Labels: memberLabels("test", "test-seed")},
+		Spec:       lll.EtcdMemberSpec{ClusterName: "test"},
+		Status: lll.EtcdMemberStatus{
+			PodName: "test-seed", MemberID: "0000000000000001",
+			IsVoter:    true,
+			Conditions: []metav1.Condition{{Type: lll.MemberReady, Status: metav1.ConditionTrue, Reason: "PodReady", LastTransitionTime: now}},
+		},
+	}
+	// Target is the just-joined learner discovering its own ID.
+	target := &lll.EtcdMember{
+		ObjectMeta: metav1.ObjectMeta{Name: "test-learner", Namespace: "ns", Labels: memberLabels("test", "test-learner")},
+		Spec:       lll.EtcdMemberSpec{ClusterName: "test"},
+		Status: lll.EtcdMemberStatus{
+			PodName:    "test-learner", // Pod up, but no MemberID and IsVoter=false.
+			Conditions: []metav1.Condition{{Type: lll.MemberReady, Status: metav1.ConditionFalse, Reason: "DiscoveringMemberID", LastTransitionTime: now}},
+		},
+	}
+	c, _ := newTestClient(t, cluster, voter, target)
+
+	const wantID uint64 = 0xfeedface
+	fe := newFakeEtcd(0xdead,
+		&etcdserverpb.Member{ID: 0x1, Name: "test-seed", PeerURLs: []string{peerURL("http", "test-seed", "test", "ns")}},
+		&etcdserverpb.Member{ID: wantID, Name: "test-learner", PeerURLs: []string{peerURL("http", "test-learner", "test", "ns")}},
+	)
+	var captured []string
+	factory := func(_ context.Context, eps []string, _ *tls.Config) (EtcdClusterClient, error) {
+		captured = append([]string(nil), eps...)
+		return fe, nil
+	}
+	r := &EtcdMemberReconciler{Client: c, Scheme: testScheme(t), EtcdClientFactory: factory}
+
+	id, err := r.discoverMemberID(ctx, target)
+	if err != nil {
+		t.Fatalf("discoverMemberID: %v", err)
+	}
+	if id != wantID {
+		t.Fatalf("id = %x, want %x", id, wantID)
+	}
+	selfURL := clientURL("http", "test-learner", "test", "ns")
+	for _, ep := range captured {
+		if ep == selfURL {
+			t.Fatalf("discoverMemberID must not dial the learner's own URL while a voter is available; got %v", captured)
+		}
+	}
+	if len(captured) != 1 || captured[0] != clientURL("http", "test-seed", "test", "ns") {
+		t.Fatalf("expected only the voter's URL; got %v", captured)
+	}
+}
+
+// TestDiscoverMemberID_FallsBackToSelfWhenNoVoter pins the fallback the
+// above tightening must preserve: with no voter peer available (single-node
+// bootstrap — the seed discovering its own ID), self is the only endpoint
+// we can dial, and etcd serves MemberList fine on a single-member voter.
+func TestDiscoverMemberID_FallsBackToSelfWhenNoVoter(t *testing.T) {
+	ctx := context.Background()
+
+	cluster := &lll.EtcdCluster{ObjectMeta: metav1.ObjectMeta{Name: "test", Namespace: "ns"}}
+	// Only the seed exists; it has no MemberID yet and no voter peers.
+	seed := &lll.EtcdMember{
+		ObjectMeta: metav1.ObjectMeta{Name: "test-seed", Namespace: "ns", Labels: memberLabels("test", "test-seed")},
+		Spec:       lll.EtcdMemberSpec{ClusterName: "test"},
+		Status:     lll.EtcdMemberStatus{PodName: "test-seed"},
+	}
+	c, _ := newTestClient(t, cluster, seed)
+
+	const wantID uint64 = 0xabcdef
+	fe := newFakeEtcd(0xdead,
+		&etcdserverpb.Member{ID: wantID, Name: "test-seed", PeerURLs: []string{peerURL("http", "test-seed", "test", "ns")}},
+	)
+	var captured []string
+	factory := func(_ context.Context, eps []string, _ *tls.Config) (EtcdClusterClient, error) {
+		captured = append([]string(nil), eps...)
+		return fe, nil
+	}
+	r := &EtcdMemberReconciler{Client: c, Scheme: testScheme(t), EtcdClientFactory: factory}
+
+	id, err := r.discoverMemberID(ctx, seed)
+	if err != nil {
+		t.Fatalf("discoverMemberID: %v", err)
+	}
+	if id != wantID {
+		t.Fatalf("id = %x, want %x", id, wantID)
+	}
+	selfURL := clientURL("http", "test-seed", "test", "ns")
+	if len(captured) != 1 || captured[0] != selfURL {
+		t.Fatalf("expected self URL as sole fallback endpoint; got %v", captured)
+	}
+}
+
 // TestDiscoverMemberID_FallsBackToPeerURL covers blocker #2: in the window
 // between MemberAddAsLearner and etcd propagating the joiner's Name, the
 // only stable identifier we have is the peer URL. discoverMemberID must

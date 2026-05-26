@@ -883,11 +883,16 @@ func (r *EtcdMemberReconciler) discoverMemberID(ctx context.Context, member *lll
 		}
 		endpoints = append(endpoints, clientURL(scheme, m.Name, member.Spec.ClusterName, member.Namespace))
 	}
-	// Self last — used during single-node bootstrap when there are no
-	// other peers, or when no other peer is yet Ready. Etcd handles
-	// MemberList on a single-member-voter cluster fine; the learner
-	// rejection only fires when we route past a voter to a learner.
-	endpoints = append(endpoints, clientURL(scheme, member.Name, member.Spec.ClusterName, member.Namespace))
+	// Self is a *fallback*, not an always-on endpoint: dial our own etcd
+	// only when no voter peer is available (single-node bootstrap, or no
+	// other voter Ready yet). When this member is itself a still-learner
+	// being discovered, appending self alongside a voter lets clientv3's
+	// balancer round-robin MemberList onto our own etcd, which rejects it
+	// with "rpc not supported for learner" — wedging discovery even though
+	// a voter was in the list. Mirrors memberEndpoints' voter-or-fallback.
+	if len(endpoints) == 0 {
+		endpoints = append(endpoints, clientURL(scheme, member.Name, member.Spec.ClusterName, member.Namespace))
+	}
 
 	tlsCfg, err := r.memberTLSConfig(ctx, member)
 	if err != nil {
