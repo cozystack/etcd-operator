@@ -12,7 +12,7 @@ metadata:
   name: etcdcluster-viewer-role
 rules:
 - apiGroups:
-  - lllamnyp.su
+  - etcd-operator.cozystack.io
   resources:
   - etcdclusters
   verbs:
@@ -20,7 +20,7 @@ rules:
   - list
   - watch
 - apiGroups:
-  - lllamnyp.su
+  - etcd-operator.cozystack.io
   resources:
   - etcdclusters/status
   verbs:

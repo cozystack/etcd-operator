@@ -272,12 +272,12 @@ Every `EtcdCluster` gets a per-cluster `PodDisruptionBudget` (`policy/v1`) named
 
 ### Selector and budget
 
-- **Selector**: `etcd.lllamnyp.su/cluster=<name>, etcd.lllamnyp.su/role=voter`. Only voting members are protected; learners can be evicted freely (a learner-only loss does not affect quorum, and the operator's existing scale-up flow will re-add a learner if the cluster was mid-promotion).
+- **Selector**: `etcd-operator.cozystack.io/cluster=<name>, etcd-operator.cozystack.io/role=voter`. Only voting members are protected; learners can be evicted freely (a learner-only loss does not affect quorum, and the operator's existing scale-up flow will re-add a learner if the cluster was mid-promotion).
 - **MaxUnavailable**: `(votingMembers - 1) / 2`, integer-divided so the result floors automatically. For 1 voter → 0 (any disruption is quorum loss). For 3 → 1, 4 → 1, 5 → 2, 7 → 3.
 
 ### Where the `role=voter` label comes from
 
-The cluster controller is the source of truth for whether a member is a voter; it learns this from etcd's `MemberList` (specifically `IsLearner=false`). It writes `Status.IsVoter` onto each `EtcdMember`. The member controller reads `Status.IsVoter` and patches its Pod's `etcd.lllamnyp.su/role=voter` label accordingly. The new label is visible to the PDB by the next cluster-controller reconcile after promotion — three reconcile cycles end-to-end (cluster writes `IsVoter` → member patches Pod label → cluster's next pass picks up the new voter Pod via `reconcilePDB`). The controller boundaries stay clean: the cluster controller never patches a Pod directly.
+The cluster controller is the source of truth for whether a member is a voter; it learns this from etcd's `MemberList` (specifically `IsLearner=false`). It writes `Status.IsVoter` onto each `EtcdMember`. The member controller reads `Status.IsVoter` and patches its Pod's `etcd-operator.cozystack.io/role=voter` label accordingly. The new label is visible to the PDB by the next cluster-controller reconcile after promotion — three reconcile cycles end-to-end (cluster writes `IsVoter` → member patches Pod label → cluster's next pass picks up the new voter Pod via `reconcilePDB`). The controller boundaries stay clean: the cluster controller never patches a Pod directly.
 
 The seed is **pre-stamped** with `Status.IsVoter=true` at creation — it's never a learner, so the operator skips the round-trip and the Pod gets the role label on the very first reconcile, closing the bootstrap-window protection gap.
 

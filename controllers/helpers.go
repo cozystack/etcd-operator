@@ -7,18 +7,18 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	lll "github.com/lllamnyp/etcd-operator/api/v1alpha2"
+	lll "github.com/cozystack/etcd-operator/api/v1alpha2"
 )
 
 const (
 	// LabelCluster is the label key used to associate resources with an EtcdCluster.
-	LabelCluster = "etcd.lllamnyp.su/cluster"
+	LabelCluster = "etcd-operator.cozystack.io/cluster"
 
 	// LabelRole identifies the etcd-side raft role of a member's Pod. The
 	// only value the operator emits today is RoleVoter; learners carry no
 	// LabelRole at all so the per-cluster PodDisruptionBudget can select
 	// voters exclusively (its selector requires LabelRole=RoleVoter).
-	LabelRole = "etcd.lllamnyp.su/role"
+	LabelRole = "etcd-operator.cozystack.io/role"
 	RoleVoter = "voter"
 
 	// EtcdImage is the container image repository for etcd.
@@ -26,7 +26,7 @@ const (
 
 	// MemberFinalizer is placed on EtcdMember resources to ensure
 	// graceful removal from the etcd cluster before deletion.
-	MemberFinalizer = "etcd.lllamnyp.su/member-cleanup"
+	MemberFinalizer = "etcd-operator.cozystack.io/member-cleanup"
 )
 
 // peerURL returns the etcd peer URL for a member, using the headless Service DNS.

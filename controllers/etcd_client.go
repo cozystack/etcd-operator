@@ -22,7 +22,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	lll "github.com/lllamnyp/etcd-operator/api/v1alpha2"
+	lll "github.com/cozystack/etcd-operator/api/v1alpha2"
 )
 
 // EtcdClusterClient is the subset of the etcd v3 client used by the operator.

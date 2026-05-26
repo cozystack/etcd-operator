@@ -1,4 +1,4 @@
-module github.com/lllamnyp/etcd-operator
+module github.com/cozystack/etcd-operator
 
 go 1.25.0
 

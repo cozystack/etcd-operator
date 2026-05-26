@@ -1,6 +1,6 @@
 # etcd-operator
 
-A Kubernetes operator for running [etcd](https://etcd.io/) clusters. Status: **early alpha** — API is `lllamnyp.su/v1alpha2` and will likely change.
+A Kubernetes operator for running [etcd](https://etcd.io/) clusters. Status: **early alpha** — API is `etcd-operator.cozystack.io/v1alpha2` and will likely change.
 
 ## What it does
 
@@ -45,7 +45,7 @@ make docker-build docker-push deploy IMG=<your-registry>/etcd-operator:<tag>
 
 # 2. Create a cluster.
 cat <<'EOF' | kubectl apply -f -
-apiVersion: lllamnyp.su/v1alpha2
+apiVersion: etcd-operator.cozystack.io/v1alpha2
 kind: EtcdCluster
 metadata:
   name: my-etcd
@@ -58,8 +58,8 @@ spec:
 EOF
 
 # 3. Wait for ready and inspect.
-kubectl get etcdcluster.lllamnyp.su my-etcd -w
-POD=$(kubectl get pod -l etcd.lllamnyp.su/cluster=my-etcd \
+kubectl get etcdcluster.etcd-operator.cozystack.io my-etcd -w
+POD=$(kubectl get pod -l etcd-operator.cozystack.io/cluster=my-etcd \
   -o jsonpath='{.items[0].metadata.name}')
 kubectl exec -it "$POD" -- etcdctl --endpoints=http://localhost:2379 \
   member list -w table

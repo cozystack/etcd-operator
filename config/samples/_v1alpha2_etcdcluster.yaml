@@ -1,4 +1,4 @@
-apiVersion: lllamnyp.su/v1alpha2
+apiVersion: etcd-operator.cozystack.io/v1alpha2
 kind: EtcdCluster
 metadata:
   name: etcdcluster-sample

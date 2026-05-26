@@ -4,9 +4,9 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.18.0
-  name: etcdclusters.lllamnyp.su
+  name: etcdclusters.etcd-operator.cozystack.io
 spec:
-  group: lllamnyp.su
+  group: etcd-operator.cozystack.io
   names:
     kind: EtcdCluster
     listKind: EtcdClusterList
@@ -703,7 +703,7 @@ spec:
                 type: integer
               selector:
                 description: |-
-                  Selector is the label-selector form ("etcd.lllamnyp.su/cluster=<name>")
+                  Selector is the label-selector form ("etcd-operator.cozystack.io/cluster=<name>")
                   matching every Pod owned by this cluster. Surfaced for the /scale
                   subresource — the VPA admission controller reads it via Scales().Get()
                   to know which Pods to inject recommendations into. Plain users won't

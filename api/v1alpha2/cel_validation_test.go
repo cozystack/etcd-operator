@@ -22,7 +22,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
 
-	lll "github.com/lllamnyp/etcd-operator/api/v1alpha2"
+	lll "github.com/cozystack/etcd-operator/api/v1alpha2"
 )
 
 // The four CEL XValidation rules on EtcdClusterSpec, end-to-end against
@@ -172,7 +172,7 @@ func TestCEL_StorageMustBeNonZero_IntegerInput(t *testing.T) {
 
 	u := &unstructured.Unstructured{}
 	u.SetGroupVersionKind(schema.GroupVersionKind{
-		Group:   "lllamnyp.su",
+		Group:   "etcd-operator.cozystack.io",
 		Version: "v1alpha2",
 		Kind:    "EtcdCluster",
 	})

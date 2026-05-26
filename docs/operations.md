@@ -8,25 +8,25 @@ The two queries you'll use most:
 
 ```sh
 # Cluster-level view: replicas, ready count, cluster ID, conditions.
-kubectl get etcdcluster.lllamnyp.su -A
-kubectl get etcdcluster.lllamnyp.su <name> -n <ns> -o yaml
+kubectl get etcdcluster.etcd-operator.cozystack.io -A
+kubectl get etcdcluster.etcd-operator.cozystack.io <name> -n <ns> -o yaml
 
 # Member-level view: per-member bootstrap flag, dormancy, ready state.
-kubectl get etcdmember.lllamnyp.su -n <ns> -o custom-columns=\
+kubectl get etcdmember.etcd-operator.cozystack.io -n <ns> -o custom-columns=\
 'NAME:.metadata.name,BOOTSTRAP:.spec.bootstrap,DORMANT:.spec.dormant,READY:.status.conditions[?(@.type=="Ready")].status,MEMBERID:.status.memberID'
 ```
 
 Member names are apiserver-assigned random suffixes (`<cluster>-<5-char>`); don't hard-code them in scripts. Always use the cluster label:
 
 ```sh
-kubectl get pod -l etcd.lllamnyp.su/cluster=<cluster> -n <ns>
-kubectl get pvc -l etcd.lllamnyp.su/cluster=<cluster> -n <ns>
+kubectl get pod -l etcd-operator.cozystack.io/cluster=<cluster> -n <ns>
+kubectl get pvc -l etcd-operator.cozystack.io/cluster=<cluster> -n <ns>
 ```
 
 To talk to etcd directly, pick any Pod via the label and exec:
 
 ```sh
-POD=$(kubectl get pod -l etcd.lllamnyp.su/cluster=<cluster> -n <ns> \
+POD=$(kubectl get pod -l etcd-operator.cozystack.io/cluster=<cluster> -n <ns> \
   -o jsonpath='{.items[0].metadata.name}')
 kubectl exec -n <ns> "$POD" -- etcdctl --endpoints=http://localhost:2379 \
   endpoint health --cluster
@@ -39,21 +39,21 @@ The operator commits to a target on the first reconcile that sees the new spec �
 ### Scale up
 
 ```sh
-kubectl patch etcdcluster.lllamnyp.su <name> -n <ns> --type=merge \
+kubectl patch etcdcluster.etcd-operator.cozystack.io <name> -n <ns> --type=merge \
   -p '{"spec":{"replicas":5}}'
 ```
 
 The operator adds one member at a time as a learner, waits for it to report `Ready=True`, then promotes it before adding the next. Each step is gated on the previous learner reaching `Ready`. On a fresh cluster with no data each step completes in well under a second on etcd's side and the operator's reconcile cadence (~30 s requeue) dominates wall time; on clusters with non-trivial data volumes the learner-sync time can become the dominant factor (etcd has to ship the data dir before `MemberPromote` is accepted). Watch progress with:
 
 ```sh
-kubectl get etcdcluster.lllamnyp.su <name> -n <ns> \
+kubectl get etcdcluster.etcd-operator.cozystack.io <name> -n <ns> \
   -o jsonpath='{.status.readyMembers}/{.status.observed.replicas}{"\n"}'
 ```
 
 ### Scale down
 
 ```sh
-kubectl patch etcdcluster.lllamnyp.su <name> -n <ns> --type=merge \
+kubectl patch etcdcluster.etcd-operator.cozystack.io <name> -n <ns> --type=merge \
   -p '{"spec":{"replicas":3}}'
 ```
 
@@ -62,7 +62,7 @@ Picks the most-recently-created member as the victim (`CreationTimestamp` DESC, 
 ### Pause (scale to 0)
 
 ```sh
-kubectl patch etcdcluster.lllamnyp.su <name> -n <ns> --type=merge \
+kubectl patch etcdcluster.etcd-operator.cozystack.io <name> -n <ns> --type=merge \
   -p '{"spec":{"replicas":0}}'
 ```
 
@@ -72,31 +72,31 @@ Observable state once paused:
 
 ```sh
 # One EtcdMember CR with spec.dormant=true:
-kubectl get etcdmember.lllamnyp.su -n <ns> \
+kubectl get etcdmember.etcd-operator.cozystack.io -n <ns> \
   -o custom-columns=NAME:.metadata.name,DORMANT:.spec.dormant
 
 # One PVC remaining (data-<member-name>):
-kubectl get pvc -l etcd.lllamnyp.su/cluster=<cluster> -n <ns>
+kubectl get pvc -l etcd-operator.cozystack.io/cluster=<cluster> -n <ns>
 
 # No Pods:
-kubectl get pod -l etcd.lllamnyp.su/cluster=<cluster> -n <ns>
+kubectl get pod -l etcd-operator.cozystack.io/cluster=<cluster> -n <ns>
 
 # Available=False, Reason=Paused, message names the PVC:
-kubectl get etcdcluster.lllamnyp.su <name> -n <ns> \
+kubectl get etcdcluster.etcd-operator.cozystack.io <name> -n <ns> \
   -o jsonpath='{.status.conditions[?(@.type=="Available")]}{"\n"}'
 ```
 
 ### Resume (scale to 1+)
 
 ```sh
-kubectl patch etcdcluster.lllamnyp.su <name> -n <ns> --type=merge \
+kubectl patch etcdcluster.etcd-operator.cozystack.io <name> -n <ns> --type=merge \
   -p '{"spec":{"replicas":3}}'
 ```
 
 The cluster controller spots the dormant member, patches `spec.dormant=false`, and the member controller's next pass recreates the Pod against the existing PVC. Etcd reads the data dir and resumes with the **same cluster ID and member ID** as before the pause — verify with:
 
 ```sh
-kubectl get etcdcluster.lllamnyp.su <name> -n <ns> -o jsonpath='{.status.clusterID}'
+kubectl get etcdcluster.etcd-operator.cozystack.io <name> -n <ns> -o jsonpath='{.status.clusterID}'
 # Should match the value you saw before the pause.
 ```
 
@@ -118,9 +118,9 @@ Expected when `spec.replicas=0`. Inspect the message for whether data is preserv
 Less than half of `observed.replicas` are ready. The cluster cannot serve writes. Check:
 
 ```sh
-kubectl get etcdmember.lllamnyp.su -n <ns> \
+kubectl get etcdmember.etcd-operator.cozystack.io -n <ns> \
   -o custom-columns=NAME:.metadata.name,READY:.status.conditions[?(@.type=="Ready")].status
-kubectl get pod -l etcd.lllamnyp.su/cluster=<cluster> -n <ns> -o wide
+kubectl get pod -l etcd-operator.cozystack.io/cluster=<cluster> -n <ns> -o wide
 kubectl describe pod -n <ns> <unhealthy-pod>
 ```
 
@@ -133,9 +133,9 @@ If quorum is recoverable (Pods come back), the cluster heals on its own. If a me
 Bootstrap discovery couldn't dial the seed. The message comes via `stableErrorMessage(err)` which strips per-call variable portions (timestamps, port numbers), so the same root cause reads consistently across retries.
 
 ```sh
-kubectl get etcdcluster.lllamnyp.su <name> -n <ns> \
+kubectl get etcdcluster.etcd-operator.cozystack.io <name> -n <ns> \
   -o jsonpath='{.status.conditions[?(@.type=="Available")].message}{"\n"}'
-kubectl get pod -l etcd.lllamnyp.su/cluster=<cluster> -n <ns>
+kubectl get pod -l etcd-operator.cozystack.io/cluster=<cluster> -n <ns>
 kubectl logs -n <ns> <seed-pod>
 ```
 
@@ -154,9 +154,9 @@ kubectl run dns-debug --rm -it --image=busybox -n <ns> -- \
 Terminal. The deadline expired before `clusterID` was latched. The partial seed's Pod carries an `--initial-cluster` flag baked in; the operator cannot change it in-place. Recovery is:
 
 ```sh
-kubectl delete etcdcluster.lllamnyp.su <name> -n <ns>
+kubectl delete etcdcluster.etcd-operator.cozystack.io <name> -n <ns>
 # Wait for all dependents to be GC'd:
-kubectl get etcdmember,pvc -l etcd.lllamnyp.su/cluster=<cluster> -n <ns>
+kubectl get etcdmember,pvc -l etcd-operator.cozystack.io/cluster=<cluster> -n <ns>
 # Once that returns no resources, re-create.
 kubectl apply -f <your-cluster-manifest>.yaml
 ```
@@ -169,12 +169,12 @@ Terminal. The deadline expired after bootstrap (the cluster itself is healthy; o
 
 ```sh
 # Inspect what's stuck:
-kubectl get etcdcluster.lllamnyp.su <name> -n <ns> -o yaml
+kubectl get etcdcluster.etcd-operator.cozystack.io <name> -n <ns> -o yaml
 # observed shows what the operator was trying to reach;
 # spec shows what you originally asked for.
 
 # Edit spec to something sane (often: revert to the previous working value):
-kubectl edit etcdcluster.lllamnyp.su <name> -n <ns>
+kubectl edit etcdcluster.etcd-operator.cozystack.io <name> -n <ns>
 ```
 
 The next reconcile notices `spec != observed`, treats your edit as the intervention signal, snapshots the new spec into `observed`, sets a fresh deadline, and resumes.
@@ -184,22 +184,22 @@ The next reconcile notices `spec != observed`, treats your edit as the intervent
 The seed `EtcdMember` CR exists but the member controller hasn't yet created its Pod — this is the gap between the cluster controller creating the CR and the member controller's next reconcile pass. `kubectl describe pod` is **not** useful here: there is no Pod yet, so it returns "not found" and obscures the actual state. Inspect the CR and the namespace's events instead:
 
 ```sh
-SEED=$(kubectl get etcdmember.lllamnyp.su -n <ns> \
+SEED=$(kubectl get etcdmember.etcd-operator.cozystack.io -n <ns> \
   -o jsonpath='{.items[?(@.spec.bootstrap==true)].metadata.name}')
-kubectl describe etcdmember.lllamnyp.su -n <ns> "$SEED"
+kubectl describe etcdmember.etcd-operator.cozystack.io -n <ns> "$SEED"
 kubectl get events -n <ns> --field-selector involvedObject.name=$SEED
 ```
 
 In normal operation this state clears within one or two reconcile cycles. If it persists, the operator controller is wedged — check its logs (see [Operator logs](#operator-logs)).
 
-Once the seed Pod is created, `WaitingForSeed` clears and any *Pod*-side problems (`StorageClass` missing, image-pull failure, `PodSecurity` admission rejection of the `restricted`-compatible spec) surface separately. At that point `kubectl describe pod -l etcd.lllamnyp.su/cluster=<cluster> -n <ns>` is the right tool.
+Once the seed Pod is created, `WaitingForSeed` clears and any *Pod*-side problems (`StorageClass` missing, image-pull failure, `PodSecurity` admission rejection of the `restricted`-compatible spec) surface separately. At that point `kubectl describe pod -l etcd-operator.cozystack.io/cluster=<cluster> -n <ns>` is the right tool.
 
 ## Forcing escalation: shortening the deadline
 
 The default `progressDeadlineSeconds` is 600 (10 minutes). If a reconcile is wedged and you don't want to wait out the window, force the deadline now:
 
 ```sh
-kubectl patch etcdcluster.lllamnyp.su <name> -n <ns> --subresource=status --type=merge \
+kubectl patch etcdcluster.etcd-operator.cozystack.io <name> -n <ns> --subresource=status --type=merge \
   -p "{\"status\":{\"progressDeadline\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ -d '1 second ago')\"}}"
 ```
 
@@ -213,10 +213,10 @@ Manual recovery:
 
 ```sh
 # 1. Identify the broken member.
-kubectl get etcdmember.lllamnyp.su -n <ns>
+kubectl get etcdmember.etcd-operator.cozystack.io -n <ns>
 # 2. Delete it — the finalizer runs MemberRemove against peers, then GC takes
 #    the Pod and PVC. Quorum holds because we remove before adding.
-kubectl delete etcdmember.lllamnyp.su <broken-member> -n <ns>
+kubectl delete etcdmember.etcd-operator.cozystack.io <broken-member> -n <ns>
 # 3. The cluster controller's next reconcile observes current < desired and
 #    scales up automatically — a new member is added with GenerateName and
 #    fresh storage.
@@ -229,7 +229,7 @@ This sequence preserves quorum if you have an odd number of voters and only one 
 The operator only surfaces what it needs for its own decisions. For deeper inspection talk to etcd:
 
 ```sh
-POD=$(kubectl get pod -l etcd.lllamnyp.su/cluster=<cluster> -n <ns> \
+POD=$(kubectl get pod -l etcd-operator.cozystack.io/cluster=<cluster> -n <ns> \
   -o jsonpath='{.items[0].metadata.name}')
 
 # Cluster ID, leader, members:
@@ -281,7 +281,7 @@ Opt-in via `spec.storage.medium: Memory`. Each member's data dir is a tmpfs `emp
 
 ```sh
 cat <<'EOF' | kubectl apply -f -
-apiVersion: lllamnyp.su/v1alpha2
+apiVersion: etcd-operator.cozystack.io/v1alpha2
 kind: EtcdCluster
 metadata:
   name: my-mem-etcd
@@ -302,7 +302,7 @@ EOF
 The Pod's volume tells you:
 
 ```sh
-kubectl get pod -l etcd.lllamnyp.su/cluster=my-mem-etcd -n default \
+kubectl get pod -l etcd-operator.cozystack.io/cluster=my-mem-etcd -n default \
   -o jsonpath='{.items[0].spec.volumes[?(@.name=="data")]}' | jq
 # Expect: {"emptyDir": {"medium": "Memory", "sizeLimit": "256Mi"}, ...}
 ```
@@ -310,7 +310,7 @@ kubectl get pod -l etcd.lllamnyp.su/cluster=my-mem-etcd -n default \
 And inside the Pod:
 
 ```sh
-POD=$(kubectl get pod -l etcd.lllamnyp.su/cluster=my-mem-etcd -n default \
+POD=$(kubectl get pod -l etcd-operator.cozystack.io/cluster=my-mem-etcd -n default \
   -o jsonpath='{.items[0].metadata.name}')
 kubectl exec -n default "$POD" -- mount | grep /var/lib/etcd
 # Expect: tmpfs on /var/lib/etcd type tmpfs (...)
@@ -319,7 +319,7 @@ kubectl exec -n default "$POD" -- mount | grep /var/lib/etcd
 No PVCs should exist for the cluster:
 
 ```sh
-kubectl get pvc -l etcd.lllamnyp.su/cluster=my-mem-etcd -n default
+kubectl get pvc -l etcd-operator.cozystack.io/cluster=my-mem-etcd -n default
 # No resources found.
 ```
 
@@ -336,7 +336,7 @@ The `PodDisruptionBudget` is auto-emitted now (see [Draining nodes](#draining-no
          requiredDuringSchedulingIgnoredDuringExecution:
            - labelSelector:
                matchLabels:
-                 etcd.lllamnyp.su/cluster: my-mem-etcd
+                 etcd-operator.cozystack.io/cluster: my-mem-etcd
              topologyKey: kubernetes.io/hostname
    ```
 
@@ -368,7 +368,7 @@ The operator detects Pod loss via `Status.PodUID`. The two scenarios:
 Watch the auto-replacement happen:
 
 ```sh
-kubectl get etcdmember.lllamnyp.su -n default -w
+kubectl get etcdmember.etcd-operator.cozystack.io -n default -w
 # Original: my-mem-etcd-abc12, my-mem-etcd-def34, my-mem-etcd-ghi56.
 # Force-delete one Pod: kubectl delete pod -n default my-mem-etcd-abc12
 # Observe the EtcdMember CR get deleted, a new one with a fresh GenerateName
@@ -380,7 +380,7 @@ kubectl get etcdmember.lllamnyp.su -n default -w
 Setting `spec.replicas: 0` on a memory cluster is **rejected by the apiserver** (CEL validation rule on `EtcdClusterSpec`):
 
 ```
-kubectl patch etcdcluster.lllamnyp.su my-mem-etcd -n default --type=merge \
+kubectl patch etcdcluster.etcd-operator.cozystack.io my-mem-etcd -n default --type=merge \
   -p '{"spec":{"replicas":0}}'
 # The EtcdCluster "my-mem-etcd" is invalid: spec: Invalid value: ...:
 #   spec.replicas=0 with spec.storage.medium=Memory is unsupported: ...
@@ -409,13 +409,13 @@ That's the intended behaviour — your drain just refused to break quorum. Resol
 
 ### Which Pods are voters
 
-Voter Pods carry the label `etcd.lllamnyp.su/role=voter`. Learners do not. To find them:
+Voter Pods carry the label `etcd-operator.cozystack.io/role=voter`. Learners do not. To find them:
 
 ```sh
-kubectl get pod -l etcd.lllamnyp.su/cluster=<cluster>,etcd.lllamnyp.su/role=voter -n <ns>
+kubectl get pod -l etcd-operator.cozystack.io/cluster=<cluster>,etcd-operator.cozystack.io/role=voter -n <ns>
 ```
 
-Cross-reference against `kubectl get etcdmember.lllamnyp.su -n <ns>` — voters there have `Status.IsVoter: true` (written by the cluster controller from etcd's `MemberList`).
+Cross-reference against `kubectl get etcdmember.etcd-operator.cozystack.io -n <ns>` — voters there have `Status.IsVoter: true` (written by the cluster controller from etcd's `MemberList`).
 
 ### Why drains might block during scale events
 
@@ -428,14 +428,14 @@ If you're doing a planned rolling node maintenance, scale down to the resilient 
 ### Find the dormant member
 
 ```sh
-kubectl get etcdmember.lllamnyp.su -n <ns> \
+kubectl get etcdmember.etcd-operator.cozystack.io -n <ns> \
   -o jsonpath='{range .items[?(@.spec.dormant==true)]}{.metadata.name}{"\n"}{end}'
 ```
 
 ### Find the seed of a running cluster
 
 ```sh
-kubectl get etcdmember.lllamnyp.su -n <ns> \
+kubectl get etcdmember.etcd-operator.cozystack.io -n <ns> \
   -o jsonpath='{range .items[?(@.spec.bootstrap==true)]}{.metadata.name}{"\n"}{end}'
 ```
 
@@ -444,7 +444,7 @@ Note: the seed has no special operational role post-bootstrap — see [concepts]
 ### Tail logs from the etcd leader
 
 ```sh
-POD=$(kubectl get pod -l etcd.lllamnyp.su/cluster=<cluster> -n <ns> \
+POD=$(kubectl get pod -l etcd-operator.cozystack.io/cluster=<cluster> -n <ns> \
   -o jsonpath='{.items[0].metadata.name}')
 LEADER=$(kubectl exec -n <ns> "$POD" -- etcdctl \
   --endpoints=http://localhost:2379 endpoint status --cluster -w json \
@@ -511,7 +511,7 @@ kubectl create secret generic my-cluster-peer-tls -n <ns> \
 Then reference them in the cluster spec:
 
 ```yaml
-apiVersion: lllamnyp.su/v1alpha2
+apiVersion: etcd-operator.cozystack.io/v1alpha2
 kind: EtcdCluster
 metadata:
   name: my-cluster
@@ -538,7 +538,7 @@ Server-TLS-only (encryption without client identity) drops the `operatorClientSe
 The hardcoded `--endpoints=http://localhost:2379` examples elsewhere in this doc become:
 
 ```sh
-POD=$(kubectl get pod -l etcd.lllamnyp.su/cluster=<cluster> -n <ns> \
+POD=$(kubectl get pod -l etcd-operator.cozystack.io/cluster=<cluster> -n <ns> \
   -o jsonpath='{.items[0].metadata.name}')
 
 # Stage a client cert+key inside the Pod for an exec-side etcdctl. Any
