@@ -331,8 +331,12 @@ func (r *EtcdClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 			// surface the error so a missing/typo'd TLS Secret is
 			// debuggable without rg-ing through silent retries.
 			log.Error(tlsErr, "cannot build operator TLS config for promote-after-converged; skipping promotion this pass")
+		} else if user, pass, _, credErr := resolveEtcdCredentials(ctx, r.Client, cluster); credErr != nil {
+			// Same best-effort stance as the TLS-config error above: log and
+			// skip promotion, let updateStatus do its work, retry next pass.
+			log.Error(credErr, "cannot resolve etcd credentials for promote-after-converged; skipping promotion this pass")
 		} else {
-			etcdClient, err := r.EtcdClientFactory(ctx, endpoints, tlsCfg)
+			etcdClient, err := r.EtcdClientFactory(ctx, endpoints, tlsCfg, user, pass)
 			if err != nil {
 				log.Error(err, "cannot dial etcd for promote-after-converged; skipping promotion this pass", "endpoints", endpoints)
 			} else {
@@ -349,6 +353,18 @@ func (r *EtcdClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		// Fall through to updateStatus — the next reconcile will retry
 		// promotion. This matches scaleUp's "log and continue" behaviour
 		// when the etcd client can't be built.
+	}
+
+	// ── Enable auth once converged ─────────────────────────────────────
+	// Provision the root user/role and turn on authentication, but only on
+	// a healthy, fully-converged cluster (all desired members ready, quorum
+	// formed). Gating on convergence keeps the auth flip from racing in-
+	// flight scale-up dials. No-op (and skipped) once status.authEnabled
+	// has latched.
+	if res, err := r.reconcileAuth(ctx, cluster, running); err != nil {
+		return ctrl.Result{}, err
+	} else if res != nil {
+		return *res, nil
 	}
 
 	// ── Steady state ───────────────────────────────────────────────────
@@ -516,7 +532,11 @@ func (r *EtcdClusterReconciler) tryDiscoverCluster(
 	if err != nil {
 		return r.surfaceDiscoveryError(ctx, cluster, "operator TLS config", err)
 	}
-	etcdClient, err := r.EtcdClientFactory(ctx, endpoints, tlsCfg)
+	// Bootstrap-window dial: discovery only runs while ClusterID is unset,
+	// strictly before reconcileAuth can turn auth on, so we always dial
+	// anonymously here (resolveEtcdCredentials would return empty creds too,
+	// since status.authEnabled cannot be true yet).
+	etcdClient, err := r.EtcdClientFactory(ctx, endpoints, tlsCfg, "", "")
 	if err != nil {
 		return r.surfaceDiscoveryError(ctx, cluster, "etcd client construction failed", err)
 	}
@@ -670,7 +690,12 @@ func (r *EtcdClusterReconciler) scaleUp(
 		log.Error(err, "cannot build operator TLS config for scale-up")
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 	}
-	etcdClient, err := r.EtcdClientFactory(ctx, endpoints, tlsCfg)
+	user, pass, _, err := resolveEtcdCredentials(ctx, r.Client, cluster)
+	if err != nil {
+		log.Error(err, "cannot resolve etcd credentials for scale-up")
+		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+	}
+	etcdClient, err := r.EtcdClientFactory(ctx, endpoints, tlsCfg, user, pass)
 	if err != nil {
 		log.Error(err, "cannot connect to etcd for scale-up", "endpoints", endpoints)
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
@@ -974,6 +999,141 @@ func allMembersReady(members []lll.EtcdMember) bool {
 		}
 	}
 	return true
+}
+
+// ── Auth ───────────────────────────────────────────────────────────────────
+
+// reconcileAuth provisions the single root user/role and turns on etcd
+// authentication once the cluster has converged to a healthy quorum. It is
+// idempotent and latches status.authEnabled once auth is on; subsequent calls
+// short-circuit. Returns a non-nil *ctrl.Result when the caller should return
+// it (transient retry, or a requeue so the next pass dials with credentials).
+//
+// The etcd user is "root"; its password is read from the user-referenced
+// credentials Secret (readRootPassword), never hardcoded. The "root" role is
+// built into etcd, so UserAdd + UserGrantRole + AuthEnable is the whole
+// provisioning sequence — no RoleAdd.
+func (r *EtcdClusterReconciler) reconcileAuth(ctx context.Context, cluster *lll.EtcdCluster, running []lll.EtcdMember) (*ctrl.Result, error) {
+	log := log.FromContext(ctx)
+
+	// Gates. Anything that isn't a converged, healthy, auth-wanting cluster
+	// that hasn't already had auth enabled is a clean no-op.
+	if cluster.Spec.Security == nil || !cluster.Spec.Security.EnableAuth {
+		return nil, nil
+	}
+	if cluster.Status.AuthEnabled {
+		return nil, nil
+	}
+	if cluster.Status.Observed == nil || cluster.Status.ClusterID == "" {
+		return nil, nil
+	}
+	desired := cluster.Status.Observed.Replicas
+	current := int32(len(running))
+	if desired == 0 || current != desired || !allMembersReady(running) {
+		// Not converged yet — wait for a later reconcile.
+		return nil, nil
+	}
+
+	endpoints := memberEndpoints(clusterClientScheme(cluster), running, cluster.Name, cluster.Namespace)
+	tlsCfg, err := buildOperatorTLSConfig(ctx, r.Client, cluster)
+	if err != nil {
+		log.Error(err, "cannot build operator TLS config for auth-enable; retrying")
+		return &ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+	}
+
+	// Dial with whatever resolveEtcdCredentials says — pre-latch that is
+	// empty (anonymous), which is correct because auth is not on yet.
+	user, pass, _, err := resolveEtcdCredentials(ctx, r.Client, cluster)
+	if err != nil {
+		log.Error(err, "cannot resolve etcd credentials for auth-enable; retrying")
+		return &ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+	}
+	c, err := r.EtcdClientFactory(ctx, endpoints, tlsCfg, user, pass)
+	if err != nil {
+		log.Error(err, "cannot dial etcd for auth-enable; retrying", "endpoints", endpoints)
+		return &ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+	}
+	defer c.Close()
+
+	st, err := c.AuthStatus(ctx)
+	if err != nil {
+		// On etcd builds that guard AuthStatus behind auth, an anonymous
+		// probe against an already-auth-enabled cluster fails demanding
+		// credentials. Treat that as "auth is already on" and latch — this
+		// also recovers the crash-after-AuthEnable-before-status-write case.
+		if isAuthRequiredErr(err) {
+			return r.latchAuthEnabled(ctx, cluster)
+		}
+		log.Error(err, "cannot read etcd auth status; retrying", "endpoints", endpoints)
+		return &ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+	}
+
+	if !st.Enabled {
+		// The root password comes from the user-referenced Secret. Read it
+		// here (not via resolveEtcdCredentials, which is gated on the not-yet-
+		// latched status.authEnabled) so UserAdd provisions the same password
+		// the operator will later authenticate with.
+		rootPassword, err := readRootPassword(ctx, r.Client, cluster)
+		if err != nil {
+			log.Error(err, "cannot read root credentials secret for auth-enable; retrying")
+			return &ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+		}
+		if _, err := c.UserAdd(ctx, "root", rootPassword); err != nil && !isAuthAlreadyExists(err) {
+			log.Error(err, "cannot create etcd root user; retrying")
+			return &ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+		}
+		// Granting an already-held role is idempotent in etcd (it returns
+		// success, not an error), so any error here is a genuine failure —
+		// surface it and retry rather than tolerating a sentinel that etcd
+		// never emits.
+		if _, err := c.UserGrantRole(ctx, "root", "root"); err != nil {
+			log.Error(err, "cannot grant root role to etcd root user; retrying")
+			return &ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+		}
+		if _, err := c.AuthEnable(ctx); err != nil {
+			log.Error(err, "cannot enable etcd auth; retrying")
+			return &ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+		}
+		log.Info("etcd authentication enabled", "cluster", cluster.Name)
+	}
+
+	return r.latchAuthEnabled(ctx, cluster)
+}
+
+// latchAuthEnabled records status.authEnabled=true and requeues so the next
+// reconcile dials with credentials. A conflicting status write is retried.
+func (r *EtcdClusterReconciler) latchAuthEnabled(ctx context.Context, cluster *lll.EtcdCluster) (*ctrl.Result, error) {
+	if cluster.Status.AuthEnabled {
+		return &ctrl.Result{Requeue: true}, nil
+	}
+	orig := cluster.DeepCopy()
+	cluster.Status.AuthEnabled = true
+	if err := r.Status().Patch(ctx, cluster, client.MergeFrom(orig)); err != nil {
+		if errors.IsConflict(err) {
+			return &ctrl.Result{Requeue: true}, nil
+		}
+		return nil, err
+	}
+	return &ctrl.Result{Requeue: true}, nil
+}
+
+// etcd returns these as gRPC status errors; clientv3 surfaces the server-side
+// message verbatim. We match on the message substring rather than importing
+// rpctypes so the operator stays decoupled from the gRPC error wrapping.
+func isAuthAlreadyExists(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "user name already exists")
+}
+
+// isAuthRequiredErr reports whether err is the server demanding credentials —
+// i.e. auth is already enabled and the anonymous dial was rejected.
+func isAuthRequiredErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "user name is empty") ||
+		strings.Contains(msg, "permission denied") ||
+		strings.Contains(msg, "insufficient credentials")
 }
 
 // ── Scale down ───────────────────────────────────────────────────────────

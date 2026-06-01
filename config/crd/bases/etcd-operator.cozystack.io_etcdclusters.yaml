@@ -162,6 +162,56 @@ spec:
                       More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
                     type: object
                 type: object
+              security:
+                description: |-
+                  Security configures in-etcd authentication. Absent means no auth
+                  (anonymous access on the client API, subject only to TLS). See
+                  SecuritySpec for the single-user parity model and its constraints
+                  (requires spec.tls.client; immutable post-create).
+                properties:
+                  enableAuth:
+                    description: |-
+                      EnableAuth turns on etcd authentication. The operator provisions the
+                      root user + role and runs `auth enable` once the cluster has
+                      converged to a healthy quorum (see status.authEnabled).
+
+                      Requires spec.tls.client to be set: auth credentials must not cross
+                      a plaintext wire. Immutable post-create — enabling or disabling auth
+                      on a live cluster mutates persisted data-store state in lockstep with
+                      the operator's own client, which this version does not roll back, so
+                      the field is frozen the same way spec.tls is. Delete and recreate to
+                      change it.
+                    type: boolean
+                  rootCredentialsSecretRef:
+                    description: |-
+                      RootCredentialsSecretRef references a Secret in the cluster's
+                      namespace holding the etcd root user's credentials. Required when
+                      EnableAuth is true (CEL-enforced).
+
+                      The Secret is expected to be of type kubernetes.io/basic-auth: the
+                      operator reads the `password` key and provisions the etcd `root` user
+                      with it. The `username` key is for consumers (e.g. a Kamaji DataStore
+                      pointing at the same Secret) and must be "root" — the etcd user is
+                      always root, since etcd requires a user named root to enable auth.
+
+                      Immutable post-create (part of the immutable security subtree). The
+                      operator reads the password on every dial; changing the Secret's
+                      contents after auth is enabled would desync the operator from etcd —
+                      in-place password rotation is not supported in this version, recreate
+                      to change.
+                    properties:
+                      name:
+                        default: ""
+                        description: |-
+                          Name of the referent.
+                          This field is effectively required, but due to backwards compatibility is
+                          allowed to be empty. Instances of this type with an empty value here are
+                          almost certainly wrong.
+                          More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                        type: string
+                    type: object
+                    x-kubernetes-map-type: atomic
+                type: object
               storage:
                 default:
                   medium: ""
@@ -455,9 +505,34 @@ spec:
                 PVCs); delete and recreate the cluster to change the StorageClass
               rule: '!has(self.storage.storageClassName) || !has(oldSelf.storage.storageClassName)
                 || self.storage.storageClassName == oldSelf.storage.storageClassName'
+            - message: spec.security cannot be added to or removed from an existing
+                cluster; delete and recreate
+              rule: has(self.security) == has(oldSelf.security)
+            - message: spec.security is immutable post-create; delete and recreate
+                the cluster to change auth configuration
+              rule: '!has(self.security) || !has(oldSelf.security) || self.security
+                == oldSelf.security'
+            - message: spec.security.enableAuth requires spec.tls.client (auth credentials
+                must not cross a plaintext connection)
+              rule: '!(has(self.security) && self.security.enableAuth) || (has(self.tls)
+                && has(self.tls.client))'
+            - message: spec.security.enableAuth requires spec.security.rootCredentialsSecretRef
+              rule: '!(has(self.security) && self.security.enableAuth) || has(self.security.rootCredentialsSecretRef)'
           status:
             description: EtcdClusterStatus defines the observed state of an etcd cluster.
             properties:
+              authEnabled:
+                description: |-
+                  AuthEnabled is true once the operator has successfully run
+                  `auth enable` against the cluster. It is latched (never cleared —
+                  spec.security.enableAuth is immutable) and is the single signal every
+                  operator etcd dial consults to decide whether to present the root
+                  credentials: false ⇒ dial anonymously (auth not yet on, e.g. during
+                  the bootstrap window before the cluster has converged), true ⇒ dial
+                  as root. Decoupling this from spec.security.enableAuth is what makes
+                  the bootstrap window correct — clientv3 attempts an Authenticate RPC
+                  on connect when a username is set, which fails until auth is enabled.
+                type: boolean
               brokenMembers:
                 description: |-
                   BrokenMembers is the count of members the operator considers broken.

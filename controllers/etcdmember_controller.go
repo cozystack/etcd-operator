@@ -269,7 +269,11 @@ func (r *EtcdMemberReconciler) removeMemberFromEtcd(ctx context.Context, cluster
 	if err != nil {
 		return fmt.Errorf("build operator TLS config: %w", err)
 	}
-	etcdClient, err := r.EtcdClientFactory(ctx, endpoints, tlsCfg)
+	user, pass, _, err := resolveEtcdCredentials(ctx, r.Client, cluster)
+	if err != nil {
+		return fmt.Errorf("resolve etcd credentials: %w", err)
+	}
+	etcdClient, err := r.EtcdClientFactory(ctx, endpoints, tlsCfg, user, pass)
 	if err != nil {
 		return err
 	}
@@ -832,18 +836,16 @@ func (r *EtcdMemberReconciler) updateStatus(ctx context.Context, member *lll.Etc
 	return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 }
 
-// memberTLSConfig builds an operator-side *tls.Config for dialling etcd on
-// behalf of this member, by fetching the parent cluster and delegating to
-// buildOperatorTLSConfig. Returns (nil, nil) for plaintext clusters.
-func (r *EtcdMemberReconciler) memberTLSConfig(ctx context.Context, member *lll.EtcdMember) (*tls.Config, error) {
-	if member.Spec.TLS == nil || member.Spec.TLS.ClientServerSecretRef == nil {
-		return nil, nil
-	}
+// clusterFor fetches the EtcdMember's parent EtcdCluster. The member controller
+// needs it to build the operator-side dial config: TLS material
+// (buildOperatorTLSConfig) and auth credentials (resolveEtcdCredentials, which
+// reads cluster.status.authEnabled).
+func (r *EtcdMemberReconciler) clusterFor(ctx context.Context, member *lll.EtcdMember) (*lll.EtcdCluster, error) {
 	cluster := &lll.EtcdCluster{}
 	if err := r.Get(ctx, types.NamespacedName{Namespace: member.Namespace, Name: member.Spec.ClusterName}, cluster); err != nil {
-		return nil, fmt.Errorf("fetch parent cluster %s/%s for TLS config: %w", member.Namespace, member.Spec.ClusterName, err)
+		return nil, fmt.Errorf("fetch parent cluster %s/%s: %w", member.Namespace, member.Spec.ClusterName, err)
 	}
-	return buildOperatorTLSConfig(ctx, r.Client, cluster)
+	return cluster, nil
 }
 
 // discoverMemberID asks etcd for this member's ID. It prefers asking peers
@@ -894,11 +896,30 @@ func (r *EtcdMemberReconciler) discoverMemberID(ctx context.Context, member *lll
 		endpoints = append(endpoints, clientURL(scheme, member.Name, member.Spec.ClusterName, member.Namespace))
 	}
 
-	tlsCfg, err := r.memberTLSConfig(ctx, member)
-	if err != nil {
-		return 0, err
+	// Build the operator-side dial config. Only TLS clusters need the parent
+	// EtcdCluster fetched: auth requires client TLS (CEL-enforced), which is
+	// propagated to member.Spec.TLS.ClientServerSecretRef, so a member with
+	// no client TLS can never have auth enabled — its dial is plaintext and
+	// anonymous, exactly as before. When TLS is set we fetch the cluster once
+	// and derive both the TLS config and the credentials from it (after auth
+	// is enabled the voter peers we dial here reject anonymous access).
+	var tlsCfg *tls.Config
+	var user, pass string
+	if member.Spec.TLS != nil && member.Spec.TLS.ClientServerSecretRef != nil {
+		cluster, err := r.clusterFor(ctx, member)
+		if err != nil {
+			return 0, err
+		}
+		tlsCfg, err = buildOperatorTLSConfig(ctx, r.Client, cluster)
+		if err != nil {
+			return 0, err
+		}
+		user, pass, _, err = resolveEtcdCredentials(ctx, r.Client, cluster)
+		if err != nil {
+			return 0, err
+		}
 	}
-	c, err := r.EtcdClientFactory(ctx, endpoints, tlsCfg)
+	c, err := r.EtcdClientFactory(ctx, endpoints, tlsCfg, user, pass)
 	if err != nil {
 		return 0, err
 	}
