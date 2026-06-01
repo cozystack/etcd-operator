@@ -68,7 +68,7 @@ The `bin/kustomize-v*` binary is auto-downloaded by `make kustomize` (version pi
 
 ```sh
 cat <<'EOF' | kubectl apply -f -
-apiVersion: lllamnyp.su/v1alpha2
+apiVersion: etcd-operator.cozystack.io/v1alpha2
 kind: EtcdCluster
 metadata:
   name: my-etcd
@@ -84,7 +84,7 @@ EOF
 Watch it form:
 
 ```sh
-kubectl get etcdcluster.lllamnyp.su my-etcd -w
+kubectl get etcdcluster.etcd-operator.cozystack.io my-etcd -w
 ```
 
 The operator bootstraps a single seed first, latches `clusterID`, then adds the remaining members one at a time as learners (with promotion). A 3-member cluster typically reaches `READY=3` in well under a minute on a healthy cluster.
@@ -92,7 +92,7 @@ The operator bootstraps a single seed first, latches `clusterID`, then adds the 
 To open a shell to one of the members:
 
 ```sh
-POD=$(kubectl get pod -l etcd.lllamnyp.su/cluster=my-etcd \
+POD=$(kubectl get pod -l etcd-operator.cozystack.io/cluster=my-etcd \
   -o jsonpath='{.items[0].metadata.name}')
 kubectl exec -it "$POD" -- etcdctl --endpoints=http://localhost:2379 \
   member list -w table
@@ -105,7 +105,7 @@ Don't hard-code Pod names — they carry a random suffix from `GenerateName` (e.
 For reconstructable workloads (e.g. a Kubernetes-in-Kubernetes apiserver whose state is GitOps-managed) you can opt the cluster onto a tmpfs `emptyDir` instead of a PVC:
 
 ```yaml
-apiVersion: lllamnyp.su/v1alpha2
+apiVersion: etcd-operator.cozystack.io/v1alpha2
 kind: EtcdCluster
 metadata:
   name: my-mem-etcd
@@ -180,7 +180,7 @@ Single-namespace scoping is not currently exposed: `main.go` does not wire a nam
 
 The operator creates two Services per `EtcdCluster`:
 
-- **`<cluster>`** — headless (`clusterIP: None`), `publishNotReadyAddresses: true`, selector `etcd.lllamnyp.su/cluster=<cluster>`, exposes **both 2379 (client) and 2380 (peer)**. Used by etcd for peer discovery and by the operator's own etcd client (which dials per-pod DNS `<member>.<cluster>.<ns>.svc:2379` resolved through this service). `publishNotReadyAddresses` is required for bootstrap: members during the initial join window aren't `Ready` yet but still need DNS entries to find each other.
+- **`<cluster>`** — headless (`clusterIP: None`), `publishNotReadyAddresses: true`, selector `etcd-operator.cozystack.io/cluster=<cluster>`, exposes **both 2379 (client) and 2380 (peer)**. Used by etcd for peer discovery and by the operator's own etcd client (which dials per-pod DNS `<member>.<cluster>.<ns>.svc:2379` resolved through this service). `publishNotReadyAddresses` is required for bootstrap: members during the initial join window aren't `Ready` yet but still need DNS entries to find each other.
 - **`<cluster>-client`** — `ClusterIP`, exposes 2379 only. Intended for end-user client traffic (load-balanced across all pods backing the selector).
 
 External access (NodePort / LoadBalancer / Ingress) isn't created automatically. If you need it, layer a separate Service or Ingress on top of `<cluster>-client`'s selector.
@@ -197,7 +197,7 @@ This is outside the operator's scope but documented because operators ask.
 
 ```sh
 # Remove individual clusters first — their finalizers will clean up etcd state.
-kubectl delete etcdcluster.lllamnyp.su --all -A
+kubectl delete etcdcluster.etcd-operator.cozystack.io --all -A
 
 # Remove the operator.
 make undeploy

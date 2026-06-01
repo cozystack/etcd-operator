@@ -2,26 +2,26 @@
 # This file is used to track the info used to scaffold your project
 # and allow the plugins properly work.
 # More info: https://book.kubebuilder.io/reference/project-config.html
-domain: lllamnyp.su
+domain: etcd-operator.cozystack.io
 layout:
 - go.kubebuilder.io/v4
 projectName: etcd-operator
-repo: github.com/lllamnyp/etcd-operator
+repo: github.com/cozystack/etcd-operator
 resources:
 - api:
     crdVersion: v1
     namespaced: true
   controller: true
-  domain: lllamnyp.su
+  domain: etcd-operator.cozystack.io
   kind: EtcdCluster
-  path: github.com/lllamnyp/etcd-operator/api/v1alpha2
+  path: github.com/cozystack/etcd-operator/api/v1alpha2
   version: v1alpha2
 - api:
     crdVersion: v1
     namespaced: true
   controller: true
-  domain: lllamnyp.su
+  domain: etcd-operator.cozystack.io
   kind: EtcdMember
-  path: github.com/lllamnyp/etcd-operator/api/v1alpha2
+  path: github.com/cozystack/etcd-operator/api/v1alpha2
   version: v1alpha2
 version: "3"

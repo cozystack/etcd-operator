@@ -14,9 +14,13 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-// Package v1alpha2 contains API Schema definitions for the  v1alpha2 API group
+// Package v1alpha2 contains API Schema definitions for the v1alpha2 API group.
+//
+// There is intentionally no v1alpha1 under etcd-operator.cozystack.io: the
+// version was carried over unchanged when the group was renamed from the
+// previous identity, so the new group starts at v1alpha2.
 // +kubebuilder:object:generate=true
-// +groupName=lllamnyp.su
+// +groupName=etcd-operator.cozystack.io
 package v1alpha2
 
 import (
@@ -26,7 +30,7 @@ import (
 
 var (
 	// GroupVersion is group version used to register these objects
-	GroupVersion = schema.GroupVersion{Group: "lllamnyp.su", Version: "v1alpha2"}
+	GroupVersion = schema.GroupVersion{Group: "etcd-operator.cozystack.io", Version: "v1alpha2"}
 
 	// SchemeBuilder is used to add go types to the GroupVersionKind scheme
 	SchemeBuilder = &scheme.Builder{GroupVersion: GroupVersion}

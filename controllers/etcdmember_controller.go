@@ -36,7 +36,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
-	lll "github.com/lllamnyp/etcd-operator/api/v1alpha2"
+	lll "github.com/cozystack/etcd-operator/api/v1alpha2"
 )
 
 // EtcdMemberReconciler reconciles an EtcdMember object.
@@ -47,10 +47,10 @@ type EtcdMemberReconciler struct {
 	EtcdClientFactory EtcdClientFactory
 }
 
-//+kubebuilder:rbac:groups=lllamnyp.su,resources=etcdmembers,verbs=get;list;watch;update;patch
-//+kubebuilder:rbac:groups=lllamnyp.su,resources=etcdmembers/status,verbs=get;update;patch
-//+kubebuilder:rbac:groups=lllamnyp.su,resources=etcdmembers/finalizers,verbs=update
-//+kubebuilder:rbac:groups=lllamnyp.su,resources=etcdclusters,verbs=get
+//+kubebuilder:rbac:groups=etcd-operator.cozystack.io,resources=etcdmembers,verbs=get;list;watch;update;patch
+//+kubebuilder:rbac:groups=etcd-operator.cozystack.io,resources=etcdmembers/status,verbs=get;update;patch
+//+kubebuilder:rbac:groups=etcd-operator.cozystack.io,resources=etcdmembers/finalizers,verbs=update
+//+kubebuilder:rbac:groups=etcd-operator.cozystack.io,resources=etcdclusters,verbs=get
 //+kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch;create;patch;delete
 //+kubebuilder:rbac:groups="",resources=persistentvolumeclaims,verbs=get;list;watch;create;update;patch;delete
 //+kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch
@@ -581,7 +581,7 @@ func (r *EtcdMemberReconciler) buildPod(member *lll.EtcdMember) *corev1.Pod {
 	// writes still count against node-level memory rather than the
 	// pod's cgroup — production memory clusters should also set
 	// resources.limits.memory (tracked in
-	// https://github.com/lllamnyp/etcd-operator/issues/16).
+	// https://github.com/cozystack/etcd-operator/issues/16).
 	var dataVolumeSource corev1.VolumeSource
 	if member.Spec.Storage.Medium == lll.StorageMediumMemory {
 		size := member.Spec.Storage.Size

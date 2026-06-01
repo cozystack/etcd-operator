@@ -27,7 +27,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
-	lll "github.com/lllamnyp/etcd-operator/api/v1alpha2"
+	lll "github.com/cozystack/etcd-operator/api/v1alpha2"
 )
 
 // fakeEtcd is a deterministic in-memory stand-in for clientv3.Client used to

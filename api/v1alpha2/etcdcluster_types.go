@@ -211,7 +211,7 @@ const (
 // Production memory clusters also want hard pod-anti-affinity and a
 // container memory limit covering the tmpfs size plus etcd's own
 // headroom. Those two are not auto-emitted by the operator yet — see
-// https://github.com/lllamnyp/etcd-operator/issues/16. The
+// https://github.com/cozystack/etcd-operator/issues/16. The
 // PodDisruptionBudget is auto-emitted on every cluster.
 //
 // +kubebuilder:validation:Enum="";Memory
@@ -387,7 +387,7 @@ type EtcdClusterStatus struct {
 	// "current scale" without a custom status field.
 	ReadyMembers int32 `json:"readyMembers,omitempty"`
 
-	// Selector is the label-selector form ("etcd.lllamnyp.su/cluster=<name>")
+	// Selector is the label-selector form ("etcd-operator.cozystack.io/cluster=<name>")
 	// matching every Pod owned by this cluster. Surfaced for the /scale
 	// subresource — the VPA admission controller reads it via Scales().Get()
 	// to know which Pods to inject recommendations into. Plain users won't

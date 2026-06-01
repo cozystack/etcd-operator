@@ -139,9 +139,9 @@ KUSTOMIZE ?= $(LOCALBIN)/kustomize-$(KUSTOMIZE_VERSION)
 CONTROLLER_GEN ?= $(LOCALBIN)/controller-gen-$(CONTROLLER_TOOLS_VERSION)
 ENVTEST ?= $(LOCALBIN)/setup-envtest
 
-# go-install-tool installs $2@$3 under $1. Pattern stolen from
-# lllamnyp/operator. `go install` drops the binary at $LOCALBIN/<basename>,
-# so we rename it after install to the version-suffixed target path.
+# go-install-tool installs $2@$3 under $1. `go install` drops the binary at
+# $LOCALBIN/<basename>, so we rename it after install to the version-suffixed
+# target path.
 define go-install-tool
 @[ -f $(1) ] || { \
 set -e; \

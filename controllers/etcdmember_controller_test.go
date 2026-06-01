@@ -26,7 +26,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 
-	lll "github.com/lllamnyp/etcd-operator/api/v1alpha2"
+	lll "github.com/cozystack/etcd-operator/api/v1alpha2"
 )
 
 // TestRemoveMemberFromEtcd_FallbackByName covers reviewer issue #1: when a
@@ -219,7 +219,7 @@ func TestEnsurePVC_RefusesStaleOwner(t *testing.T) {
 			Name:      "data-test-1",
 			Namespace: "ns",
 			OwnerReferences: []metav1.OwnerReference{{
-				APIVersion: "lllamnyp.su/v1alpha2",
+				APIVersion: "etcd-operator.cozystack.io/v1alpha2",
 				Kind:       "EtcdMember",
 				Name:       "test-1",
 				UID:        staleUID,
@@ -327,7 +327,7 @@ func TestEnsurePVC_AcceptsOwnPVC(t *testing.T) {
 			Name:      "data-test-0",
 			Namespace: "ns",
 			OwnerReferences: []metav1.OwnerReference{{
-				APIVersion: "lllamnyp.su/v1alpha2",
+				APIVersion: "etcd-operator.cozystack.io/v1alpha2",
 				Kind:       "EtcdMember",
 				Name:       "test-0",
 				UID:        uid,
@@ -436,7 +436,7 @@ func TestEnsurePod_RefusesStaleOwner(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{
 			Name: "test-1", Namespace: "ns",
 			OwnerReferences: []metav1.OwnerReference{{
-				APIVersion: "lllamnyp.su/v1alpha2",
+				APIVersion: "etcd-operator.cozystack.io/v1alpha2",
 				Kind:       "EtcdMember",
 				Name:       "test-1",
 				UID:        types.UID("old-uid"),
@@ -517,7 +517,7 @@ func TestEnsurePod_AcceptsOwnPod(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{
 			Name: "test-0", Namespace: "ns", UID: types.UID("pod-uid"),
 			OwnerReferences: []metav1.OwnerReference{{
-				APIVersion: "lllamnyp.su/v1alpha2",
+				APIVersion: "etcd-operator.cozystack.io/v1alpha2",
 				Kind:       "EtcdMember",
 				Name:       "test-0",
 				UID:        uid,
@@ -1113,7 +1113,7 @@ func TestUpdateStatus_NoChurnInSteadyState(t *testing.T) {
 			PVCName:  "data-test-0",
 			MemberID: "0000000000000001",
 			Replicas: 1,
-			Selector: "etcd.lllamnyp.su/cluster=test,app.kubernetes.io/component=test-0",
+			Selector: "etcd-operator.cozystack.io/cluster=test,app.kubernetes.io/component=test-0",
 			Conditions: []metav1.Condition{{
 				Type: lll.MemberReady, Status: metav1.ConditionTrue, Reason: "PodReady",
 				Message: "etcd member is ready", LastTransitionTime: now,
@@ -1283,7 +1283,7 @@ func TestReconcile_DormantMemberDeletesPod(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{
 			Name: "test-saved1", Namespace: "ns",
 			OwnerReferences: []metav1.OwnerReference{{
-				APIVersion: "lllamnyp.su/v1alpha2", Kind: "EtcdMember",
+				APIVersion: "etcd-operator.cozystack.io/v1alpha2", Kind: "EtcdMember",
 				Name: "test-saved1", UID: types.UID("member-uid"), Controller: &tru, BlockOwnerDeletion: &tru,
 			}},
 		},
@@ -1292,7 +1292,7 @@ func TestReconcile_DormantMemberDeletesPod(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{
 			Name: "data-test-saved1", Namespace: "ns",
 			OwnerReferences: []metav1.OwnerReference{{
-				APIVersion: "lllamnyp.su/v1alpha2", Kind: "EtcdMember",
+				APIVersion: "etcd-operator.cozystack.io/v1alpha2", Kind: "EtcdMember",
 				Name: "test-saved1", UID: types.UID("member-uid"), Controller: &tru, BlockOwnerDeletion: &tru,
 			}},
 		},
@@ -1362,7 +1362,7 @@ func TestReconcile_WakeFromDormantCreatesPod(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{
 			Name: "data-test-saved1", Namespace: "ns",
 			OwnerReferences: []metav1.OwnerReference{{
-				APIVersion: "lllamnyp.su/v1alpha2", Kind: "EtcdMember",
+				APIVersion: "etcd-operator.cozystack.io/v1alpha2", Kind: "EtcdMember",
 				Name: "test-saved1", UID: types.UID("member-uid"), Controller: &tru, BlockOwnerDeletion: &tru,
 			}},
 		},
@@ -1517,7 +1517,7 @@ func TestEnsurePod_CapturesUIDOfExistingPod(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{
 			Name: "m-1", Namespace: "ns", UID: types.UID("known-uid"),
 			OwnerReferences: []metav1.OwnerReference{{
-				APIVersion: "lllamnyp.su/v1alpha2", Kind: "EtcdMember",
+				APIVersion: "etcd-operator.cozystack.io/v1alpha2", Kind: "EtcdMember",
 				Name: "m-1", UID: types.UID("mu"), Controller: &tru, BlockOwnerDeletion: &tru,
 			}},
 		},
@@ -1632,7 +1632,7 @@ func TestReconcile_MemoryMemberStablePodIsNotLost(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{
 			Name: "m-1", Namespace: "ns", UID: types.UID("stable-uid"),
 			OwnerReferences: []metav1.OwnerReference{{
-				APIVersion: "lllamnyp.su/v1alpha2", Kind: "EtcdMember",
+				APIVersion: "etcd-operator.cozystack.io/v1alpha2", Kind: "EtcdMember",
 				Name: "m-1", UID: types.UID("mu"), Controller: &tru, BlockOwnerDeletion: &tru,
 			}},
 		},
@@ -1679,7 +1679,7 @@ func TestUpdateStatus_MemoryMemberLeavesPVCNameEmpty(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{
 			Name: "m-1", Namespace: "ns", UID: types.UID("pod-uid"),
 			OwnerReferences: []metav1.OwnerReference{{
-				APIVersion: "lllamnyp.su/v1alpha2", Kind: "EtcdMember",
+				APIVersion: "etcd-operator.cozystack.io/v1alpha2", Kind: "EtcdMember",
 				Name: "m-1", UID: types.UID("mu"), Controller: &tru, BlockOwnerDeletion: &tru,
 			}},
 		},
@@ -1784,7 +1784,7 @@ func TestEnsurePod_AppliesRoleLabelWhenIsVoter(t *testing.T) {
 			Name: "m-1", Namespace: "ns", UID: types.UID("pod-uid"),
 			Labels: memberLabels("test", "m-1"),
 			OwnerReferences: []metav1.OwnerReference{{
-				APIVersion: "lllamnyp.su/v1alpha2", Kind: "EtcdMember",
+				APIVersion: "etcd-operator.cozystack.io/v1alpha2", Kind: "EtcdMember",
 				Name: "m-1", UID: types.UID("mu"), Controller: &tru, BlockOwnerDeletion: &tru,
 			}},
 		},
@@ -1826,7 +1826,7 @@ func TestEnsurePod_StripsRoleLabelWhenNotVoter(t *testing.T) {
 				LabelRole:    RoleVoter, // stale label from a prior voter state
 			},
 			OwnerReferences: []metav1.OwnerReference{{
-				APIVersion: "lllamnyp.su/v1alpha2", Kind: "EtcdMember",
+				APIVersion: "etcd-operator.cozystack.io/v1alpha2", Kind: "EtcdMember",
 				Name: "m-1", UID: types.UID("mu"), Controller: &tru, BlockOwnerDeletion: &tru,
 			}},
 		},

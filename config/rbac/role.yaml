@@ -58,7 +58,7 @@ rules:
   - update
   - watch
 - apiGroups:
-  - lllamnyp.su
+  - etcd-operator.cozystack.io
   resources:
   - etcdclusters
   verbs:
@@ -66,14 +66,14 @@ rules:
   - list
   - watch
 - apiGroups:
-  - lllamnyp.su
+  - etcd-operator.cozystack.io
   resources:
   - etcdclusters/finalizers
   - etcdmembers/finalizers
   verbs:
   - update
 - apiGroups:
-  - lllamnyp.su
+  - etcd-operator.cozystack.io
   resources:
   - etcdclusters/status
   - etcdmembers/status
@@ -82,7 +82,7 @@ rules:
   - patch
   - update
 - apiGroups:
-  - lllamnyp.su
+  - etcd-operator.cozystack.io
   resources:
   - etcdmembers
   verbs:

@@ -33,7 +33,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	lll "github.com/lllamnyp/etcd-operator/api/v1alpha2"
+	lll "github.com/cozystack/etcd-operator/api/v1alpha2"
 )
 
 // reconcileUntilStable drives a reconciler in a loop until it stops requesting
@@ -505,7 +505,7 @@ func TestScaleUp_AdoptsPendingCRAndRetriesAdd(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{
 			Name: "test-pndng", Namespace: "ns", Labels: clusterLabels("test"),
 			OwnerReferences: []metav1.OwnerReference{{
-				APIVersion: "lllamnyp.su/v1alpha2", Kind: "EtcdCluster",
+				APIVersion: "etcd-operator.cozystack.io/v1alpha2", Kind: "EtcdCluster",
 				Name: "test", UID: types.UID("cluster-uid"), Controller: &tru,
 			}},
 		},
@@ -583,7 +583,7 @@ func TestBootstrap_Idempotent(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{
 			Name: seedName, Namespace: "ns", Labels: clusterLabels("test"),
 			OwnerReferences: []metav1.OwnerReference{{
-				APIVersion: "lllamnyp.su/v1alpha2",
+				APIVersion: "etcd-operator.cozystack.io/v1alpha2",
 				Kind:       "EtcdCluster",
 				Name:       "test",
 				UID:        types.UID(clusterUID),
@@ -633,7 +633,7 @@ func TestBootstrap_CompletesPendingSeed(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{
 			Name: seedName, Namespace: "ns", Labels: clusterLabels("test"),
 			OwnerReferences: []metav1.OwnerReference{{
-				APIVersion: "lllamnyp.su/v1alpha2",
+				APIVersion: "etcd-operator.cozystack.io/v1alpha2",
 				Kind:       "EtcdCluster",
 				Name:       "test",
 				UID:        types.UID(clusterUID),
@@ -689,7 +689,7 @@ func TestBootstrap_RejectsStaleSeed(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{
 			Name: "test-stalez", Namespace: "ns", Labels: clusterLabels("test"),
 			OwnerReferences: []metav1.OwnerReference{{
-				APIVersion: "lllamnyp.su/v1alpha2",
+				APIVersion: "etcd-operator.cozystack.io/v1alpha2",
 				Kind:       "EtcdCluster",
 				Name:       "test",
 				UID:        types.UID("stale-uid"), // different from fresh
@@ -1843,7 +1843,7 @@ func TestScaleUp_InitialClusterMatchesEtcdMembership(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{
 			Name: "test-pndng", Namespace: "ns", Labels: clusterLabels("test"),
 			OwnerReferences: []metav1.OwnerReference{{
-				APIVersion: "lllamnyp.su/v1alpha2", Kind: "EtcdCluster",
+				APIVersion: "etcd-operator.cozystack.io/v1alpha2", Kind: "EtcdCluster",
 				Name: "test", UID: types.UID("cluster-uid"), Controller: &tru,
 			}},
 		},
@@ -1942,7 +1942,7 @@ func TestScaleUp_RecoversFromCrashBetweenAddAndPatch(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{
 			Name: "test-pndng", Namespace: "ns", Labels: clusterLabels("test"),
 			OwnerReferences: []metav1.OwnerReference{{
-				APIVersion: "lllamnyp.su/v1alpha2", Kind: "EtcdCluster",
+				APIVersion: "etcd-operator.cozystack.io/v1alpha2", Kind: "EtcdCluster",
 				Name: "test", UID: types.UID("cluster-uid"), Controller: &tru,
 			}},
 		},
@@ -2188,7 +2188,7 @@ func TestClusterUpdateStatus_NoChurnInSteadyState(t *testing.T) {
 			ClusterToken: "ns-test-x",
 			ClusterID:    "0000000000000abc",
 			ReadyMembers: 3,
-			Selector:     "etcd.lllamnyp.su/cluster=test",
+			Selector:     "etcd-operator.cozystack.io/cluster=test",
 			Observed: &lll.ObservedClusterSpec{
 				Replicas: 3, Version: "3.5.17", Storage: lll.StorageSpec{Size: quickQty(t, "1Gi")},
 			},
@@ -2637,7 +2637,7 @@ func TestUpdateStatus_SetsScaleSelector(t *testing.T) {
 	}
 
 	got := mustGet(t, c, "smk", "ns", &lll.EtcdCluster{})
-	want := "etcd.lllamnyp.su/cluster=smk"
+	want := "etcd-operator.cozystack.io/cluster=smk"
 	if got.Status.Selector != want {
 		t.Fatalf("Status.Selector = %q; want %q", got.Status.Selector, want)
 	}
