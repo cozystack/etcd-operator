@@ -37,7 +37,7 @@ import (
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
-	lllamnypsuv1alpha2 "github.com/cozystack/etcd-operator/api/v1alpha2"
+	etcdv1alpha2 "github.com/cozystack/etcd-operator/api/v1alpha2"
 	"github.com/cozystack/etcd-operator/controllers"
 	//+kubebuilder:scaffold:imports
 )
@@ -52,7 +52,7 @@ var (
 func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
 
-	utilruntime.Must(lllamnypsuv1alpha2.AddToScheme(scheme))
+	utilruntime.Must(etcdv1alpha2.AddToScheme(scheme))
 	//+kubebuilder:scaffold:scheme
 }
 
