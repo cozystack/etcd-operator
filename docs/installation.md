@@ -64,6 +64,8 @@ cd ../.. && bin/kustomize-v5.6.0 build config/default | kubectl apply -f -
 
 The `bin/kustomize-v*` binary is auto-downloaded by `make kustomize` (version pinned to `v5.6.0` in the Makefile); a system-installed `kustomize` works equally if you have one.
 
+> **Set the operator image, or backups/restores won't run.** The `config/default` overlay rewrites both the manager's `image:` *and* its `OPERATOR_IMAGE` env var to the same ref via a kustomize replacement — `OPERATOR_IMAGE` is the image the operator launches for backup Jobs and restore init containers. If you bypass that overlay (e.g. `kubectl apply -f config/manager/` directly, or a base that drops the replacement), `OPERATOR_IMAGE` stays the placeholder `controller:latest`. The operator **refuses to start** on that placeholder and exits with a clear error (rather than letting backup/restore Pods `ImagePullBackOff` later). Always render through `config/default` (which the commands above do) or set `OPERATOR_IMAGE` to the real ref by hand.
+
 ## Create your first cluster
 
 ```sh
@@ -75,7 +77,7 @@ metadata:
   namespace: default
 spec:
   replicas: 3
-  version: 3.5.17
+  version: 3.6.11
   storage:
     size: 1Gi
 EOF
@@ -112,7 +114,7 @@ metadata:
   namespace: default
 spec:
   replicas: 3
-  version: 3.5.17
+  version: 3.6.11
   storage:
     size: 256Mi          # tmpfs SizeLimit per member
     medium: Memory
@@ -154,7 +156,7 @@ The `spec.tls` subtree is immutable post-create — flipping TLS on or off on an
 
 `spec.version` in an `EtcdCluster` becomes `quay.io/coreos/etcd:v<version>`. The image repository is hard-coded in `controllers/helpers.go:EtcdImage`. Override it by patching the operator image with your own registry/repo if you mirror etcd internally.
 
-Tested etcd versions in CI: **3.5.17**. The operator's etcd client is v3.6.x (Go module) which is wire-compatible with 3.5.x server.
+The `spec.version` examples throughout these docs use **3.6.x**, to match the `etcdutl` bundled in the operator image: `spec.bootstrap.restore` requires `spec.version` and that `etcdutl` to share a minor (see the [restore runbook](operations.md#restoring-a-cluster-from-a-snapshot)). The operator's etcd client is v3.6.x and is wire-compatible with 3.5.x servers, so a cluster you never restore into can still run 3.5.x — but to back up and restore on the same version, run 3.6.x.
 
 Operator's own toolchain (relevant when building from source):
 

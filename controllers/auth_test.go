@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"testing"
 
+	"go.etcd.io/etcd/api/v3/v3rpc/rpctypes"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -24,6 +25,30 @@ import (
 
 	lll "github.com/cozystack/etcd-operator/api/v1alpha2"
 )
+
+// TestAuthErrorClassification pins the auth error matchers against etcd's actual
+// rpctypes error values, so a client-library bump that reworded them can't
+// silently break detection (the matchers use substring checks on error text).
+func TestAuthErrorClassification(t *testing.T) {
+	// "auth required" = server demands credentials an anonymous dial didn't give.
+	for _, err := range []error{rpctypes.ErrUserEmpty, rpctypes.ErrPermissionDenied} {
+		if !isAuthRequiredErr(err) {
+			t.Errorf("isAuthRequiredErr(%v) = false, want true", err)
+		}
+		if isAuthFailedErr(err) {
+			t.Errorf("isAuthFailedErr(%v) = true, want false (it's auth-required, not auth-failed)", err)
+		}
+	}
+	// "auth failed" = server rejected the credentials we presented (wrong pw).
+	for _, err := range []error{rpctypes.ErrAuthFailed, rpctypes.ErrInvalidAuthToken} {
+		if !isAuthFailedErr(err) {
+			t.Errorf("isAuthFailedErr(%v) = false, want true", err)
+		}
+		if isAuthRequiredErr(err) {
+			t.Errorf("isAuthRequiredErr(%v) = true, want false (it's auth-failed, not auth-required)", err)
+		}
+	}
+}
 
 const (
 	testRootSecretName = "test-root-creds"
@@ -144,6 +169,14 @@ func TestReconcileAuth_EnablesWhenConverged(t *testing.T) {
 
 // Crash recovery: etcd already has auth on but the status write was lost. The
 // operator must NOT re-run the provisioning RPCs and must re-latch status.
+//
+// This is also the contract that makes restoring an auth-enabled snapshot work:
+// the restored seed boots with auth already ON (the snapshot serialized the
+// auth state), so a new cluster carrying spec.auth.enabled lands here — the
+// AuthStatus probe reports Enabled=true and the operator adopts the restored
+// credentials by latching, without resetting the root password via UserAdd.
+// (The user-facing requirement that spec.auth be present and the Secret hold
+// the *original* password is documented in the restore runbook.)
 func TestReconcileAuth_AlreadyEnabledInEtcdLatchesStatus(t *testing.T) {
 	cluster, objs := authClusterObjects(t, true)
 	cluster.Spec.Auth = enabledAuthSpec()

@@ -117,6 +117,105 @@ spec:
                     type: object
                     x-kubernetes-map-type: atomic
                 type: object
+              bootstrap:
+                description: |-
+                  Bootstrap configures one-time cluster initialization options. It is
+                  consulted only at first bootstrap (while status.clusterID is unset)
+                  and is immutable post-create. Absent means a normal empty-cluster
+                  bootstrap.
+                properties:
+                  restore:
+                    description: |-
+                      Restore initializes the new cluster from an existing etcd snapshot
+                      instead of an empty data dir. Absent means a normal empty bootstrap.
+                    properties:
+                      source:
+                        description: |-
+                          Source is where the snapshot is read from (S3 or PVC). Same shape as
+                          an EtcdBackup destination.
+                        properties:
+                          pvc:
+                            description: PVC stores the snapshot on a PersistentVolumeClaim.
+                            properties:
+                              claimName:
+                                description: ClaimName is the name of a PVC in the
+                                  cluster's namespace.
+                                minLength: 1
+                                type: string
+                              subPath:
+                                description: SubPath is an optional subdirectory within
+                                  the volume.
+                                type: string
+                            required:
+                            - claimName
+                            type: object
+                          s3:
+                            description: S3 stores the snapshot in an S3-compatible
+                              object store.
+                            properties:
+                              bucket:
+                                description: Bucket is the destination bucket.
+                                minLength: 1
+                                type: string
+                              credentialsSecretRef:
+                                description: |-
+                                  CredentialsSecretRef references a Secret in the cluster's namespace
+                                  holding AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY keys.
+                                properties:
+                                  name:
+                                    default: ""
+                                    description: |-
+                                      Name of the referent.
+                                      This field is effectively required, but due to backwards compatibility is
+                                      allowed to be empty. Instances of this type with an empty value here are
+                                      almost certainly wrong.
+                                      More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                                    type: string
+                                type: object
+                                x-kubernetes-map-type: atomic
+                              endpoint:
+                                description: |-
+                                  Endpoint is the S3 endpoint URL (e.g. "https://s3.amazonaws.com" or a
+                                  MinIO/Ceph endpoint).
+                                minLength: 1
+                                type: string
+                              forcePathStyle:
+                                description: |-
+                                  ForcePathStyle selects path-style addressing (bucket in the path
+                                  rather than the host). MinIO/Ceph typically require true.
+                                type: boolean
+                              key:
+                                description: |-
+                                  Key is an optional object-key prefix within the bucket. The operator
+                                  appends "<backup-name>.db".
+                                type: string
+                              region:
+                                description: Region is the S3 region. Optional for
+                                  endpoints that ignore it.
+                                type: string
+                            required:
+                            - bucket
+                            - credentialsSecretRef
+                            - endpoint
+                            type: object
+                        type: object
+                        x-kubernetes-validations:
+                        - message: exactly one of destination.s3 or destination.pvc
+                            must be set
+                          rule: has(self.s3) != has(self.pvc)
+                    required:
+                    - source
+                    type: object
+                    x-kubernetes-validations:
+                    - message: bootstrap.restore.source.s3.key must be the exact (non-empty)
+                        object key for a restore source
+                      rule: '!has(self.source.s3) || (has(self.source.s3.key) && size(self.source.s3.key)
+                        > 0)'
+                    - message: bootstrap.restore.source.pvc.subPath must be the exact
+                        (non-empty) snapshot file path for a restore source
+                      rule: '!has(self.source.pvc) || (has(self.source.pvc.subPath)
+                        && size(self.source.pvc.subPath) > 0)'
+                type: object
               progressDeadlineSeconds:
                 default: 600
                 description: |-
@@ -476,7 +575,7 @@ spec:
                       rule: has(self.secretRef) != has(self.certManager)
                 type: object
               version:
-                description: Version is the desired etcd version (e.g. "3.5.17").
+                description: Version is the desired etcd version (e.g. "3.6.11").
                 pattern: ^\d+\.\d+\.\d+$
                 type: string
             required:
@@ -517,6 +616,20 @@ spec:
               rule: '!(has(self.auth) && self.auth.enabled) || (has(self.tls) && has(self.tls.client))'
             - message: spec.auth.enabled requires spec.auth.rootCredentialsSecretRef
               rule: '!(has(self.auth) && self.auth.enabled) || has(self.auth.rootCredentialsSecretRef)'
+            - message: spec.bootstrap cannot be added to or removed from an existing
+                cluster; it is consulted only at first bootstrap
+              rule: has(self.bootstrap) == has(oldSelf.bootstrap)
+            - message: spec.bootstrap is immutable post-create; it is consulted only
+                at first bootstrap
+              rule: '!has(self.bootstrap) || !has(oldSelf.bootstrap) || self.bootstrap
+                == oldSelf.bootstrap'
+            - message: 'spec.bootstrap.restore is unsupported with spec.storage.medium=Memory:
+                the restored data dir is tmpfs, so any seed Pod restart re-restores
+                the snapshot — reverting writes (single member) or breaking the cluster
+                with a fresh ID it can''t rejoin (multi-member). Use persistent storage
+                to restore.'
+              rule: '!(has(self.bootstrap) && has(self.bootstrap.restore)) || !(has(self.storage)
+                && has(self.storage.medium) && self.storage.medium == ''Memory'')'
           status:
             description: EtcdClusterStatus defines the observed state of an etcd cluster.
             properties:

@@ -17,7 +17,9 @@ limitations under the License.
 package main
 
 import (
+	"context"
 	"flag"
+	"fmt"
 	"os"
 	"strings"
 
@@ -29,6 +31,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/client-go/discovery"
+	"k8s.io/client-go/kubernetes"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -39,10 +42,25 @@ import (
 
 	etcdv1alpha2 "github.com/cozystack/etcd-operator/api/v1alpha2"
 	"github.com/cozystack/etcd-operator/controllers"
+	"github.com/cozystack/etcd-operator/internal/agent"
 	//+kubebuilder:scaffold:imports
 )
 
 const defaultClusterDomain = "cluster.local"
+
+// placeholderOperatorImage is the image:/OPERATOR_IMAGE value baked into
+// config/manager as the kustomize-replacement target. Running with it
+// un-rewritten means backup/restore Pods would ImagePullBackOff forever.
+const placeholderOperatorImage = "controller:latest"
+
+// operatorImageError rejects the un-substituted image placeholder so the
+// operator fails fast at startup rather than silently at the first backup.
+func operatorImageError(img string) error {
+	if img == placeholderOperatorImage {
+		return fmt.Errorf("operator image is the un-substituted placeholder %q; set OPERATOR_IMAGE / --operator-image to the real operator image (deploy via the config/default overlay or `make deploy IMG=...`), otherwise backup/restore Pods will ImagePullBackOff", img)
+	}
+	return nil
+}
 
 var (
 	scheme   = runtime.NewScheme()
@@ -57,10 +75,43 @@ func init() {
 }
 
 func main() {
+	// Subcommand dispatch: the operator image doubles as the backup/restore
+	// agent, invoked as `manager backup-agent` / `manager restore-agent` in a
+	// Job (backup) or an initContainer (restore). These run and exit before
+	// any manager setup.
+	if len(os.Args) > 1 {
+		switch os.Args[1] {
+		case "backup-agent":
+			// Bound the run so a hung dial/snapshot against a parked or
+			// unreachable cluster fails with a clear error instead of blocking
+			// forever (the backup Job's ActiveDeadlineSeconds is the outer
+			// backstop).
+			ctx, cancel := context.WithTimeout(context.Background(), agent.BackupTimeout)
+			defer cancel()
+			if err := agent.RunBackup(ctx); err != nil {
+				fmt.Fprintln(os.Stderr, "backup agent failed:", err)
+				os.Exit(1)
+			}
+			return
+		case "restore-agent":
+			// Bound the run so a slow/black-holed S3 endpoint fails with a clear
+			// error instead of hanging the init container (and cluster bootstrap)
+			// forever — there is no Job deadline here, so this is the only guard.
+			ctx, cancel := context.WithTimeout(context.Background(), agent.RestoreTimeout)
+			defer cancel()
+			if err := agent.RunRestore(ctx); err != nil {
+				fmt.Fprintln(os.Stderr, "restore agent failed:", err)
+				os.Exit(1)
+			}
+			return
+		}
+	}
+
 	var metricsAddr string
 	var enableLeaderElection bool
 	var probeAddr string
 	var clusterDomain string
+	var operatorImage string
 	flag.StringVar(&metricsAddr, "metrics-bind-address", ":8080", "The address the metric endpoint binds to.")
 	flag.StringVar(&probeAddr, "health-probe-bind-address", ":8081", "The address the probe endpoint binds to.")
 	flag.BoolVar(&enableLeaderElection, "leader-elect", false,
@@ -75,6 +126,10 @@ func main() {
 			"to 'cluster.local' if auto-discovery yields nothing — set explicitly "+
 			"for hostNetwork or dnsPolicy:None pods, or any other environment "+
 			"where the operator's pod doesn't see kube-dns search paths.")
+	flag.StringVar(&operatorImage, "operator-image", os.Getenv("OPERATOR_IMAGE"),
+		"Operator image reference. The backup/restore agents run from this same "+
+			"image (Job / initContainer). Defaults to $OPERATOR_IMAGE; required for "+
+			"EtcdBackup and spec.bootstrap.restore to function.")
 	opts := zap.Options{
 		Development: true,
 	}
@@ -82,6 +137,15 @@ func main() {
 	flag.Parse()
 
 	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&opts)))
+
+	// Refuse to run with the un-substituted image placeholder: backup/restore
+	// Pods would ImagePullBackOff forever otherwise. Fail loudly at startup
+	// instead of silently at first backup. (Empty is allowed — backups are then
+	// simply unavailable and the controllers fail loudly if one is attempted.)
+	if err := operatorImageError(operatorImage); err != nil {
+		setupLog.Error(err, "invalid operator image configuration")
+		os.Exit(1)
+	}
 
 	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{
 		Scheme:                 scheme,
@@ -138,10 +202,26 @@ func main() {
 		os.Exit(1)
 	}
 	if err = (&controllers.EtcdMemberReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
+		Client:        mgr.GetClient(),
+		Scheme:        mgr.GetScheme(),
+		OperatorImage: operatorImage,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "EtcdMember")
+		os.Exit(1)
+	}
+	clientset, err := kubernetes.NewForConfig(mgr.GetConfig())
+	if err != nil {
+		setupLog.Error(err, "unable to build clientset")
+		os.Exit(1)
+	}
+	if err = (&controllers.EtcdBackupReconciler{
+		Client:        mgr.GetClient(),
+		Scheme:        mgr.GetScheme(),
+		APIReader:     mgr.GetAPIReader(),
+		Clientset:     clientset,
+		OperatorImage: operatorImage,
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "EtcdBackup")
 		os.Exit(1)
 	}
 	//+kubebuilder:scaffold:builder

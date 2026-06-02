@@ -4,6 +4,7 @@
 resources:
 - bases/etcd-operator.cozystack.io_etcdclusters.yaml
 - bases/etcd-operator.cozystack.io_etcdmembers.yaml
+- bases/etcd-operator.cozystack.io_etcdbackups.yaml
 #+kubebuilder:scaffold:crdkustomizeresource
 
 patchesStrategicMerge:

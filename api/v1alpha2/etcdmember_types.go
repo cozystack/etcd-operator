@@ -124,6 +124,13 @@ type EtcdMemberSpec struct {
 	// stays on the parent cluster spec.
 	// +optional
 	TLS *EtcdMemberTLS `json:"tls,omitempty"`
+
+	// Restore is set only on the bootstrap seed when the parent cluster's
+	// spec.bootstrap.restore is configured. It causes the member controller
+	// to run a restore initContainer that populates the data dir from the
+	// snapshot before etcd starts. Inert once the data dir is initialized.
+	// +optional
+	Restore *RestoreSpec `json:"restore,omitempty"`
 }
 
 // EtcdMemberStatus defines the observed state of a single etcd member.

@@ -236,7 +236,7 @@ func newTestClient(t *testing.T, objs ...client.Object) (client.Client, *runtime
 	c := fake.NewClientBuilder().
 		WithScheme(s).
 		WithObjects(objs...).
-		WithStatusSubresource(&lll.EtcdCluster{}, &lll.EtcdMember{}).
+		WithStatusSubresource(&lll.EtcdCluster{}, &lll.EtcdMember{}, &lll.EtcdBackup{}).
 		Build()
 	return c, s
 }

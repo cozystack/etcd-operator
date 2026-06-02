@@ -27,10 +27,11 @@ The full design rationale is in [docs/concepts.md](docs/concepts.md).
 - **Monitoring / autoscaling hooks**: every member Pod always exposes a plaintext `metrics` container port at `2381` (etcd's `/health` + Prometheus `/metrics`) for `VMPodScrape` / `PodMonitor`. The `EtcdCluster` CRD exposes the `/scale` subresource with a populated `status.selector`, making it a valid target for `kubectl scale` and `VerticalPodAutoscaler.targetRef`.
 - **Locking pattern**: `status.observed` snapshots the in-flight target so mid-flight spec edits don't corrupt consensus; `progressDeadline` bounds how long the operator will spend trying to reach a target.
 - **Cluster deletion**: cascading owner refs clean up everything; finalizers detect "the whole cluster is going away" and skip etcd-side removal to avoid deadlock.
+- **Backups & restore**: `EtcdBackup` captures a one-shot snapshot of a cluster to S3 (or a PVC) via a Job running the operator image as a backup agent; `status.snapshot` records the stored object's URI, size, and checksum. A new cluster restores from a snapshot at first bootstrap via `spec.bootstrap.restore.source` (the seed Pod runs a restore initContainer before etcd starts). TLS and `spec.auth` auth are honored automatically. No scheduled backups (`EtcdBackupSchedule` is intentionally out of scope) — drive recurring snapshots with a `CronJob`/`kubectl apply` from outside. See [docs/concepts.md](docs/concepts.md#backups--restore) and the [restore runbook](docs/operations.md#restoring-a-cluster-from-a-snapshot).
 
 ## What's not supported (yet)
 
-No multi-user / per-tenant RBAC inside etcd — single-user `root` auth is available via `spec.auth.enabled` (BYO credentials Secret; see [docs/concepts.md](docs/concepts.md#authentication)), but every authenticated client is `root`. No in-place version upgrades (changing `spec.version` only affects newly-created members). No PVC resizing — see [#2](https://github.com/lllamnyp/etcd-operator/issues/2). No automatic broken-member replacement for PVC-backed clusters (memory-backed members do auto-replace on Pod loss; `status.brokenMembers` reads 0 in practice — see [docs/concepts.md](docs/concepts.md#storage)). No backups, no defragmentation scheduling, no PodAntiAffinity by default (tracked in [#16](https://github.com/lllamnyp/etcd-operator/issues/16)). See the [issue tracker](https://github.com/lllamnyp/etcd-operator/issues) for the running follow-up list.
+No multi-user / per-tenant RBAC inside etcd — single-user `root` auth is available via `spec.auth.enabled` (BYO credentials Secret; see [docs/concepts.md](docs/concepts.md#authentication)), but every authenticated client is `root`. No in-place version upgrades (changing `spec.version` only affects newly-created members). No PVC resizing — see [#2](https://github.com/lllamnyp/etcd-operator/issues/2). No automatic broken-member replacement for PVC-backed clusters (memory-backed members do auto-replace on Pod loss; `status.brokenMembers` reads 0 in practice — see [docs/concepts.md](docs/concepts.md#storage)). One-shot backups and restore-on-bootstrap are supported (see above), but there is no *scheduled* backup CRD. No defragmentation scheduling, no PodAntiAffinity by default (tracked in [#16](https://github.com/lllamnyp/etcd-operator/issues/16)). See the [issue tracker](https://github.com/lllamnyp/etcd-operator/issues) for the running follow-up list.
 
 ## Quick start
 
@@ -52,7 +53,7 @@ metadata:
   namespace: default
 spec:
   replicas: 3
-  version: 3.5.17
+  version: 3.6.11
   storage:
     size: 1Gi
 EOF

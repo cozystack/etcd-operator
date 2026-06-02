@@ -45,6 +45,10 @@ type EtcdMemberReconciler struct {
 	Scheme *runtime.Scheme
 
 	EtcdClientFactory EtcdClientFactory
+
+	// OperatorImage is the operator's own image; the restore agent runs from
+	// it as an initContainer on the bootstrap seed Pod.
+	OperatorImage string
 }
 
 //+kubebuilder:rbac:groups=etcd-operator.cozystack.io,resources=etcdmembers,verbs=get;list;watch;update;patch
@@ -448,6 +452,16 @@ func (r *EtcdMemberReconciler) ensurePod(ctx context.Context, member *lll.EtcdMe
 		return err
 	}
 
+	// A seed carrying a restore spec needs the operator image for its restore
+	// init container. Refuse to create the Pod with an empty image — an
+	// unschedulable/empty-image Pod would brick cluster bootstrap with an
+	// opaque failure. Erroring here triggers the standard backoff requeue and
+	// surfaces a clear reason.
+	if member.Spec.Restore != nil && r.OperatorImage == "" {
+		return fmt.Errorf("member %q requests a restore but the operator image is not configured "+
+			"(set --operator-image / OPERATOR_IMAGE); refusing to create a seed Pod with an empty restore image", member.Name)
+	}
+
 	pod = r.buildPod(member)
 	if err := controllerutil.SetControllerReference(member, pod, r.Scheme); err != nil {
 		return err
@@ -678,6 +692,16 @@ func (r *EtcdMemberReconciler) buildPod(member *lll.EtcdMember) *corev1.Pod {
 		})
 	}
 
+	// Restore initContainer: when the seed carries a restore spec, populate
+	// the data dir from the snapshot before etcd starts. The agent no-ops if
+	// the data dir is already initialized, so it's safe across Pod restarts.
+	var initContainers []corev1.Container
+	if member.Spec.Restore != nil {
+		ic, extraVols := restoreInitContainer(member, pAddr, r.OperatorImage)
+		initContainers = append(initContainers, ic)
+		volumes = append(volumes, extraVols...)
+	}
+
 	return &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      member.Name,
@@ -685,8 +709,13 @@ func (r *EtcdMemberReconciler) buildPod(member *lll.EtcdMember) *corev1.Pod {
 			Labels:    labels,
 		},
 		Spec: corev1.PodSpec{
-			Hostname:  member.Name,
-			Subdomain: member.Spec.ClusterName,
+			Hostname:       member.Name,
+			Subdomain:      member.Spec.ClusterName,
+			InitContainers: initContainers,
+			// etcd and the restore agent never call the Kubernetes API, so
+			// don't mount a ServiceAccount token into the member Pod (matches
+			// the backup Job's stance and trims needless attack surface).
+			AutomountServiceAccountToken: ptrBool(false),
 			SecurityContext: &corev1.PodSecurityContext{
 				RunAsNonRoot: ptrBool(true),
 				RunAsUser:    ptrInt64(65532),
@@ -745,6 +774,76 @@ func (r *EtcdMemberReconciler) buildPod(member *lll.EtcdMember) *corev1.Pod {
 			Volumes: volumes,
 		},
 	}
+}
+
+const restoreSrcMountPath = "/restore/src"
+
+// restoreInitContainer builds the initContainer that restores the data dir
+// from a snapshot before etcd starts. peerAddr is this member's peer URL; the
+// agent feeds it (with the member name / initial-cluster / token) to etcdutl
+// so the restored data matches the identity the etcd container will run with.
+// For an S3 source the object key is exact (not a prefix); for a PVC source
+// the volume is mounted read-only and PVC_SUBPATH points to the snapshot file.
+func restoreInitContainer(member *lll.EtcdMember, peerAddr, operatorImage string) (corev1.Container, []corev1.Volume) {
+	src := member.Spec.Restore.Source
+	env := []corev1.EnvVar{
+		{Name: "ETCD_DATA_DIR", Value: "/var/lib/etcd"},
+		{Name: "ETCD_MEMBER_NAME", Value: member.Name},
+		{Name: "ETCD_INITIAL_CLUSTER", Value: member.Spec.InitialCluster},
+		{Name: "ETCD_INITIAL_CLUSTER_TOKEN", Value: member.Spec.ClusterToken},
+		{Name: "ETCD_PEER_URLS", Value: peerAddr},
+		// The cluster's etcd version, for the agent's version-compat pre-flight
+		// (the restored data dir must match the etcd that boots on it).
+		{Name: "ETCD_VERSION", Value: member.Spec.Version},
+	}
+	mounts := []corev1.VolumeMount{{Name: "data", MountPath: "/var/lib/etcd"}}
+	var vols []corev1.Volume
+
+	switch {
+	case src.S3 != nil:
+		s3 := src.S3
+		env = append(env,
+			corev1.EnvVar{Name: "BACKUP_DEST_KIND", Value: "s3"},
+			corev1.EnvVar{Name: "S3_ENDPOINT", Value: s3.Endpoint},
+			corev1.EnvVar{Name: "S3_BUCKET", Value: s3.Bucket},
+			corev1.EnvVar{Name: "S3_KEY", Value: s3.Key}, // exact object key for restore
+			corev1.EnvVar{Name: "S3_REGION", Value: s3.Region},
+			corev1.EnvVar{Name: "S3_FORCE_PATH_STYLE", Value: fmt.Sprintf("%t", s3.ForcePathStyle)},
+			corev1.EnvVar{Name: "AWS_ACCESS_KEY_ID", ValueFrom: &corev1.EnvVarSource{SecretKeyRef: &corev1.SecretKeySelector{
+				LocalObjectReference: s3.CredentialsSecretRef, Key: "AWS_ACCESS_KEY_ID",
+			}}},
+			corev1.EnvVar{Name: "AWS_SECRET_ACCESS_KEY", ValueFrom: &corev1.EnvVarSource{SecretKeyRef: &corev1.SecretKeySelector{
+				LocalObjectReference: s3.CredentialsSecretRef, Key: "AWS_SECRET_ACCESS_KEY",
+			}}},
+		)
+	case src.PVC != nil:
+		env = append(env,
+			corev1.EnvVar{Name: "BACKUP_DEST_KIND", Value: "pvc"},
+			corev1.EnvVar{Name: "PVC_MOUNT_PATH", Value: restoreSrcMountPath},
+			corev1.EnvVar{Name: "PVC_SUBPATH", Value: src.PVC.SubPath},
+		)
+		vols = append(vols, corev1.Volume{
+			Name: "restore-src",
+			VolumeSource: corev1.VolumeSource{PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
+				ClaimName: src.PVC.ClaimName,
+				ReadOnly:  true,
+			}},
+		})
+		mounts = append(mounts, corev1.VolumeMount{Name: "restore-src", MountPath: restoreSrcMountPath, ReadOnly: true})
+	}
+
+	return corev1.Container{
+		Name:    "restore",
+		Image:   operatorImage,
+		Command: []string{"/manager", "restore-agent"},
+		Env:     env,
+		SecurityContext: &corev1.SecurityContext{
+			AllowPrivilegeEscalation: ptrBool(false),
+			Capabilities:             &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}},
+		},
+		VolumeMounts: mounts,
+		Resources:    restoreAgentResources(),
+	}, vols
 }
 
 // ── Status ───────────────────────────────────────────────────────────────

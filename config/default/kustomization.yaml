@@ -30,6 +30,22 @@ patchesStrategicMerge:
 # endpoint w/o any authn/z, please comment the following line.
 - manager_auth_proxy_patch.yaml
 
+# Keep the manager's OPERATOR_IMAGE env in sync with its own container image,
+# so the backup Job and restore init container always run the deployed
+# operator image. `make deploy IMG=...` rewrites the image; this copies that
+# value into the env var.
+replacements:
+- source:
+    kind: Deployment
+    name: controller-manager
+    fieldPath: spec.template.spec.containers.[name=manager].image
+  targets:
+  - select:
+      kind: Deployment
+      name: controller-manager
+    fieldPaths:
+    - spec.template.spec.containers.[name=manager].env.[name=OPERATOR_IMAGE].value
+
 
 
 # [WEBHOOK] To enable webhook, uncomment all the sections with [WEBHOOK] prefix including the one in
