@@ -23,7 +23,7 @@ jobs:
     name: Verify generated code is up to date
     runs-on: ubuntu-22.04
     steps:
-      - uses: actions/checkout@v4.1.7
+      - uses: actions/checkout@v6.0.3
       - uses: actions/setup-go@v5.0.1
         with:
           go-version-file: go.mod
