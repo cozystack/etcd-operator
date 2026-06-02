@@ -18,13 +18,13 @@ credentials**.
 ## Authentication: root credentials are BYO and required
 
 In the legacy operator, enabling auth provisioned a fixed `root:root` user
-implicitly. In this operator, `spec.security.enableAuth` requires you to
+implicitly. In this operator, `spec.auth.enabled` requires you to
 **bring your own** root credentials via a referenced Secret — nothing is
-hardcoded. Concretely, when `spec.security.enableAuth: true`:
+hardcoded. Concretely, when `spec.auth.enabled: true`:
 
 - `spec.tls.client` **must** be set (CEL-enforced) — credentials never cross a
   plaintext wire.
-- `spec.security.rootCredentialsSecretRef` **must** be set (CEL-enforced). It
+- `spec.auth.rootCredentialsSecretRef` **must** be set (CEL-enforced). It
   names a `kubernetes.io/basic-auth` Secret in the cluster's namespace; the
   operator reads its `password` key. The etcd user is always `root` (etcd
   requires a user named `root` to enable auth), so the Secret's `username`
@@ -51,8 +51,8 @@ behaviour.
      tls:
        client:
          serverSecretRef: { name: my-server-tls }
-     security:
-       enableAuth: true
+     auth:
+       enabled: true
        rootCredentialsSecretRef: { name: my-etcd-root }
    ```
 
@@ -84,7 +84,7 @@ behaviour.
   operator's implicit `root:root`? Put `password: root` in the Secret to keep
   working, then rotate later by recreating — see below.)
 
-- **No in-place rotation.** `spec.security` (including the Secret *reference*) is
+- **No in-place rotation.** `spec.auth` (including the Secret *reference*) is
   immutable post-create, and the operator reads the password fresh on every
   dial. Changing the Secret's *contents* after auth is enabled desyncs the
   operator from etcd. Rotating the root password is therefore a recreate, not an

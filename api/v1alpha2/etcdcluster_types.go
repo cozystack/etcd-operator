@@ -43,7 +43,7 @@ type EtcdClusterTLS struct {
 	Peer *PeerTLS `json:"peer,omitempty"`
 }
 
-// SecuritySpec configures in-etcd authentication.
+// AuthSpec configures in-etcd authentication.
 //
 // This version ships a single-user model: enabling auth provisions one etcd
 // user, "root", granted etcd's built-in "root" role, and then turns on
@@ -51,10 +51,11 @@ type EtcdClusterTLS struct {
 // via a Secret referenced by RootCredentialsSecretRef (see that field), never
 // hardcoded. Multi-user / per-tenant RBAC is out of scope here and would land
 // as additional fields on this struct (e.g. a Users list).
-type SecuritySpec struct {
-	// EnableAuth turns on etcd authentication. The operator provisions the
+type AuthSpec struct {
+	// Enabled turns on etcd authentication. The operator provisions the
 	// root user + role and runs `auth enable` once the cluster has
-	// converged to a healthy quorum (see status.authEnabled).
+	// converged to a healthy quorum (see status.authEnabled). Mirrors
+	// `etcdctl auth enable` and the AuthStatusResponse.Enabled field.
 	//
 	// Requires spec.tls.client to be set: auth credentials must not cross
 	// a plaintext wire. Immutable post-create — enabling or disabling auth
@@ -63,11 +64,11 @@ type SecuritySpec struct {
 	// the field is frozen the same way spec.tls is. Delete and recreate to
 	// change it.
 	// +optional
-	EnableAuth bool `json:"enableAuth,omitempty"`
+	Enabled bool `json:"enabled,omitempty"`
 
 	// RootCredentialsSecretRef references a Secret in the cluster's
 	// namespace holding the etcd root user's credentials. Required when
-	// EnableAuth is true (CEL-enforced).
+	// Enabled is true (CEL-enforced).
 	//
 	// The Secret is expected to be of type kubernetes.io/basic-auth: the
 	// operator reads the `password` key and provisions the etcd `root` user
@@ -75,7 +76,7 @@ type SecuritySpec struct {
 	// pointing at the same Secret) and must be "root" — the etcd user is
 	// always root, since etcd requires a user named root to enable auth.
 	//
-	// Immutable post-create (part of the immutable security subtree). The
+	// Immutable post-create (part of the immutable auth subtree). The
 	// operator reads the password on every dial; changing the Secret's
 	// contents after auth is enabled would desync the operator from etcd —
 	// in-place password rotation is not supported in this version, recreate
@@ -83,6 +84,18 @@ type SecuritySpec struct {
 	// +optional
 	RootCredentialsSecretRef *corev1.LocalObjectReference `json:"rootCredentialsSecretRef,omitempty"`
 }
+
+// Messages emitted by the spec.auth CEL XValidation rules on EtcdClusterSpec.
+// The kubebuilder markers below embed these strings literally — controller-gen
+// cannot reference Go constants — so they are named here as the single source
+// tests assert against, instead of re-typing the literals. Keep the marker text
+// and these constants in sync.
+const (
+	MsgAuthRequiresClientTLS      = "spec.auth.enabled requires spec.tls.client (auth credentials must not cross a plaintext connection)"
+	MsgAuthRequiresCredentialsRef = "spec.auth.enabled requires spec.auth.rootCredentialsSecretRef"
+	MsgAuthAddRemove              = "spec.auth cannot be added to or removed from an existing cluster"
+	MsgAuthImmutable              = "spec.auth is immutable post-create"
+)
 
 // ClientTLS configures TLS for the etcd client API.
 //
@@ -332,10 +345,10 @@ type StorageSpec struct {
 // +kubebuilder:validation:XValidation:rule="!has(self.tls) || !has(oldSelf.tls) || self.tls == oldSelf.tls",message="spec.tls is immutable post-create; delete and recreate the cluster to change TLS configuration"
 // +kubebuilder:validation:XValidation:rule="has(self.storage.storageClassName) == has(oldSelf.storage.storageClassName)",message="spec.storage.storageClassName cannot be added to or removed from an existing cluster; delete and recreate"
 // +kubebuilder:validation:XValidation:rule="!has(self.storage.storageClassName) || !has(oldSelf.storage.storageClassName) || self.storage.storageClassName == oldSelf.storage.storageClassName",message="spec.storage.storageClassName is immutable post-create (a PVC's storageClassName itself is immutable, and the operator does not roll PVCs); delete and recreate the cluster to change the StorageClass"
-// +kubebuilder:validation:XValidation:rule="has(self.security) == has(oldSelf.security)",message="spec.security cannot be added to or removed from an existing cluster; delete and recreate"
-// +kubebuilder:validation:XValidation:rule="!has(self.security) || !has(oldSelf.security) || self.security == oldSelf.security",message="spec.security is immutable post-create; delete and recreate the cluster to change auth configuration"
-// +kubebuilder:validation:XValidation:rule="!(has(self.security) && self.security.enableAuth) || (has(self.tls) && has(self.tls.client))",message="spec.security.enableAuth requires spec.tls.client (auth credentials must not cross a plaintext connection)"
-// +kubebuilder:validation:XValidation:rule="!(has(self.security) && self.security.enableAuth) || has(self.security.rootCredentialsSecretRef)",message="spec.security.enableAuth requires spec.security.rootCredentialsSecretRef"
+// +kubebuilder:validation:XValidation:rule="has(self.auth) == has(oldSelf.auth)",message="spec.auth cannot be added to or removed from an existing cluster; delete and recreate"
+// +kubebuilder:validation:XValidation:rule="!has(self.auth) || !has(oldSelf.auth) || self.auth == oldSelf.auth",message="spec.auth is immutable post-create; delete and recreate the cluster to change auth configuration"
+// +kubebuilder:validation:XValidation:rule="!(has(self.auth) && self.auth.enabled) || (has(self.tls) && has(self.tls.client))",message="spec.auth.enabled requires spec.tls.client (auth credentials must not cross a plaintext connection)"
+// +kubebuilder:validation:XValidation:rule="!(has(self.auth) && self.auth.enabled) || has(self.auth.rootCredentialsSecretRef)",message="spec.auth.enabled requires spec.auth.rootCredentialsSecretRef"
 type EtcdClusterSpec struct {
 	// Replicas is the desired number of cluster members. Should be odd.
 	// A value of 0 parks the cluster ("scale to zero"): the operator
@@ -381,12 +394,12 @@ type EtcdClusterSpec struct {
 	// +optional
 	TLS *EtcdClusterTLS `json:"tls,omitempty"`
 
-	// Security configures in-etcd authentication. Absent means no auth
+	// Auth configures in-etcd authentication. Absent means no auth
 	// (anonymous access on the client API, subject only to TLS). See
-	// SecuritySpec for the single-user parity model and its constraints
+	// AuthSpec for the single-user parity model and its constraints
 	// (requires spec.tls.client; immutable post-create).
 	// +optional
-	Security *SecuritySpec `json:"security,omitempty"`
+	Auth *AuthSpec `json:"auth,omitempty"`
 
 	// Resources sets the etcd container's resource requests and limits.
 	// When omitted, the operator falls back to a conservative default
@@ -468,11 +481,11 @@ type EtcdClusterStatus struct {
 
 	// AuthEnabled is true once the operator has successfully run
 	// `auth enable` against the cluster. It is latched (never cleared —
-	// spec.security.enableAuth is immutable) and is the single signal every
+	// spec.auth.enabled is immutable) and is the single signal every
 	// operator etcd dial consults to decide whether to present the root
 	// credentials: false ⇒ dial anonymously (auth not yet on, e.g. during
 	// the bootstrap window before the cluster has converged), true ⇒ dial
-	// as root. Decoupling this from spec.security.enableAuth is what makes
+	// as root. Decoupling this from spec.auth.enabled is what makes
 	// the bootstrap window correct — clientv3 attempts an Authenticate RPC
 	// on connect when a username is set, which fails until auth is enabled.
 	// +optional

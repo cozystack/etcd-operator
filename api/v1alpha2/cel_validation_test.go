@@ -574,7 +574,7 @@ func TestCEL_HappyPathAccepts(t *testing.T) {
 	}
 }
 
-// spec.security.enableAuth requires spec.tls.client — auth credentials must
+// spec.auth.enabled requires spec.tls.client — auth credentials must
 // not cross a plaintext wire. This rule does not reference oldSelf, so it is
 // enforced on CREATE.
 func TestCEL_EnableAuthWithoutClientTLSRejected(t *testing.T) {
@@ -583,22 +583,22 @@ func TestCEL_EnableAuthWithoutClientTLSRejected(t *testing.T) {
 
 	c := validCluster("auth-no-tls")
 	// Credentials ref present so only the tls.client rule can fire.
-	c.Spec.Security = &lll.SecuritySpec{
-		EnableAuth:               true,
+	c.Spec.Auth = &lll.AuthSpec{
+		Enabled:                  true,
 		RootCredentialsSecretRef: &corev1.LocalObjectReference{Name: "fake-root-creds"},
 	}
 
 	err := k8s.Create(ctx, c)
 	if err == nil {
 		_ = k8s.Delete(ctx, c)
-		t.Fatalf("apiserver accepted enableAuth without spec.tls.client; expected rejection")
+		t.Fatalf("apiserver accepted spec.auth.enabled without spec.tls.client; expected rejection")
 	}
-	if !strings.Contains(err.Error(), "requires spec.tls.client") {
+	if !strings.Contains(err.Error(), lll.MsgAuthRequiresClientTLS) {
 		t.Fatalf("error did not mention the tls.client requirement: %v", err)
 	}
 }
 
-// spec.security.enableAuth requires spec.security.rootCredentialsSecretRef.
+// spec.auth.enabled requires spec.auth.rootCredentialsSecretRef.
 func TestCEL_EnableAuthWithoutCredentialsSecretRejected(t *testing.T) {
 	skipIfNoEnvtest(t)
 	ctx := context.Background()
@@ -609,19 +609,19 @@ func TestCEL_EnableAuthWithoutCredentialsSecretRejected(t *testing.T) {
 			ServerSecretRef: &corev1.LocalObjectReference{Name: "fake-server-tls"},
 		},
 	}
-	c.Spec.Security = &lll.SecuritySpec{EnableAuth: true} // no rootCredentialsSecretRef
+	c.Spec.Auth = &lll.AuthSpec{Enabled: true} // no rootCredentialsSecretRef
 
 	err := k8s.Create(ctx, c)
 	if err == nil {
 		_ = k8s.Delete(ctx, c)
-		t.Fatalf("apiserver accepted enableAuth without rootCredentialsSecretRef; expected rejection")
+		t.Fatalf("apiserver accepted spec.auth.enabled without rootCredentialsSecretRef; expected rejection")
 	}
-	if !strings.Contains(err.Error(), "requires spec.security.rootCredentialsSecretRef") {
+	if !strings.Contains(err.Error(), lll.MsgAuthRequiresCredentialsRef) {
 		t.Fatalf("error did not mention the credentials-secret requirement: %v", err)
 	}
 }
 
-// enableAuth with at least client server-TLS is accepted (server-TLS-only
+// spec.auth.enabled with at least client server-TLS is accepted (server-TLS-only
 // satisfies the requirement — full mTLS is not required for the spec to pass).
 func TestCEL_EnableAuthWithServerTLSAccepted(t *testing.T) {
 	skipIfNoEnvtest(t)
@@ -633,20 +633,20 @@ func TestCEL_EnableAuthWithServerTLSAccepted(t *testing.T) {
 			ServerSecretRef: &corev1.LocalObjectReference{Name: "fake-server-tls"},
 		},
 	}
-	c.Spec.Security = &lll.SecuritySpec{
-		EnableAuth:               true,
+	c.Spec.Auth = &lll.AuthSpec{
+		Enabled:                  true,
 		RootCredentialsSecretRef: &corev1.LocalObjectReference{Name: "fake-root-creds"},
 	}
 
 	if err := k8s.Create(ctx, c); err != nil {
-		t.Fatalf("apiserver rejected enableAuth with server-TLS: %v", err)
+		t.Fatalf("apiserver rejected spec.auth.enabled with server-TLS: %v", err)
 	}
 	t.Cleanup(func() { _ = k8s.Delete(ctx, c) })
 }
 
-// enableAuth is immutable post-create: flipping it on an existing cluster is
-// rejected.
-func TestCEL_SecurityImmutablePostCreate(t *testing.T) {
+// spec.auth.enabled is immutable post-create: flipping it on an existing
+// cluster is rejected.
+func TestCEL_AuthImmutablePostCreate(t *testing.T) {
 	skipIfNoEnvtest(t)
 	ctx := context.Background()
 
@@ -656,8 +656,8 @@ func TestCEL_SecurityImmutablePostCreate(t *testing.T) {
 			ServerSecretRef: &corev1.LocalObjectReference{Name: "fake-server-tls"},
 		},
 	}
-	c.Spec.Security = &lll.SecuritySpec{
-		EnableAuth:               true,
+	c.Spec.Auth = &lll.AuthSpec{
+		Enabled:                  true,
 		RootCredentialsSecretRef: &corev1.LocalObjectReference{Name: "fake-root-creds"},
 	}
 	if err := k8s.Create(ctx, c); err != nil {
@@ -669,19 +669,19 @@ func TestCEL_SecurityImmutablePostCreate(t *testing.T) {
 	if err := k8s.Get(ctx, ctrlclient.ObjectKeyFromObject(c), got); err != nil {
 		t.Fatalf("Get: %v", err)
 	}
-	got.Spec.Security.EnableAuth = false
+	got.Spec.Auth.Enabled = false
 
 	err := k8s.Update(ctx, got)
 	if err == nil {
-		t.Fatalf("apiserver accepted flipping enableAuth post-create; expected rejection")
+		t.Fatalf("apiserver accepted flipping spec.auth.enabled post-create; expected rejection")
 	}
-	if !strings.Contains(err.Error(), "spec.security is immutable") {
-		t.Fatalf("error did not mention security immutability: %v", err)
+	if !strings.Contains(err.Error(), lll.MsgAuthImmutable) {
+		t.Fatalf("error did not mention auth immutability: %v", err)
 	}
 }
 
-// The security subtree cannot be added to an existing cluster.
-func TestCEL_SecurityAddOnExistingClusterRejected(t *testing.T) {
+// The auth subtree cannot be added to an existing cluster.
+func TestCEL_AuthAddOnExistingClusterRejected(t *testing.T) {
 	skipIfNoEnvtest(t)
 	ctx := context.Background()
 
@@ -692,7 +692,7 @@ func TestCEL_SecurityAddOnExistingClusterRejected(t *testing.T) {
 		},
 	}
 	if err := k8s.Create(ctx, c); err != nil {
-		t.Fatalf("Create cluster without security: %v", err)
+		t.Fatalf("Create cluster without auth: %v", err)
 	}
 	t.Cleanup(func() { _ = k8s.Delete(ctx, c) })
 
@@ -700,16 +700,16 @@ func TestCEL_SecurityAddOnExistingClusterRejected(t *testing.T) {
 	if err := k8s.Get(ctx, ctrlclient.ObjectKeyFromObject(c), got); err != nil {
 		t.Fatalf("Get: %v", err)
 	}
-	got.Spec.Security = &lll.SecuritySpec{
-		EnableAuth:               true,
+	got.Spec.Auth = &lll.AuthSpec{
+		Enabled:                  true,
 		RootCredentialsSecretRef: &corev1.LocalObjectReference{Name: "fake-root-creds"},
 	}
 
 	err := k8s.Update(ctx, got)
 	if err == nil {
-		t.Fatalf("apiserver accepted adding spec.security to existing cluster; expected rejection")
+		t.Fatalf("apiserver accepted adding spec.auth to existing cluster; expected rejection")
 	}
-	if !strings.Contains(err.Error(), "spec.security cannot be added") {
+	if !strings.Contains(err.Error(), lll.MsgAuthAddRemove) {
 		t.Fatalf("error did not mention add/remove rejection: %v", err)
 	}
 }

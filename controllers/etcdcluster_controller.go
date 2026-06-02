@@ -1018,7 +1018,7 @@ func (r *EtcdClusterReconciler) reconcileAuth(ctx context.Context, cluster *lll.
 
 	// Gates. Anything that isn't a converged, healthy, auth-wanting cluster
 	// that hasn't already had auth enabled is a clean no-op.
-	if cluster.Spec.Security == nil || !cluster.Spec.Security.EnableAuth {
+	if cluster.Spec.Auth == nil || !cluster.Spec.Auth.Enabled {
 		return nil, nil
 	}
 	if cluster.Status.AuthEnabled {

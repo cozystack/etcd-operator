@@ -43,11 +43,11 @@ func rootCredsSecret() *corev1.Secret {
 	}
 }
 
-// enabledSecuritySpec is the spec.security a cluster needs for auth: enableAuth
+// enabledAuthSpec is the spec.auth a cluster needs for auth: enabled
 // plus the required credentials Secret ref.
-func enabledSecuritySpec() *lll.SecuritySpec {
-	return &lll.SecuritySpec{
-		EnableAuth:               true,
+func enabledAuthSpec() *lll.AuthSpec {
+	return &lll.AuthSpec{
+		Enabled:                  true,
 		RootCredentialsSecretRef: &corev1.LocalObjectReference{Name: testRootSecretName},
 	}
 }
@@ -56,7 +56,7 @@ func enabledSecuritySpec() *lll.SecuritySpec {
 // Observed=3, all members Ready) suitable for exercising reconcileAuth. TLS is
 // intentionally left unset: at the unit level CEL is not enforced and a nil TLS
 // keeps buildOperatorTLSConfig a no-op (the requires-TLS contract is covered by
-// the envtest CEL cases). The caller mutates Spec.Security / Status.AuthEnabled
+// the envtest CEL cases). The caller mutates Spec.Auth / Status.AuthEnabled
 // per scenario and appends rootCredsSecret() when it wants the Secret present.
 // ready controls whether the members report MemberReady=True.
 func authClusterObjects(t *testing.T, ready bool) (*lll.EtcdCluster, []client.Object) {
@@ -111,12 +111,12 @@ func reconcileOnce(t *testing.T, r *EtcdClusterReconciler) {
 	}
 }
 
-// Happy path: a converged cluster with enableAuth set gets the root user
+// Happy path: a converged cluster with auth enabled gets the root user
 // provisioned with the Secret's password, auth turned on, and
 // status.authEnabled latched.
 func TestReconcileAuth_EnablesWhenConverged(t *testing.T) {
 	cluster, objs := authClusterObjects(t, true)
-	cluster.Spec.Security = enabledSecuritySpec()
+	cluster.Spec.Auth = enabledAuthSpec()
 	objs = append(objs, rootCredsSecret())
 	c, _ := newTestClient(t, objs...)
 	fe := newFakeEtcd(0xdeadbeef)
@@ -146,7 +146,7 @@ func TestReconcileAuth_EnablesWhenConverged(t *testing.T) {
 // operator must NOT re-run the provisioning RPCs and must re-latch status.
 func TestReconcileAuth_AlreadyEnabledInEtcdLatchesStatus(t *testing.T) {
 	cluster, objs := authClusterObjects(t, true)
-	cluster.Spec.Security = enabledSecuritySpec()
+	cluster.Spec.Auth = enabledAuthSpec()
 	objs = append(objs, rootCredsSecret())
 	c, _ := newTestClient(t, objs...)
 	fe := newFakeEtcd(0xdeadbeef)
@@ -173,7 +173,7 @@ func TestReconcileAuth_AlreadyEnabledInEtcdLatchesStatus(t *testing.T) {
 // isAuthRequiredErr branch (distinct from the st.Enabled==true path).
 func TestReconcileAuth_AuthStatusPermissionDeniedLatches(t *testing.T) {
 	cluster, objs := authClusterObjects(t, true)
-	cluster.Spec.Security = enabledSecuritySpec()
+	cluster.Spec.Auth = enabledAuthSpec()
 	objs = append(objs, rootCredsSecret())
 	c, _ := newTestClient(t, objs...)
 	fe := newFakeEtcd(0xdeadbeef)
@@ -197,7 +197,7 @@ func TestReconcileAuth_AuthStatusPermissionDeniedLatches(t *testing.T) {
 // must NOT proceed to AuthEnable and must NOT latch status — it retries.
 func TestReconcileAuth_GrantRoleErrorRetries(t *testing.T) {
 	cluster, objs := authClusterObjects(t, true)
-	cluster.Spec.Security = enabledSecuritySpec()
+	cluster.Spec.Auth = enabledAuthSpec()
 	objs = append(objs, rootCredsSecret())
 	c, _ := newTestClient(t, objs...)
 	fe := newFakeEtcd(0xdeadbeef)
@@ -220,7 +220,7 @@ func TestReconcileAuth_GrantRoleErrorRetries(t *testing.T) {
 // not even dial for auth purposes.
 func TestReconcileAuth_StatusAlreadyLatchedIsNoop(t *testing.T) {
 	cluster, objs := authClusterObjects(t, true)
-	cluster.Spec.Security = enabledSecuritySpec()
+	cluster.Spec.Auth = enabledAuthSpec()
 	cluster.Status.AuthEnabled = true
 	objs = append(objs, rootCredsSecret())
 	c, _ := newTestClient(t, objs...)
@@ -238,7 +238,7 @@ func TestReconcileAuth_StatusAlreadyLatchedIsNoop(t *testing.T) {
 // error is tolerated and the operator proceeds to grant + enable.
 func TestReconcileAuth_UserAlreadyExistsTolerated(t *testing.T) {
 	cluster, objs := authClusterObjects(t, true)
-	cluster.Spec.Security = enabledSecuritySpec()
+	cluster.Spec.Auth = enabledAuthSpec()
 	objs = append(objs, rootCredsSecret())
 	c, _ := newTestClient(t, objs...)
 	fe := newFakeEtcd(0xdeadbeef)
@@ -256,11 +256,11 @@ func TestReconcileAuth_UserAlreadyExistsTolerated(t *testing.T) {
 	}
 }
 
-// enableAuth + converged but the referenced Secret is missing: the operator
+// auth enabled + converged but the referenced Secret is missing: the operator
 // must NOT enable auth (it would lock itself out) and must not latch status.
 func TestReconcileAuth_MissingSecretDoesNotEnable(t *testing.T) {
 	cluster, objs := authClusterObjects(t, true)
-	cluster.Spec.Security = enabledSecuritySpec()
+	cluster.Spec.Auth = enabledAuthSpec()
 	// Deliberately do NOT append rootCredsSecret().
 	c, _ := newTestClient(t, objs...)
 	fe := newFakeEtcd(0xdeadbeef)
@@ -282,7 +282,7 @@ func TestReconcileAuth_MissingSecretDoesNotEnable(t *testing.T) {
 // and captures creds.
 func TestReconcileAuth_SendsRootCredsAfterEnable(t *testing.T) {
 	cluster, objs := authClusterObjects(t, true)
-	cluster.Spec.Security = enabledSecuritySpec()
+	cluster.Spec.Auth = enabledAuthSpec()
 	cluster.Status.AuthEnabled = true
 	objs = append(objs, rootCredsSecret())
 	c, _ := newTestClient(t, objs...)
@@ -300,13 +300,13 @@ func TestReconcileAuth_SendsRootCredsAfterEnable(t *testing.T) {
 	}
 }
 
-// During the bootstrap window — enableAuth requested but status not yet
+// During the bootstrap window — auth requested but status not yet
 // latched — dials must remain anonymous (clientv3 skips Authenticate) and no
 // Secret is read. Use a not-yet-ready cluster so reconcileAuth's gate keeps
 // auth off, isolating the pre-enable dial from the promote path.
 func TestReconcileAuth_NoCredsBeforeEnable(t *testing.T) {
 	cluster, objs := authClusterObjects(t, false) // members not Ready ⇒ not converged
-	cluster.Spec.Security = enabledSecuritySpec()
+	cluster.Spec.Auth = enabledAuthSpec()
 	objs = append(objs, rootCredsSecret())
 	c, _ := newTestClient(t, objs...)
 	fe := newFakeEtcd(0xdeadbeef)
@@ -327,10 +327,10 @@ func TestReconcileAuth_NoCredsBeforeEnable(t *testing.T) {
 	}
 }
 
-// No security block ⇒ no auth RPCs ever.
+// No auth block ⇒ no auth RPCs ever.
 func TestReconcileAuth_DisabledMakesNoAuthCalls(t *testing.T) {
 	cluster, objs := authClusterObjects(t, true)
-	// cluster.Spec.Security left nil
+	// cluster.Spec.Auth left nil
 	c, _ := newTestClient(t, objs...)
 	fe := newFakeEtcd(0xdeadbeef)
 	r := &EtcdClusterReconciler{Client: c, Scheme: testScheme(t), EtcdClientFactory: factoryReturning(fe)}
@@ -338,19 +338,19 @@ func TestReconcileAuth_DisabledMakesNoAuthCalls(t *testing.T) {
 	reconcileOnce(t, r)
 
 	if fe.authEnableCalls != 0 || len(fe.userAddCalls) != 0 {
-		t.Fatalf("auth calls made with no security spec: enable=%d add=%v", fe.authEnableCalls, fe.userAddCalls)
+		t.Fatalf("auth calls made with no auth spec: enable=%d add=%v", fe.authEnableCalls, fe.userAddCalls)
 	}
 	mustGet(t, c, "test", "ns", cluster)
 	if cluster.Status.AuthEnabled {
-		t.Fatalf("status.authEnabled set with no security spec")
+		t.Fatalf("status.authEnabled set with no auth spec")
 	}
 }
 
-// enableAuth set but the cluster has not converged (a member not Ready): the
+// auth enabled but the cluster has not converged (a member not Ready): the
 // gate must keep auth off until convergence.
 func TestReconcileAuth_NotConvergedSkips(t *testing.T) {
 	cluster, objs := authClusterObjects(t, false)
-	cluster.Spec.Security = enabledSecuritySpec()
+	cluster.Spec.Auth = enabledAuthSpec()
 	objs = append(objs, rootCredsSecret())
 	c, _ := newTestClient(t, objs...)
 	fe := newFakeEtcd(0xdeadbeef)

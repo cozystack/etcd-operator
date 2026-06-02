@@ -268,15 +268,15 @@ The CRD shape enforces exactly one source per subtree via CEL (`secretRef` XOR `
 
 ## Authentication
 
-Transport TLS encrypts the wire; etcd's own **authentication** layer controls *who* may talk to the store. Set `spec.security.enableAuth: true` and point at a Secret holding the root credentials:
+Transport TLS encrypts the wire; etcd's own **authentication** layer controls *who* may talk to the store. Set `spec.auth.enabled: true` and point at a Secret holding the root credentials:
 
 ```yaml
 spec:
   tls:
     client:
       serverSecretRef: { name: my-server-tls }   # required — see below
-  security:
-    enableAuth: true
+  auth:
+    enabled: true
     rootCredentialsSecretRef: { name: my-etcd-root }   # required
 ---
 apiVersion: v1
@@ -289,12 +289,12 @@ stringData:
   password: <choose>
 ```
 
-When enabled, the operator provisions a single `root` user — with the **`password` from the referenced Secret** — granted etcd's built-in `root` role, and runs `auth enable`, after which the client API rejects anonymous access. This is a **single-user** model at parity with the legacy operator. Per-tenant users / RBAC are out of scope for now (a future `spec.security.users`-style extension).
+When enabled, the operator provisions a single `root` user — with the **`password` from the referenced Secret** — granted etcd's built-in `root` role, and runs `auth enable`, after which the client API rejects anonymous access. This is a **single-user** model at parity with the legacy operator. Per-tenant users / RBAC are out of scope for now (a future `spec.auth.users`-style extension).
 
 Mechanics worth knowing:
 
 - **Requires `spec.tls.client`** (CEL-enforced). Auth credentials must not cross a plaintext wire, so server-TLS is the minimum; full mTLS also satisfies it.
-- **Requires `spec.security.rootCredentialsSecretRef`** (CEL-enforced). A `kubernetes.io/basic-auth` Secret in the cluster's namespace; the operator reads its `password` key. The etcd user is always `root` (etcd requires a user named `root` to enable auth), so the Secret's `username` should be `root`.
+- **Requires `spec.auth.rootCredentialsSecretRef`** (CEL-enforced). A `kubernetes.io/basic-auth` Secret in the cluster's namespace; the operator reads its `password` key. The etcd user is always `root` (etcd requires a user named `root` to enable auth), so the Secret's `username` should be `root`.
 - **Immutable post-create** (CEL), like `spec.tls`. Enabling/disabling auth on a live cluster mutates persisted data-store state in lockstep with the operator's own client; v1 punts that to delete-and-recreate. The Secret *reference* is frozen too, and **in-place password rotation is not supported** — the operator reads the password fresh on every dial, so changing the Secret's contents after auth is on would desync it from etcd. Recreate to change the password.
 - **No etcd startup flag, no Pod change.** Auth is a runtime operation persisted in the data store. The operator enables it via the etcd API *after* the cluster has converged to a healthy quorum — there is nothing to add to the member command line, so `EtcdMember` and the Pod spec are untouched.
 - **`status.authEnabled`** latches `true` once `auth enable` succeeds. It is the single signal every operator etcd dial consults: `false` ⇒ dial anonymously (the bootstrap window, before the cluster is up), `true` ⇒ read the Secret and present the root credentials. This is what lets the operator keep managing membership before *and* after the flip — `clientv3` attempts an `Authenticate` RPC on connect only when a username is set, which would fail until auth is on. Provisioning is idempotent: a crash between `auth enable` and the status write is recovered on the next reconcile via `AuthStatus`.
@@ -368,6 +368,6 @@ A few things that recur in similar operators but are intentionally absent here:
 
 - **No automatic broken-member replacement for PVC clusters.** `isBroken` is a real predicate only for memory-backed members (Pod lost → memory gone → member replaced); for PVC-backed members it stays a stub. The replacement policy (corruption? irrecoverable crashloop? quorum-loss handling?) is a richer decision and not yet wired up. Broken PVC members stay broken and require an explicit user action (see [operations.md](operations.md#broken-member)).
 - **No leader-aware client routing.** Each etcd-client call balanced by clientv3 lands on whatever endpoint is first responsive. Filtering to non-learner endpoints (the issue #12 fix) handles the "rpc not supported for learner" case, but heavy `MemberList` traffic can still spread across followers. A leader-aware proxy or a sidecar that intercepts apiserver→etcd traffic is the proper fix; not in scope here.
-- **No multi-user / RBAC inside etcd.** Single-user `root` authentication is available via `spec.security.enableAuth` (password sourced from a referenced Secret — see [Authentication](#authentication)), but per-tenant users and role-based authorization are not yet wired up — every authenticated client is `root`.
+- **No multi-user / RBAC inside etcd.** Single-user `root` authentication is available via `spec.auth.enabled` (password sourced from a referenced Secret — see [Authentication](#authentication)), but per-tenant users and role-based authorization are not yet wired up — every authenticated client is `root`.
 
 See [`What's not supported`](../README.md#whats-not-supported-yet) in the README for the running follow-up list.
