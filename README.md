@@ -30,7 +30,7 @@ The full design rationale is in [docs/concepts.md](docs/concepts.md).
 
 ## What's not supported (yet)
 
-No auth/RBAC inside etcd. No in-place version upgrades (changing `spec.version` only affects newly-created members). No PVC resizing — see [#2](https://github.com/lllamnyp/etcd-operator/issues/2). No automatic broken-member replacement for PVC-backed clusters (memory-backed members do auto-replace on Pod loss; `status.brokenMembers` reads 0 in practice — see [docs/concepts.md](docs/concepts.md#storage)). No backups, no defragmentation scheduling, no PodAntiAffinity by default (tracked in [#16](https://github.com/lllamnyp/etcd-operator/issues/16)). See the [issue tracker](https://github.com/lllamnyp/etcd-operator/issues) for the running follow-up list.
+No multi-user / per-tenant RBAC inside etcd — single-user `root` auth is available via `spec.auth.enabled` (BYO credentials Secret; see [docs/concepts.md](docs/concepts.md#authentication)), but every authenticated client is `root`. No in-place version upgrades (changing `spec.version` only affects newly-created members). No PVC resizing — see [#2](https://github.com/lllamnyp/etcd-operator/issues/2). No automatic broken-member replacement for PVC-backed clusters (memory-backed members do auto-replace on Pod loss; `status.brokenMembers` reads 0 in practice — see [docs/concepts.md](docs/concepts.md#storage)). No backups, no defragmentation scheduling, no PodAntiAffinity by default (tracked in [#16](https://github.com/lllamnyp/etcd-operator/issues/16)). See the [issue tracker](https://github.com/lllamnyp/etcd-operator/issues) for the running follow-up list.
 
 ## Quick start
 
@@ -74,6 +74,7 @@ For step-by-step setup, RBAC, image versions, and teardown see [docs/installatio
 - **[Installation](docs/installation.md)** — deploy the operator, create your first cluster, networking pitfalls, upgrades.
 - **[Concepts](docs/concepts.md)** — design rationale: locking pattern, single-seed bootstrap, GenerateName naming, scale-to-zero mechanics, conditions reference.
 - **[Operations](docs/operations.md)** — runbook for day-2: scaling, pausing/resuming, decoding conditions, escalating stuck reconciles, broken-member recovery.
+- **[Migration](docs/migration.md)** — moving onto this operator from the legacy aenix operator; tracks behavioural changes that need an explicit migration step — currently the BYO root-credentials requirement when enabling auth.
 
 ## Testing
 

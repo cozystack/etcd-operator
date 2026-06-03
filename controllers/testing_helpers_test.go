@@ -48,6 +48,18 @@ type fakeEtcd struct {
 	promoteCalls    []uint64
 	removeCalls     []uint64
 	closed          bool
+
+	// Auth surface.
+	authEnabled   bool
+	authStatusErr error
+	userAddErr    error
+	grantErr      error
+	authEnableErr error
+
+	userAddCalls     []string
+	userAddPasswords []string
+	grantCalls       [][2]string
+	authEnableCalls  int
 }
 
 func newFakeEtcd(clusterID uint64, members ...*etcdserverpb.Member) *fakeEtcd {
@@ -128,16 +140,73 @@ func (f *fakeEtcd) MemberRemove(_ context.Context, id uint64) (*clientv3.MemberR
 	}, nil
 }
 
+func (f *fakeEtcd) AuthStatus(_ context.Context) (*clientv3.AuthStatusResponse, error) {
+	if f.authStatusErr != nil {
+		return nil, f.authStatusErr
+	}
+	return &clientv3.AuthStatusResponse{
+		Header:  &etcdserverpb.ResponseHeader{ClusterId: f.clusterID},
+		Enabled: f.authEnabled,
+	}, nil
+}
+
+func (f *fakeEtcd) AuthEnable(_ context.Context) (*clientv3.AuthEnableResponse, error) {
+	if f.authEnableErr != nil {
+		return nil, f.authEnableErr
+	}
+	f.authEnableCalls++
+	f.authEnabled = true
+	return &clientv3.AuthEnableResponse{Header: &etcdserverpb.ResponseHeader{ClusterId: f.clusterID}}, nil
+}
+
+func (f *fakeEtcd) UserAdd(_ context.Context, name, password string) (*clientv3.AuthUserAddResponse, error) {
+	if f.userAddErr != nil {
+		return nil, f.userAddErr
+	}
+	f.userAddCalls = append(f.userAddCalls, name)
+	f.userAddPasswords = append(f.userAddPasswords, password)
+	return &clientv3.AuthUserAddResponse{Header: &etcdserverpb.ResponseHeader{ClusterId: f.clusterID}}, nil
+}
+
+func (f *fakeEtcd) UserGrantRole(_ context.Context, user, role string) (*clientv3.AuthUserGrantRoleResponse, error) {
+	if f.grantErr != nil {
+		return nil, f.grantErr
+	}
+	f.grantCalls = append(f.grantCalls, [2]string{user, role})
+	return &clientv3.AuthUserGrantRoleResponse{Header: &etcdserverpb.ResponseHeader{ClusterId: f.clusterID}}, nil
+}
+
 func (f *fakeEtcd) Close() error { f.closed = true; return nil }
 
 func factoryReturning(c EtcdClusterClient) EtcdClientFactory {
-	return func(_ context.Context, _ []string, _ *tls.Config) (EtcdClusterClient, error) { return c, nil }
+	return func(_ context.Context, _ []string, _ *tls.Config, _, _ string) (EtcdClusterClient, error) {
+		return c, nil
+	}
+}
+
+// capturingFactory returns the given client and records the username/password
+// it was last dialled with, so tests can assert whether credentials were sent.
+type capturedDial struct {
+	username string
+	password string
+	called   bool
+}
+
+func capturingFactory(c EtcdClusterClient, capture *capturedDial) EtcdClientFactory {
+	return func(_ context.Context, _ []string, _ *tls.Config, username, password string) (EtcdClusterClient, error) {
+		capture.username = username
+		capture.password = password
+		capture.called = true
+		return c, nil
+	}
 }
 
 // failingFactory returns an error from every Build call, simulating an
 // unreachable etcd cluster.
 func failingFactory(err error) EtcdClientFactory {
-	return func(_ context.Context, _ []string, _ *tls.Config) (EtcdClusterClient, error) { return nil, err }
+	return func(_ context.Context, _ []string, _ *tls.Config, _, _ string) (EtcdClusterClient, error) {
+		return nil, err
+	}
 }
 
 // testScheme returns a runtime scheme registered with corev1 and v1alpha2.

@@ -35,6 +35,16 @@ type EtcdClusterClient interface {
 	MemberAddAsLearner(ctx context.Context, peerAddrs []string) (*clientv3.MemberAddResponse, error)
 	MemberPromote(ctx context.Context, id uint64) (*clientv3.MemberPromoteResponse, error)
 	MemberRemove(ctx context.Context, id uint64) (*clientv3.MemberRemoveResponse, error)
+
+	// Auth surface — used by reconcileAuth to provision the single root
+	// user/role and turn on authentication. The "root" role is built into
+	// etcd, so a RoleAdd is not needed: UserAdd("root", …) +
+	// UserGrantRole("root", "root") + AuthEnable is sufficient.
+	AuthStatus(ctx context.Context) (*clientv3.AuthStatusResponse, error)
+	AuthEnable(ctx context.Context) (*clientv3.AuthEnableResponse, error)
+	UserAdd(ctx context.Context, name string, password string) (*clientv3.AuthUserAddResponse, error)
+	UserGrantRole(ctx context.Context, user string, role string) (*clientv3.AuthUserGrantRoleResponse, error)
+
 	Close() error
 }
 
@@ -43,18 +53,76 @@ type EtcdClusterClient interface {
 // a fake. Production uses DefaultEtcdClientFactory. tlsConfig is nil for
 // plaintext clusters and non-nil for TLS-enabled clusters; the operator
 // builds it from the cluster's spec.tls.client material.
-type EtcdClientFactory func(ctx context.Context, endpoints []string, tlsConfig *tls.Config) (EtcdClusterClient, error)
+//
+// username/password carry the etcd auth credentials. They are empty unless
+// the cluster has auth enabled (status.authEnabled), in which case the
+// operator dials as root — see resolveEtcdCredentials. An empty username
+// makes clientv3 skip the Authenticate RPC entirely, which is exactly what
+// is required before `auth enable` has run.
+type EtcdClientFactory func(ctx context.Context, endpoints []string, tlsConfig *tls.Config, username, password string) (EtcdClusterClient, error)
 
 // DefaultEtcdClientFactory returns a real clientv3.Client.
-func DefaultEtcdClientFactory(_ context.Context, endpoints []string, tlsConfig *tls.Config) (EtcdClusterClient, error) {
+func DefaultEtcdClientFactory(_ context.Context, endpoints []string, tlsConfig *tls.Config, username, password string) (EtcdClusterClient, error) {
 	cfg := clientv3.Config{
 		Endpoints:   endpoints,
 		DialTimeout: 5 * time.Second,
+		// Empty Username ⇒ clientv3 does not attempt the Authenticate RPC
+		// on connect. This is the anonymous-dial path used before auth is
+		// enabled and on clusters that never enable it.
+		Username: username,
+		Password: password,
 	}
 	if tlsConfig != nil {
 		cfg.TLS = tlsConfig
 	}
 	return clientv3.New(cfg)
+}
+
+// readRootPassword reads the etcd root user's password from the Secret named by
+// spec.auth.rootCredentialsSecretRef. The Secret is expected to be of type
+// kubernetes.io/basic-auth; the operator uses its `password` key (the etcd user
+// is always root). Returns an error when the ref is unset (should be impossible
+// once auth is enabled — CEL requires it) or the Secret/key is missing, so
+// callers keep the connection closed rather than dialling with no password.
+func readRootPassword(ctx context.Context, c client.Reader, cluster *lll.EtcdCluster) (string, error) {
+	if cluster.Spec.Auth == nil || cluster.Spec.Auth.RootCredentialsSecretRef == nil ||
+		cluster.Spec.Auth.RootCredentialsSecretRef.Name == "" {
+		return "", fmt.Errorf("spec.auth.rootCredentialsSecretRef is required when auth is enabled")
+	}
+	ns := cluster.Namespace
+	name := cluster.Spec.Auth.RootCredentialsSecretRef.Name
+	sec := &corev1.Secret{}
+	if err := c.Get(ctx, types.NamespacedName{Namespace: ns, Name: name}, sec); err != nil {
+		return "", fmt.Errorf("read root credentials secret %s/%s: %w", ns, name, err)
+	}
+	pw := sec.Data[corev1.BasicAuthPasswordKey]
+	if len(pw) == 0 {
+		return "", fmt.Errorf("root credentials secret %s/%s missing %q key", ns, name, corev1.BasicAuthPasswordKey)
+	}
+	return string(pw), nil
+}
+
+// resolveEtcdCredentials returns the username/password the operator should
+// dial etcd with, and whether auth is in effect. The user is always root; the
+// password comes from the Secret referenced by spec.auth.
+// rootCredentialsSecretRef (see readRootPassword).
+//
+// The gate is status.authEnabled, NOT spec.auth.enabled alone. During
+// the bootstrap window — spec.auth.enabled=true but the operator has
+// not yet run `auth enable` — this returns no creds (and reads no Secret) so
+// every dial proceeds anonymously, which is what etcd requires until auth is
+// turned on.
+func resolveEtcdCredentials(ctx context.Context, c client.Reader, cluster *lll.EtcdCluster) (username, password string, useAuth bool, err error) {
+	if cluster == nil ||
+		cluster.Spec.Auth == nil || !cluster.Spec.Auth.Enabled ||
+		!cluster.Status.AuthEnabled {
+		return "", "", false, nil
+	}
+	pw, err := readRootPassword(ctx, c, cluster)
+	if err != nil {
+		return "", "", false, err
+	}
+	return "root", pw, true, nil
 }
 
 // buildOperatorTLSConfig assembles the *tls.Config the operator's etcd

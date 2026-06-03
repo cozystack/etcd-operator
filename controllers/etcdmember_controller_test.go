@@ -811,7 +811,7 @@ func TestRemoveMemberFromEtcd_SkipsDeletingPeers(t *testing.T) {
 		&etcdserverpb.Member{ID: 0x2, Name: "test-1", PeerURLs: []string{peerURL("http", "test-1", "test", "ns")}},
 		&etcdserverpb.Member{ID: 0x3, Name: "test-2", PeerURLs: []string{peerURL("http", "test-2", "test", "ns")}},
 	)
-	factory := func(_ context.Context, eps []string, _ *tls.Config) (EtcdClusterClient, error) {
+	factory := func(_ context.Context, eps []string, _ *tls.Config, _, _ string) (EtcdClusterClient, error) {
 		seenEndpoints = append([]string(nil), eps...)
 		return fe, nil
 	}
@@ -862,7 +862,7 @@ func TestDiscoverMemberID_FallsBackToPeers(t *testing.T) {
 		&etcdserverpb.Member{ID: wantID, Name: "test-1", PeerURLs: []string{peerURL("http", "test-1", "test", "ns")}},
 	)
 	var capturedEndpoints []string
-	factory := func(_ context.Context, eps []string, _ *tls.Config) (EtcdClusterClient, error) {
+	factory := func(_ context.Context, eps []string, _ *tls.Config, _, _ string) (EtcdClusterClient, error) {
 		capturedEndpoints = append([]string(nil), eps...)
 		return fe, nil
 	}
@@ -934,7 +934,7 @@ func TestDiscoverMemberID_ExcludesNonVoterPeers(t *testing.T) {
 		&etcdserverpb.Member{ID: wantID, Name: "test-target", PeerURLs: []string{peerURL("http", "test-target", "test", "ns")}},
 	)
 	var captured []string
-	factory := func(_ context.Context, eps []string, _ *tls.Config) (EtcdClusterClient, error) {
+	factory := func(_ context.Context, eps []string, _ *tls.Config, _, _ string) (EtcdClusterClient, error) {
 		captured = append([]string(nil), eps...)
 		return fe, nil
 	}
@@ -1004,7 +1004,7 @@ func TestDiscoverMemberID_ExcludesSelfWhenVoterAvailable(t *testing.T) {
 		&etcdserverpb.Member{ID: wantID, Name: "test-learner", PeerURLs: []string{peerURL("http", "test-learner", "test", "ns")}},
 	)
 	var captured []string
-	factory := func(_ context.Context, eps []string, _ *tls.Config) (EtcdClusterClient, error) {
+	factory := func(_ context.Context, eps []string, _ *tls.Config, _, _ string) (EtcdClusterClient, error) {
 		captured = append([]string(nil), eps...)
 		return fe, nil
 	}
@@ -1049,7 +1049,7 @@ func TestDiscoverMemberID_FallsBackToSelfWhenNoVoter(t *testing.T) {
 		&etcdserverpb.Member{ID: wantID, Name: "test-seed", PeerURLs: []string{peerURL("http", "test-seed", "test", "ns")}},
 	)
 	var captured []string
-	factory := func(_ context.Context, eps []string, _ *tls.Config) (EtcdClusterClient, error) {
+	factory := func(_ context.Context, eps []string, _ *tls.Config, _, _ string) (EtcdClusterClient, error) {
 		captured = append([]string(nil), eps...)
 		return fe, nil
 	}
