@@ -625,6 +625,7 @@ func (r *EtcdMemberReconciler) buildPod(member *lll.EtcdMember) *corev1.Pod {
 		// and Pod state consistent in one reconcile rather than two.
 		labels[LabelRole] = RoleVoter
 	}
+	labels, annotations := applyAdditionalMetadata(labels, member.Spec.AdditionalMetadata)
 
 	cmd := []string{
 		"etcd",
@@ -704,14 +705,17 @@ func (r *EtcdMemberReconciler) buildPod(member *lll.EtcdMember) *corev1.Pod {
 
 	return &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      member.Name,
-			Namespace: member.Namespace,
-			Labels:    labels,
+			Name:        member.Name,
+			Namespace:   member.Namespace,
+			Labels:      labels,
+			Annotations: annotations,
 		},
 		Spec: corev1.PodSpec{
-			Hostname:       member.Name,
-			Subdomain:      member.Spec.ClusterName,
-			InitContainers: initContainers,
+			Hostname:                  member.Name,
+			Subdomain:                 member.Spec.ClusterName,
+			Affinity:                  member.Spec.Affinity,
+			TopologySpreadConstraints: member.Spec.TopologySpreadConstraints,
+			InitContainers:            initContainers,
 			// etcd and the restore agent never call the Kubernetes API, so
 			// don't mount a ServiceAccount token into the member Pod (matches
 			// the snapshot Job's stance and trims needless attack surface).

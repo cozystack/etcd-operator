@@ -80,6 +80,24 @@ type EtcdMemberSpec struct {
 	// +optional
 	Resources corev1.ResourceRequirements `json:"resources,omitempty"`
 
+	// AdditionalMetadata mirrors EtcdCluster.spec.additionalMetadata at the
+	// time this member was created. The member controller merges it onto the
+	// member's Pod (operator-owned label keys win on collision).
+	// +optional
+	AdditionalMetadata *AdditionalMetadata `json:"additionalMetadata,omitempty"`
+
+	// Affinity mirrors EtcdCluster.spec.affinity at the time this member was
+	// created. The member controller passes it straight to the Pod's
+	// spec.affinity at build time.
+	// +optional
+	Affinity *corev1.Affinity `json:"affinity,omitempty"`
+
+	// TopologySpreadConstraints mirrors EtcdCluster.spec.topologySpreadConstraints
+	// at the time this member was created. Passed straight to the Pod's
+	// spec.topologySpreadConstraints at build time.
+	// +optional
+	TopologySpreadConstraints []corev1.TopologySpreadConstraint `json:"topologySpreadConstraints,omitempty"`
+
 	// Bootstrap indicates this member is part of the initial cluster formation.
 	// When true the member starts with --initial-cluster-state=new.
 	// +optional

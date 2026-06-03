@@ -25,6 +25,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	policyv1 "k8s.io/api/policy/v1"
+	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -2671,6 +2672,83 @@ func TestBootstrap_PropagatesResourcesToSeed(t *testing.T) {
 	}
 }
 
+// TestBootstrap_PropagatesSchedulingAndMetadataToSeed covers the new
+// scheduling/metadata fields: affinity and topologySpreadConstraints latch
+// through Observed onto the seed member, and additionalMetadata is both
+// copied onto the seed's spec (for the Pod) and merged onto the seed CR's
+// own labels/annotations.
+func TestBootstrap_PropagatesSchedulingAndMetadataToSeed(t *testing.T) {
+	ctx := context.Background()
+	aff := &corev1.Affinity{
+		PodAntiAffinity: &corev1.PodAntiAffinity{
+			RequiredDuringSchedulingIgnoredDuringExecution: []corev1.PodAffinityTerm{{
+				TopologyKey: "kubernetes.io/hostname",
+			}},
+		},
+	}
+	tsc := []corev1.TopologySpreadConstraint{{
+		MaxSkew:           1,
+		TopologyKey:       "topology.kubernetes.io/zone",
+		WhenUnsatisfiable: corev1.DoNotSchedule,
+	}}
+	cluster := &lll.EtcdCluster{
+		ObjectMeta: metav1.ObjectMeta{Name: "test", Namespace: "ns"},
+		Spec: lll.EtcdClusterSpec{
+			Replicas:                  ptrInt32(3),
+			Version:                   "3.5.17",
+			Storage:                   lll.StorageSpec{Size: quickQty(t, "1Gi")},
+			Affinity:                  aff,
+			TopologySpreadConstraints: tsc,
+			AdditionalMetadata: &lll.AdditionalMetadata{
+				Labels:      map[string]string{"cozystack.io/tenant": "foo"},
+				Annotations: map[string]string{"example.com/note": "bar"},
+			},
+		},
+	}
+	c, _ := newTestClient(t, cluster)
+	r := &EtcdClusterReconciler{Client: c, Scheme: testScheme(t), EtcdClientFactory: factoryReturning(newFakeEtcd(0xdeadbeef))}
+
+	reconcileUntilStable(t, r, c, "test", "ns", 8)
+
+	got := mustGet(t, c, "test", "ns", &lll.EtcdCluster{})
+	if got.Status.Observed == nil {
+		t.Fatalf("Status.Observed must be set after first reconciles")
+	}
+	if !equality.Semantic.DeepEqual(got.Status.Observed.Affinity, aff) {
+		t.Errorf("Observed.Affinity = %+v; want %+v", got.Status.Observed.Affinity, aff)
+	}
+	if !equality.Semantic.DeepEqual(got.Status.Observed.TopologySpreadConstraints, tsc) {
+		t.Errorf("Observed.TopologySpreadConstraints = %+v; want %+v", got.Status.Observed.TopologySpreadConstraints, tsc)
+	}
+
+	members := &lll.EtcdMemberList{}
+	if err := c.List(ctx, members, client.InNamespace("ns")); err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(members.Items) != 1 {
+		t.Fatalf("expected exactly one seed member; got %d", len(members.Items))
+	}
+	seed := members.Items[0]
+	if !equality.Semantic.DeepEqual(seed.Spec.Affinity, aff) {
+		t.Errorf("seed Spec.Affinity = %+v; want %+v", seed.Spec.Affinity, aff)
+	}
+	if !equality.Semantic.DeepEqual(seed.Spec.TopologySpreadConstraints, tsc) {
+		t.Errorf("seed Spec.TopologySpreadConstraints = %+v; want %+v", seed.Spec.TopologySpreadConstraints, tsc)
+	}
+	if seed.Spec.AdditionalMetadata == nil || seed.Spec.AdditionalMetadata.Labels["cozystack.io/tenant"] != "foo" {
+		t.Errorf("seed Spec.AdditionalMetadata not propagated: %+v", seed.Spec.AdditionalMetadata)
+	}
+	if seed.Labels["cozystack.io/tenant"] != "foo" {
+		t.Errorf("seed CR label not merged: cozystack.io/tenant = %q", seed.Labels["cozystack.io/tenant"])
+	}
+	if seed.Labels["app.kubernetes.io/managed-by"] != "etcd-operator" {
+		t.Errorf("operator-owned seed label clobbered: app.kubernetes.io/managed-by = %q", seed.Labels["app.kubernetes.io/managed-by"])
+	}
+	if seed.Annotations["example.com/note"] != "bar" {
+		t.Errorf("seed CR annotation not merged: example.com/note = %q", seed.Annotations["example.com/note"])
+	}
+}
+
 // TestScaleUp_PropagatesResourcesToNewMember covers the second of the
 // two member-creation sites: scaleUp's fresh-CR path. Bootstrap is
 // already covered by TestBootstrap_PropagatesResourcesToSeed; this one
@@ -2825,6 +2903,59 @@ func TestReconcilePDB_CreatesWithVoterSelector(t *testing.T) {
 	want := map[string]string{LabelCluster: "test", LabelRole: RoleVoter}
 	if !reflect.DeepEqual(pdb.Spec.Selector.MatchLabels, want) {
 		t.Fatalf("PDB selector MatchLabels = %v, want %v", pdb.Spec.Selector.MatchLabels, want)
+	}
+}
+
+// TestAdditionalMetadata_AppliedToServiceAndPDB covers the cross-cutting
+// metadata path on the two cluster-level objects that aren't members: the
+// created Service and PDB must carry the extra labels/annotations, without
+// the user shadowing operator-owned labels.
+func TestAdditionalMetadata_AppliedToServiceAndPDB(t *testing.T) {
+	ctx := context.Background()
+	cluster := &lll.EtcdCluster{
+		ObjectMeta: metav1.ObjectMeta{Name: "test", Namespace: "ns"},
+		Spec: lll.EtcdClusterSpec{
+			AdditionalMetadata: &lll.AdditionalMetadata{
+				Labels: map[string]string{
+					"cozystack.io/tenant":          "foo",
+					"app.kubernetes.io/managed-by": "evil",
+				},
+				Annotations: map[string]string{"example.com/note": "bar"},
+			},
+		},
+	}
+	c, _ := newTestClient(t, cluster)
+	r := &EtcdClusterReconciler{Client: c, Scheme: testScheme(t)}
+
+	if err := r.reconcilePDB(ctx, cluster, 3); err != nil {
+		t.Fatalf("reconcilePDB: %v", err)
+	}
+	pdb := &policyv1.PodDisruptionBudget{}
+	if err := c.Get(ctx, types.NamespacedName{Namespace: "ns", Name: "test"}, pdb); err != nil {
+		t.Fatalf("Get PDB: %v", err)
+	}
+	if pdb.Labels["cozystack.io/tenant"] != "foo" {
+		t.Errorf("PDB label cozystack.io/tenant = %q, want foo", pdb.Labels["cozystack.io/tenant"])
+	}
+	if pdb.Labels["app.kubernetes.io/managed-by"] != "etcd-operator" {
+		t.Errorf("PDB operator-owned label clobbered: app.kubernetes.io/managed-by = %q", pdb.Labels["app.kubernetes.io/managed-by"])
+	}
+	if pdb.Annotations["example.com/note"] != "bar" {
+		t.Errorf("PDB annotation example.com/note = %q, want bar", pdb.Annotations["example.com/note"])
+	}
+
+	if err := r.ensureService(ctx, cluster, "test-svc", corev1.ServiceSpec{}); err != nil {
+		t.Fatalf("ensureService: %v", err)
+	}
+	svc := &corev1.Service{}
+	if err := c.Get(ctx, types.NamespacedName{Namespace: "ns", Name: "test-svc"}, svc); err != nil {
+		t.Fatalf("Get Service: %v", err)
+	}
+	if svc.Labels["cozystack.io/tenant"] != "foo" {
+		t.Errorf("Service label cozystack.io/tenant = %q, want foo", svc.Labels["cozystack.io/tenant"])
+	}
+	if svc.Annotations["example.com/note"] != "bar" {
+		t.Errorf("Service annotation example.com/note = %q, want bar", svc.Annotations["example.com/note"])
 	}
 }
 

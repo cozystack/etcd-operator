@@ -7,3 +7,28 @@ spec:
   version: "3.6.11"
   storage:
     size: 1Gi
+  # Extra labels/annotations merged onto every object the operator creates
+  # for this cluster (member Pods, Services, PDB, EtcdMember CRs). Operator-
+  # owned label keys always win on collision.
+  # additionalMetadata:
+  #   labels:
+  #     cozystack.io/tenant: foo
+  #   annotations:
+  #     example.com/note: managed-by-cozystack
+  # Pod scheduling affinity, passed through to each member Pod. This example
+  # keeps members off the same node.
+  # affinity:
+  #   podAntiAffinity:
+  #     requiredDuringSchedulingIgnoredDuringExecution:
+  #       - labelSelector:
+  #           matchLabels:
+  #             app.kubernetes.io/instance: etcdcluster-sample
+  #         topologyKey: kubernetes.io/hostname
+  # Spread members across zones.
+  # topologySpreadConstraints:
+  #   - maxSkew: 1
+  #     topologyKey: topology.kubernetes.io/zone
+  #     whenUnsatisfiable: DoNotSchedule
+  #     labelSelector:
+  #       matchLabels:
+  #         app.kubernetes.io/instance: etcdcluster-sample

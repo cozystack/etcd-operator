@@ -20,6 +20,7 @@ import (
 	"go.etcd.io/etcd/api/v3/etcdserverpb"
 
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -773,6 +774,77 @@ func TestBuildPod_LivenessIsNotQuorumAware(t *testing.T) {
 	}
 	if lp.TCPSocket.Port.IntValue() != 2380 {
 		t.Fatalf("liveness TCP port = %d, want 2380 (peer)", lp.TCPSocket.Port.IntValue())
+	}
+}
+
+// TestBuildPod_AppliesSchedulingAndMetadata covers the additionalMetadata,
+// affinity, and topologySpreadConstraints passthrough: buildPod must stamp
+// the Pod with the member's scheduling fields and merge the extra
+// labels/annotations, without letting a user-supplied label shadow an
+// operator-owned one.
+func TestBuildPod_AppliesSchedulingAndMetadata(t *testing.T) {
+	r := &EtcdMemberReconciler{}
+	aff := &corev1.Affinity{
+		PodAntiAffinity: &corev1.PodAntiAffinity{
+			RequiredDuringSchedulingIgnoredDuringExecution: []corev1.PodAffinityTerm{{
+				TopologyKey: "kubernetes.io/hostname",
+			}},
+		},
+	}
+	tsc := []corev1.TopologySpreadConstraint{{
+		MaxSkew:           1,
+		TopologyKey:       "topology.kubernetes.io/zone",
+		WhenUnsatisfiable: corev1.DoNotSchedule,
+	}}
+	pod := r.buildPod(&lll.EtcdMember{
+		ObjectMeta: metav1.ObjectMeta{Name: "test-0", Namespace: "ns"},
+		Spec: lll.EtcdMemberSpec{
+			ClusterName:               "test",
+			Version:                   "3.5.17",
+			Affinity:                  aff,
+			TopologySpreadConstraints: tsc,
+			AdditionalMetadata: &lll.AdditionalMetadata{
+				Labels: map[string]string{
+					"cozystack.io/tenant": "foo",
+					// Attempt to shadow an operator-owned label: must be ignored.
+					"app.kubernetes.io/managed-by": "evil",
+				},
+				Annotations: map[string]string{"example.com/note": "bar"},
+			},
+		},
+	})
+
+	if !equality.Semantic.DeepEqual(pod.Spec.Affinity, aff) {
+		t.Errorf("pod affinity = %+v, want %+v", pod.Spec.Affinity, aff)
+	}
+	if !equality.Semantic.DeepEqual(pod.Spec.TopologySpreadConstraints, tsc) {
+		t.Errorf("pod topologySpreadConstraints = %+v, want %+v", pod.Spec.TopologySpreadConstraints, tsc)
+	}
+	if got := pod.Labels["cozystack.io/tenant"]; got != "foo" {
+		t.Errorf("additional label not merged: cozystack.io/tenant = %q, want foo", got)
+	}
+	if got := pod.Labels["app.kubernetes.io/managed-by"]; got != "etcd-operator" {
+		t.Errorf("operator-owned label was overridden: app.kubernetes.io/managed-by = %q, want etcd-operator", got)
+	}
+	if got := pod.Annotations["example.com/note"]; got != "bar" {
+		t.Errorf("additional annotation not merged: example.com/note = %q, want bar", got)
+	}
+}
+
+// TestBuildPod_NoAdditionalMetadataLeavesAnnotationsNil guards that a member
+// without additionalMetadata produces a Pod with no annotations (rather than
+// an empty non-nil map), keeping the no-op path clean.
+func TestBuildPod_NoAdditionalMetadataLeavesAnnotationsNil(t *testing.T) {
+	r := &EtcdMemberReconciler{}
+	pod := r.buildPod(&lll.EtcdMember{
+		ObjectMeta: metav1.ObjectMeta{Name: "test-0", Namespace: "ns"},
+		Spec:       lll.EtcdMemberSpec{ClusterName: "test", Version: "3.5.17"},
+	})
+	if pod.Annotations != nil {
+		t.Errorf("expected nil annotations, got %+v", pod.Annotations)
+	}
+	if pod.Spec.Affinity != nil {
+		t.Errorf("expected nil affinity, got %+v", pod.Spec.Affinity)
 	}
 }
 
