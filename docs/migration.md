@@ -5,15 +5,41 @@ from the legacy aenix operator (`etcd.aenix.io/v1alpha1`), and for behavioural
 changes that need an explicit migration step.
 
 This document grows as more legacy features are ported. Right now it covers the
-one change that has a hard migration requirement: **etcd authentication
+**`EtcdBackup` → `EtcdSnapshot` rename** (a pre-GA naming change), and the one
+change that has a hard migration requirement: **etcd authentication
 credentials**.
 
 > **TODO — full legacy-operator migration.** The end-to-end story for moving an
 > existing `etcd.aenix.io/v1alpha1` cluster onto `etcd-operator.cozystack.io/v1alpha2`
-> (CRD shape, data-dir adoption vs backup/restore, member-ID continuity) is not
+> (CRD shape, data-dir adoption vs snapshot/restore, member-ID continuity) is not
 > written yet — the two operators manage members differently (the new one uses
 > per-member `EtcdMember` CRs + Pods, not a single StatefulSet), so this is not a
 > drop-in CRD swap. Fill this in as the migration path is validated.
+
+## Snapshot CRD renamed: `EtcdBackup` → `EtcdSnapshot`
+
+The one-shot snapshot CRD was renamed from `EtcdBackup` to `EtcdSnapshot` (and
+its status field `status.snapshot` to `status.artifact`) to match upstream
+etcd's terminology (`etcdctl snapshot save` / `restore`). Nothing has shipped
+under the old name, so there is no stored-object migration — but if you applied
+an `EtcdBackup` from a pre-rename build, recreate it under the new kind:
+
+```diff
+ apiVersion: etcd-operator.cozystack.io/v1alpha2
+-kind: EtcdBackup
++kind: EtcdSnapshot
+ metadata:
+   name: my-etcd-snapshot
+ spec:
+   clusterRef:
+     name: my-etcd
+   destination:
+     s3: { ... }
+```
+
+The spec is otherwise unchanged (`spec.clusterRef`, `spec.destination`). The
+restore path (`spec.bootstrap.restore.source`) is unaffected — `restore` keeps
+its name.
 
 ## Authentication: root credentials are BYO and required
 

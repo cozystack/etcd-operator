@@ -248,6 +248,31 @@ const (
 	ClusterDegraded = "Degraded"
 )
 
+// BootstrapSpec configures one-time cluster initialization. Consulted only
+// at first bootstrap; immutable post-create.
+type BootstrapSpec struct {
+	// Restore initializes the new cluster from an existing etcd snapshot
+	// instead of an empty data dir. Absent means a normal empty bootstrap.
+	// +optional
+	Restore *RestoreSpec `json:"restore,omitempty"`
+}
+
+// RestoreSpec points at the snapshot a new cluster is restored from.
+//
+// Unlike a snapshot destination, a restore SOURCE addresses a single existing
+// object: when the source is S3 the key must be the exact object key, not a
+// prefix; when the source is a PVC the subPath must be the exact snapshot file
+// within the volume. An empty locator would only surface as an opaque failure
+// inside the seed init container, so reject it at the apiserver.
+//
+// +kubebuilder:validation:XValidation:rule="!has(self.source.s3) || (has(self.source.s3.key) && size(self.source.s3.key) > 0)",message="bootstrap.restore.source.s3.key must be the exact (non-empty) object key for a restore source"
+// +kubebuilder:validation:XValidation:rule="!has(self.source.pvc) || (has(self.source.pvc.subPath) && size(self.source.pvc.subPath) > 0)",message="bootstrap.restore.source.pvc.subPath must be the exact (non-empty) snapshot file path for a restore source"
+type RestoreSpec struct {
+	// Source is where the snapshot is read from (S3 or PVC). Same shape as
+	// an EtcdSnapshot destination.
+	Source SnapshotLocation `json:"source"`
+}
+
 // StorageMedium selects the volume backend for each member's etcd data
 // directory. The values mirror corev1.StorageMedium semantics: the empty
 // string is the default (a PVC backed by the namespace's default
@@ -349,6 +374,9 @@ type StorageSpec struct {
 // +kubebuilder:validation:XValidation:rule="!has(self.auth) || !has(oldSelf.auth) || self.auth == oldSelf.auth",message="spec.auth is immutable post-create; delete and recreate the cluster to change auth configuration"
 // +kubebuilder:validation:XValidation:rule="!(has(self.auth) && self.auth.enabled) || (has(self.tls) && has(self.tls.client))",message="spec.auth.enabled requires spec.tls.client (auth credentials must not cross a plaintext connection)"
 // +kubebuilder:validation:XValidation:rule="!(has(self.auth) && self.auth.enabled) || has(self.auth.rootCredentialsSecretRef)",message="spec.auth.enabled requires spec.auth.rootCredentialsSecretRef"
+// +kubebuilder:validation:XValidation:rule="has(self.bootstrap) == has(oldSelf.bootstrap)",message="spec.bootstrap cannot be added to or removed from an existing cluster; it is consulted only at first bootstrap"
+// +kubebuilder:validation:XValidation:rule="!has(self.bootstrap) || !has(oldSelf.bootstrap) || self.bootstrap == oldSelf.bootstrap",message="spec.bootstrap is immutable post-create; it is consulted only at first bootstrap"
+// +kubebuilder:validation:XValidation:rule="!(has(self.bootstrap) && has(self.bootstrap.restore)) || !(has(self.storage) && has(self.storage.medium) && self.storage.medium == 'Memory')",message="spec.bootstrap.restore is unsupported with spec.storage.medium=Memory: the restored data dir is tmpfs, so any seed Pod restart re-restores the snapshot — reverting writes (single member) or breaking the cluster with a fresh ID it can't rejoin (multi-member). Use persistent storage to restore."
 type EtcdClusterSpec struct {
 	// Replicas is the desired number of cluster members. Should be odd.
 	// A value of 0 parks the cluster ("scale to zero"): the operator
@@ -363,7 +391,7 @@ type EtcdClusterSpec struct {
 	// +optional
 	Replicas *int32 `json:"replicas,omitempty"`
 
-	// Version is the desired etcd version (e.g. "3.5.17").
+	// Version is the desired etcd version (e.g. "3.6.11").
 	// +kubebuilder:validation:Pattern=`^\d+\.\d+\.\d+$`
 	Version string `json:"version"`
 
@@ -400,6 +428,13 @@ type EtcdClusterSpec struct {
 	// (requires spec.tls.client; immutable post-create).
 	// +optional
 	Auth *AuthSpec `json:"auth,omitempty"`
+
+	// Bootstrap configures one-time cluster initialization options. It is
+	// consulted only at first bootstrap (while status.clusterID is unset)
+	// and is immutable post-create. Absent means a normal empty-cluster
+	// bootstrap.
+	// +optional
+	Bootstrap *BootstrapSpec `json:"bootstrap,omitempty"`
 
 	// Resources sets the etcd container's resource requests and limits.
 	// When omitted, the operator falls back to a conservative default

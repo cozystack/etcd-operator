@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"go.etcd.io/etcd/api/v3/etcdserverpb"
+	"go.etcd.io/etcd/api/v3/v3rpc/rpctypes"
 	clientv3 "go.etcd.io/etcd/client/v3"
 
 	corev1 "k8s.io/api/core/v1"
@@ -392,6 +393,135 @@ func TestTryDiscoverCluster_SurfacesUnreachableEtcd(t *testing.T) {
 	}
 	if available.Reason != "ClusterUnreachable" {
 		t.Fatalf("Available reason = %q, want ClusterUnreachable", available.Reason)
+	}
+}
+
+// A cluster whose etcd demands auth (e.g. an auth-enabled snapshot was
+// restored) but with spec.auth unset can never be managed: the operator dials
+// anonymously and is rejected, and auth is immutable post-create. Instead of
+// looping on an opaque ClusterUnreachable, the controller must surface a
+// specific, actionable Degraded condition and stop retrying. (Reviewer blocker:
+// auth-omitted restore wedge.)
+func TestTryDiscoverCluster_AuthRequiredButNotConfigured(t *testing.T) {
+	ctx := context.Background()
+	cluster := &lll.EtcdCluster{
+		ObjectMeta: metav1.ObjectMeta{Name: "test", Namespace: "ns"},
+		Spec: lll.EtcdClusterSpec{
+			Replicas: ptrInt32(3),
+			Version:  "3.5.17",
+			Storage:  lll.StorageSpec{Size: quickQty(t, "1Gi")},
+			// spec.auth deliberately unset — the operator has no creds to present.
+		},
+		Status: lll.EtcdClusterStatus{
+			ClusterToken: "test",
+			// ClusterID NOT latched: discovery is still dialing.
+			Observed: &lll.ObservedClusterSpec{
+				Replicas: 3,
+				Version:  "3.5.17",
+				Storage:  lll.StorageSpec{Size: quickQty(t, "1Gi")},
+			},
+			ProgressDeadline: &metav1.Time{Time: metav1.Now().Add(60 * 60 * 1e9)},
+		},
+	}
+	objs := []client.Object{cluster}
+	for i := 0; i < 3; i++ {
+		objs = append(objs, &lll.EtcdMember{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      fmt.Sprintf("test-%d", i),
+				Namespace: "ns",
+				Labels:    memberLabels("test", fmt.Sprintf("test-%d", i)),
+			},
+			Spec:   lll.EtcdMemberSpec{ClusterName: "test", Version: "3.5.17", Storage: lll.StorageSpec{Size: quickQty(t, "1Gi")}, InitialCluster: "x", ClusterToken: "test", Bootstrap: i == 0},
+			Status: lll.EtcdMemberStatus{PodName: fmt.Sprintf("test-%d", i)},
+		})
+	}
+	c, _ := newTestClient(t, objs...)
+	// MemberList rejects the anonymous dial as an auth-enabled etcd would.
+	fe := newFakeEtcd(0xdeadbeef)
+	fe.listErr = errors.New("etcdserver: user name is empty")
+	r := &EtcdClusterReconciler{Client: c, Scheme: testScheme(t), EtcdClientFactory: factoryReturning(fe)}
+
+	res, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: "test", Namespace: "ns"}})
+	if err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	// Must NOT keep retrying — nothing the operator does recovers it.
+	if res.RequeueAfter > 0 {
+		t.Errorf("expected no requeue (immutable auth misconfig), got %+v", res)
+	}
+
+	mustGet(t, c, "test", "ns", cluster)
+	byType := map[string]metav1.Condition{}
+	for _, cond := range cluster.Status.Conditions {
+		byType[cond.Type] = cond
+	}
+	avail, ok := byType[lll.ClusterAvailable]
+	if !ok || avail.Status != metav1.ConditionFalse || avail.Reason != "AuthRequiredNotConfigured" {
+		t.Errorf("Available = %+v, want False/AuthRequiredNotConfigured", avail)
+	}
+	deg, ok := byType[lll.ClusterDegraded]
+	if !ok || deg.Status != metav1.ConditionTrue || deg.Reason != "AuthRequiredNotConfigured" {
+		t.Errorf("Degraded = %+v, want True/AuthRequiredNotConfigured", deg)
+	}
+}
+
+// When spec.auth IS configured but etcd rejects the credentials (the wrong
+// root password — the most likely restore mistake), the controller must surface
+// a specific AuthCredentialsRejected condition, NOT loop on an opaque
+// ClusterUnreachable. Unlike the unconfigured case this is recoverable by
+// fixing the Secret's password, so it keeps requeueing.
+func TestTryDiscoverCluster_AuthCredentialsRejected(t *testing.T) {
+	ctx := context.Background()
+	cluster := &lll.EtcdCluster{
+		ObjectMeta: metav1.ObjectMeta{Name: "test", Namespace: "ns"},
+		Spec: lll.EtcdClusterSpec{
+			Replicas: ptrInt32(3),
+			Version:  "3.5.17",
+			Storage:  lll.StorageSpec{Size: quickQty(t, "1Gi")},
+			Auth: &lll.AuthSpec{
+				Enabled:                  true,
+				RootCredentialsSecretRef: &corev1.LocalObjectReference{Name: "root-creds"},
+			},
+		},
+		Status: lll.EtcdClusterStatus{
+			ClusterToken: "test",
+			Observed: &lll.ObservedClusterSpec{
+				Replicas: 3, Version: "3.5.17", Storage: lll.StorageSpec{Size: quickQty(t, "1Gi")},
+			},
+			ProgressDeadline: &metav1.Time{Time: metav1.Now().Add(60 * 60 * 1e9)},
+		},
+	}
+	objs := []client.Object{cluster}
+	for i := 0; i < 3; i++ {
+		objs = append(objs, &lll.EtcdMember{
+			ObjectMeta: metav1.ObjectMeta{Name: fmt.Sprintf("test-%d", i), Namespace: "ns", Labels: memberLabels("test", fmt.Sprintf("test-%d", i))},
+			Spec:       lll.EtcdMemberSpec{ClusterName: "test", Version: "3.5.17", Storage: lll.StorageSpec{Size: quickQty(t, "1Gi")}, InitialCluster: "x", ClusterToken: "test", Bootstrap: i == 0},
+			Status:     lll.EtcdMemberStatus{PodName: fmt.Sprintf("test-%d", i)},
+		})
+	}
+	c, _ := newTestClient(t, objs...)
+	fe := newFakeEtcd(0xdeadbeef)
+	fe.listErr = rpctypes.ErrAuthFailed // etcd rejected the presented credentials
+	r := &EtcdClusterReconciler{Client: c, Scheme: testScheme(t), EtcdClientFactory: factoryReturning(fe)}
+
+	res, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: "test", Namespace: "ns"}})
+	if err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	// Recoverable by fixing the Secret — keep requeueing.
+	if res.RequeueAfter <= 0 {
+		t.Errorf("expected a requeue for the recoverable wrong-password case, got %+v", res)
+	}
+	mustGet(t, c, "test", "ns", cluster)
+	byType := map[string]metav1.Condition{}
+	for _, cond := range cluster.Status.Conditions {
+		byType[cond.Type] = cond
+	}
+	if avail, ok := byType[lll.ClusterAvailable]; !ok || avail.Reason != "AuthCredentialsRejected" {
+		t.Errorf("Available = %+v, want reason AuthCredentialsRejected", avail)
+	}
+	if deg, ok := byType[lll.ClusterDegraded]; !ok || deg.Status != metav1.ConditionTrue || deg.Reason != "AuthCredentialsRejected" {
+		t.Errorf("Degraded = %+v, want True/AuthCredentialsRejected", deg)
 	}
 }
 

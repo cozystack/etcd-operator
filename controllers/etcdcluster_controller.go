@@ -427,6 +427,11 @@ func (r *EtcdClusterReconciler) bootstrap(
 				Bootstrap:    true,
 				ClusterToken: cluster.Status.ClusterToken,
 				TLS:          deriveMemberTLS(cluster),
+				// Restore is carried only by the seed: when the cluster
+				// requests a restore, the member controller runs a restore
+				// initContainer that populates the data dir from the snapshot
+				// before etcd starts. Inert once the data dir is initialized.
+				Restore: restoreForSeed(cluster),
 				// InitialCluster filled in below once apiserver assigns Name.
 			},
 		}
@@ -600,6 +605,63 @@ func (r *EtcdClusterReconciler) surfaceDiscoveryError(
 ) (ctrl.Result, error) {
 	log := log.FromContext(ctx)
 	log.Error(err, what)
+
+	// etcd is demanding authentication but the operator has no credentials to
+	// present (spec.auth unset) and auth hasn't latched. This is the
+	// restore-an-auth-enabled-snapshot-without-spec.auth case (or auth enabled
+	// out-of-band): anonymous dials are rejected, and because spec.auth is
+	// immutable post-create no spec edit can recover it — retrying forever would
+	// just hide the cause behind a generic ClusterUnreachable. Surface a
+	// specific, actionable Degraded condition and stop the retry loop; recovery
+	// is delete-and-recreate with spec.auth, which yields a fresh object.
+	if isAuthRequiredErr(err) && !authConfigured(cluster) && !cluster.Status.AuthEnabled {
+		const reason = "AuthRequiredNotConfigured"
+		msg := "etcd requires authentication but spec.auth is not configured, so the operator cannot manage this cluster. " +
+			"This usually means a snapshot from an auth-enabled cluster was restored without spec.auth. " +
+			"Auth is immutable post-create: delete and recreate the cluster with spec.auth.enabled and a rootCredentialsSecretRef " +
+			"holding the snapshot's original root password (see the restore runbook)."
+		changed := setClusterCondition(cluster, lll.ClusterAvailable, metav1.ConditionFalse, reason, msg)
+		if setClusterCondition(cluster, lll.ClusterDegraded, metav1.ConditionTrue, reason, msg) {
+			changed = true
+		}
+		if changed {
+			if upErr := r.Status().Update(ctx, cluster); upErr != nil {
+				if errors.IsConflict(upErr) {
+					return ctrl.Result{Requeue: true}, nil
+				}
+				return ctrl.Result{}, upErr
+			}
+		}
+		return ctrl.Result{}, nil
+	}
+
+	// etcd rejected the credentials we presented (wrong root password) — the
+	// most likely restore mistake: spec.auth.rootCredentialsSecretRef must hold
+	// the snapshot's *original* root password (etcd stores its bcrypt hash). This
+	// is recoverable by fixing the Secret's contents (the operator re-reads the
+	// password every dial), so keep requeueing — but surface a specific reason
+	// rather than an opaque ClusterUnreachable so the operator knows the fix.
+	if isAuthFailedErr(err) {
+		const reason = "AuthCredentialsRejected"
+		msg := "etcd rejected the operator's credentials (authentication failed). " +
+			"spec.auth.rootCredentialsSecretRef must hold the root password etcd actually has — " +
+			"for a cluster restored from an auth-enabled snapshot that is the snapshot's original password " +
+			"(etcd stores its bcrypt hash, so a fresh password will not authenticate). Correct the Secret's password (see the restore runbook)."
+		changed := setClusterCondition(cluster, lll.ClusterAvailable, metav1.ConditionFalse, reason, msg)
+		if setClusterCondition(cluster, lll.ClusterDegraded, metav1.ConditionTrue, reason, msg) {
+			changed = true
+		}
+		if changed {
+			if upErr := r.Status().Update(ctx, cluster); upErr != nil {
+				if errors.IsConflict(upErr) {
+					return ctrl.Result{Requeue: true}, nil
+				}
+				return ctrl.Result{}, upErr
+			}
+		}
+		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+	}
+
 	msg := fmt.Sprintf("%s: %s", what, stableErrorMessage(err))
 	if setClusterCondition(cluster, lll.ClusterAvailable, metav1.ConditionFalse, "ClusterUnreachable", msg) {
 		if upErr := r.Status().Update(ctx, cluster); upErr != nil {
@@ -610,6 +672,13 @@ func (r *EtcdClusterReconciler) surfaceDiscoveryError(
 		}
 	}
 	return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+}
+
+// authConfigured reports whether the operator has root credentials to present
+// on its etcd dials (spec.auth enabled). Distinguishes "etcd demands auth but
+// we have nothing to offer" from a transient dial failure.
+func authConfigured(cluster *lll.EtcdCluster) bool {
+	return cluster.Spec.Auth != nil && cluster.Spec.Auth.Enabled
 }
 
 // stableErrorMessage strips per-call variable portions (timestamps, addresses
@@ -1125,7 +1194,10 @@ func isAuthAlreadyExists(err error) bool {
 }
 
 // isAuthRequiredErr reports whether err is the server demanding credentials —
-// i.e. auth is already enabled and the anonymous dial was rejected.
+// i.e. auth is already enabled and an anonymous (no-credential) dial was
+// rejected. The matched substrings correspond to etcd's rpctypes errors
+// ErrUserEmpty / ErrPermissionDenied (pinned by TestAuthErrorClassification so a
+// client-library bump can't silently break detection).
 func isAuthRequiredErr(err error) bool {
 	if err == nil {
 		return false
@@ -1134,6 +1206,21 @@ func isAuthRequiredErr(err error) bool {
 	return strings.Contains(msg, "user name is empty") ||
 		strings.Contains(msg, "permission denied") ||
 		strings.Contains(msg, "insufficient credentials")
+}
+
+// isAuthFailedErr reports whether err is the server REJECTING the credentials
+// the operator presented (as opposed to demanding credentials it didn't get) —
+// the wrong-root-password case, most likely after restoring an auth-enabled
+// snapshot with a Secret that doesn't match the snapshot's original password.
+// Matches etcd's rpctypes ErrAuthFailed / ErrInvalidAuthToken (pinned by
+// TestAuthErrorClassification).
+func isAuthFailedErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "authentication failed") ||
+		strings.Contains(msg, "invalid auth token")
 }
 
 // ── Scale down ───────────────────────────────────────────────────────────

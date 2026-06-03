@@ -30,6 +30,12 @@ rules:
 - apiGroups:
   - ""
   resources:
+  - pods/log
+  verbs:
+  - get
+- apiGroups:
+  - ""
+  resources:
   - secrets
   verbs:
   - get
@@ -45,6 +51,16 @@ rules:
   - list
   - patch
   - update
+  - watch
+- apiGroups:
+  - batch
+  resources:
+  - jobs
+  verbs:
+  - create
+  - delete
+  - get
+  - list
   - watch
 - apiGroups:
   - cert-manager.io
@@ -70,6 +86,7 @@ rules:
   resources:
   - etcdclusters/finalizers
   - etcdmembers/finalizers
+  - etcdsnapshots/finalizers
   verbs:
   - update
 - apiGroups:
@@ -77,6 +94,7 @@ rules:
   resources:
   - etcdclusters/status
   - etcdmembers/status
+  - etcdsnapshots/status
   verbs:
   - get
   - patch
@@ -85,6 +103,7 @@ rules:
   - etcd-operator.cozystack.io
   resources:
   - etcdmembers
+  - etcdsnapshots
   verbs:
   - create
   - delete

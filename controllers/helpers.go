@@ -112,6 +112,16 @@ func deriveMemberTLS(cluster *lll.EtcdCluster) *lll.EtcdMemberTLS {
 	return out
 }
 
+// restoreForSeed returns the RestoreSpec the bootstrap seed should carry, or
+// nil. Only the seed restores; subsequent (scale-up) members join the live
+// cluster normally.
+func restoreForSeed(cluster *lll.EtcdCluster) *lll.RestoreSpec {
+	if cluster == nil || cluster.Spec.Bootstrap == nil {
+		return nil
+	}
+	return cluster.Spec.Bootstrap.Restore
+}
+
 // serverSecretName resolves the Secret name holding the server cert+key,
 // across the BYO and cert-manager-driven sources. Empty when the client
 // plane is plaintext.
