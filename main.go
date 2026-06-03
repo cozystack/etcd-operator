@@ -50,14 +50,14 @@ const defaultClusterDomain = "cluster.local"
 
 // placeholderOperatorImage is the image:/OPERATOR_IMAGE value baked into
 // config/manager as the kustomize-replacement target. Running with it
-// un-rewritten means backup/restore Pods would ImagePullBackOff forever.
+// un-rewritten means snapshot/restore Pods would ImagePullBackOff forever.
 const placeholderOperatorImage = "controller:latest"
 
 // operatorImageError rejects the un-substituted image placeholder so the
-// operator fails fast at startup rather than silently at the first backup.
+// operator fails fast at startup rather than silently at the first snapshot.
 func operatorImageError(img string) error {
 	if img == placeholderOperatorImage {
-		return fmt.Errorf("operator image is the un-substituted placeholder %q; set OPERATOR_IMAGE / --operator-image to the real operator image (deploy via the config/default overlay or `make deploy IMG=...`), otherwise backup/restore Pods will ImagePullBackOff", img)
+		return fmt.Errorf("operator image is the un-substituted placeholder %q; set OPERATOR_IMAGE / --operator-image to the real operator image (deploy via the config/default overlay or `make deploy IMG=...`), otherwise snapshot/restore Pods will ImagePullBackOff", img)
 	}
 	return nil
 }
@@ -75,21 +75,21 @@ func init() {
 }
 
 func main() {
-	// Subcommand dispatch: the operator image doubles as the backup/restore
-	// agent, invoked as `manager backup-agent` / `manager restore-agent` in a
-	// Job (backup) or an initContainer (restore). These run and exit before
+	// Subcommand dispatch: the operator image doubles as the snapshot/restore
+	// agent, invoked as `manager snapshot-agent` / `manager restore-agent` in a
+	// Job (snapshot) or an initContainer (restore). These run and exit before
 	// any manager setup.
 	if len(os.Args) > 1 {
 		switch os.Args[1] {
-		case "backup-agent":
+		case "snapshot-agent":
 			// Bound the run so a hung dial/snapshot against a parked or
 			// unreachable cluster fails with a clear error instead of blocking
-			// forever (the backup Job's ActiveDeadlineSeconds is the outer
+			// forever (the snapshot Job's ActiveDeadlineSeconds is the outer
 			// backstop).
-			ctx, cancel := context.WithTimeout(context.Background(), agent.BackupTimeout)
+			ctx, cancel := context.WithTimeout(context.Background(), agent.SnapshotTimeout)
 			defer cancel()
-			if err := agent.RunBackup(ctx); err != nil {
-				fmt.Fprintln(os.Stderr, "backup agent failed:", err)
+			if err := agent.RunSnapshot(ctx); err != nil {
+				fmt.Fprintln(os.Stderr, "snapshot agent failed:", err)
 				os.Exit(1)
 			}
 			return
@@ -127,9 +127,9 @@ func main() {
 			"for hostNetwork or dnsPolicy:None pods, or any other environment "+
 			"where the operator's pod doesn't see kube-dns search paths.")
 	flag.StringVar(&operatorImage, "operator-image", os.Getenv("OPERATOR_IMAGE"),
-		"Operator image reference. The backup/restore agents run from this same "+
+		"Operator image reference. The snapshot/restore agents run from this same "+
 			"image (Job / initContainer). Defaults to $OPERATOR_IMAGE; required for "+
-			"EtcdBackup and spec.bootstrap.restore to function.")
+			"EtcdSnapshot and spec.bootstrap.restore to function.")
 	opts := zap.Options{
 		Development: true,
 	}
@@ -138,9 +138,9 @@ func main() {
 
 	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&opts)))
 
-	// Refuse to run with the un-substituted image placeholder: backup/restore
+	// Refuse to run with the un-substituted image placeholder: snapshot/restore
 	// Pods would ImagePullBackOff forever otherwise. Fail loudly at startup
-	// instead of silently at first backup. (Empty is allowed — backups are then
+	// instead of silently at first snapshot. (Empty is allowed — snapshots are then
 	// simply unavailable and the controllers fail loudly if one is attempted.)
 	if err := operatorImageError(operatorImage); err != nil {
 		setupLog.Error(err, "invalid operator image configuration")
@@ -214,14 +214,14 @@ func main() {
 		setupLog.Error(err, "unable to build clientset")
 		os.Exit(1)
 	}
-	if err = (&controllers.EtcdBackupReconciler{
+	if err = (&controllers.EtcdSnapshotReconciler{
 		Client:        mgr.GetClient(),
 		Scheme:        mgr.GetScheme(),
 		APIReader:     mgr.GetAPIReader(),
 		Clientset:     clientset,
 		OperatorImage: operatorImage,
 	}).SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to create controller", "controller", "EtcdBackup")
+		setupLog.Error(err, "unable to create controller", "controller", "EtcdSnapshot")
 		os.Exit(1)
 	}
 	//+kubebuilder:scaffold:builder

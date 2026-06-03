@@ -72,7 +72,7 @@ spec:
         - --leader-elect
         image: controller:latest
         name: manager
-        # OPERATOR_IMAGE must equal this container's own image: the backup Job
+        # OPERATOR_IMAGE must equal this container's own image: the snapshot Job
         # and the restore init container run the operator image as the agent.
         # The value here is a placeholder kept in sync with the `image:` field
         # by a kustomize replacement in config/default; `make deploy IMG=...`
@@ -82,7 +82,7 @@ spec:
         # WARNING: if you apply config/ directly (or via a kustomize base that
         # does NOT run that image replacement), this stays "controller:latest".
         # The operator refuses to start on that placeholder (it would otherwise
-        # make every backup/restore Pod ImagePullBackOff), exiting with a clear
+        # make every snapshot/restore Pod ImagePullBackOff), exiting with a clear
         # error — override OPERATOR_IMAGE (and image:) to the real operator ref.
         env:
         - name: OPERATOR_IMAGE

@@ -222,11 +222,11 @@ kubectl delete etcdmember.etcd-operator.cozystack.io <broken-member> -n <ns>
 #    fresh storage.
 ```
 
-This sequence preserves quorum if you have an odd number of voters and only one is broken. If multiple voters are broken simultaneously, quorum is lost and you can't `MemberRemove` cleanly. In that case the recovery is to delete the EtcdCluster, recreate it, and restore from a snapshot — see [Restoring a cluster from a snapshot](#restoring-a-cluster-from-a-snapshot). Snapshots only exist if you have been taking `EtcdBackup`s, so set that up *before* you need it.
+This sequence preserves quorum if you have an odd number of voters and only one is broken. If multiple voters are broken simultaneously, quorum is lost and you can't `MemberRemove` cleanly. In that case the recovery is to delete the EtcdCluster, recreate it, and restore from a snapshot — see [Restoring a cluster from a snapshot](#restoring-a-cluster-from-a-snapshot). Snapshots only exist if you have been taking `EtcdSnapshot`s, so set that up *before* you need it.
 
-## Taking a backup
+## Taking a snapshot
 
-`EtcdBackup` captures a one-shot snapshot of a running cluster and stores it in S3 (or on a PVC). The operator runs a Job using its own image as a backup agent; it dials the cluster's client Service (honoring TLS and `spec.auth` auth automatically) and uploads the snapshot.
+`EtcdSnapshot` captures a one-shot snapshot of a running cluster and stores it in S3 (or on a PVC). The operator runs a Job using its own image as a snapshot agent; it dials the cluster's client Service (honoring TLS and `spec.auth` auth automatically) and uploads the snapshot.
 
 ```sh
 # S3 credentials Secret in the cluster's namespace. The agent reads exactly
@@ -237,7 +237,7 @@ kubectl create secret generic s3-creds -n <ns> \
 
 cat <<'EOF' | kubectl apply -f -
 apiVersion: etcd-operator.cozystack.io/v1alpha2
-kind: EtcdBackup
+kind: EtcdSnapshot
 metadata:
   name: my-etcd-2026-06-02
   namespace: <ns>
@@ -247,7 +247,7 @@ spec:
   destination:
     s3:
       endpoint: https://s3.example.com   # MinIO/Ceph endpoint also fine
-      bucket: etcd-backups
+      bucket: etcd-snapshots
       key: my-etcd                       # optional prefix; agent appends "<name>.db"
       region: us-east-1                  # optional
       forcePathStyle: true               # MinIO/Ceph typically require this
@@ -255,23 +255,23 @@ spec:
         name: s3-creds
 EOF
 
-# Watch it reach Complete; status.snapshot records where it landed.
-kubectl get etcdbackup.etcd-operator.cozystack.io my-etcd-2026-06-02 -n <ns> -w
-kubectl get etcdbackup.etcd-operator.cozystack.io my-etcd-2026-06-02 -n <ns> \
-  -o jsonpath='{.status.snapshot}{"\n"}'
-# -> {"uri":"s3://etcd-backups/my-etcd/my-etcd-2026-06-02.db","sizeBytes":...,"checksum":"sha256:..."}
+# Watch it reach Complete; status.artifact records where it landed.
+kubectl get etcdsnapshot.etcd-operator.cozystack.io my-etcd-2026-06-02 -n <ns> -w
+kubectl get etcdsnapshot.etcd-operator.cozystack.io my-etcd-2026-06-02 -n <ns> \
+  -o jsonpath='{.status.artifact}{"\n"}'
+# -> {"uri":"s3://etcd-snapshots/my-etcd/my-etcd-2026-06-02.db","sizeBytes":...,"checksum":"sha256:..."}
 ```
 
-For a PVC destination use `destination.pvc.{claimName,subPath}` instead of `s3`. Exactly one of `s3`/`pvc` is required (CEL-enforced). The backup is immutable: to re-snapshot, create a new `EtcdBackup`. There is no scheduled-backup CRD — drive recurring snapshots with a `CronJob` that `kubectl apply`s a fresh `EtcdBackup` (e.g. with a date-stamped name).
+For a PVC destination use `destination.pvc.{claimName,subPath}` instead of `s3`. Exactly one of `s3`/`pvc` is required (CEL-enforced). The snapshot is immutable: to re-snapshot, create a new `EtcdSnapshot`. There is no scheduled-snapshot CRD — drive recurring snapshots with a `CronJob` that `kubectl apply`s a fresh `EtcdSnapshot` (e.g. with a date-stamped name).
 
-> **Object names must be unique.** The stored object is keyed by the `EtcdBackup` *name* (`<key-prefix>/<name>.db` for S3, `<name>.db` on a PVC). The agent **refuses to overwrite an existing snapshot it did not write** — for **both** S3 and PVC destinations — so a backup whose key/path already exists fails rather than silently clobbering an earlier snapshot. Give each backup a distinct name (the date-stamped CronJob pattern above does this) or a distinct destination `key`/`subPath`. (A *retry* of the same `EtcdBackup` is exempt: each snapshot is stamped with the backup's UID — S3 object metadata, or a sibling `<name>.db.uid` file on a PVC — so the agent recognizes its own prior write and the retry is idempotent.) The CRD's "immutability" is about the object: it does not version snapshots, so reusing a name after deleting the object replaces it.
+> **Object names must be unique.** The stored object is keyed by the `EtcdSnapshot` *name* (`<key-prefix>/<name>.db` for S3, `<name>.db` on a PVC). The agent **refuses to overwrite an existing snapshot it did not write** — for **both** S3 and PVC destinations — so a snapshot whose key/path already exists fails rather than silently clobbering an earlier snapshot. Give each snapshot a distinct name (the date-stamped CronJob pattern above does this) or a distinct destination `key`/`subPath`. (A *retry* of the same `EtcdSnapshot` is exempt: each snapshot is stamped with the snapshot's UID — S3 object metadata, or a sibling `<name>.db.uid` file on a PVC — so the agent recognizes its own prior write and the retry is idempotent.) The CRD's "immutability" is about the object: it does not version snapshots, so reusing a name after deleting the object replaces it.
 >
-> **S3 credentials need `s3:ListBucket` (or equivalent), not just `s3:GetObject`/`PutObject`.** The overwrite guard does a `HeadObject` on the target key; with `GetObject` but no `ListBucket`, S3 (and some MinIO/Ceph policies) returns **403 AccessDenied** for a *missing* key instead of 404. The agent cannot distinguish that from a real permission problem, so it **fails closed** (refuses the backup) rather than risk an overwrite. Grant the backup credentials `ListBucket` on the bucket so a HEAD on a missing key returns 404.
+> **S3 credentials need `s3:ListBucket` (or equivalent), not just `s3:GetObject`/`PutObject`.** The overwrite guard does a `HeadObject` on the target key; with `GetObject` but no `ListBucket`, S3 (and some MinIO/Ceph policies) returns **403 AccessDenied** for a *missing* key instead of 404. The agent cannot distinguish that from a real permission problem, so it **fails closed** (refuses the snapshot) rather than risk an overwrite. Grant the snapshot credentials `ListBucket` on the bucket so a HEAD on a missing key returns 404.
 
-If a backup ends up `Failed`, inspect the agent Job's Pod logs (the Job is `<backup-name>-backup` and is GC'd a few minutes after finishing via `ttlSecondsAfterFinished`):
+If a snapshot ends up `Failed`, inspect the agent Job's Pod logs (the Job is `<snapshot-name>-snapshot` and is GC'd a few minutes after finishing via `ttlSecondsAfterFinished`):
 
 ```sh
-kubectl logs -n <ns> job/my-etcd-2026-06-02-backup
+kubectl logs -n <ns> job/my-etcd-2026-06-02-snapshot
 ```
 
 ## Restoring a cluster from a snapshot
@@ -304,7 +304,7 @@ spec:
       source:
         s3:
           endpoint: https://s3.example.com
-          bucket: etcd-backups
+          bucket: etcd-snapshots
           key: my-etcd/my-etcd-2026-06-02.db   # EXACT object key (not a prefix)
           region: us-east-1
           forcePathStyle: true
@@ -319,7 +319,7 @@ kubectl logs -n <ns> <seed-pod> -c restore
 
 Notes:
 
-- For a restore **source** the locator is exact: `s3.key` is the full object key (what `status.snapshot.uri` reported, minus the `s3://bucket/` prefix), and for a PVC source `pvc.subPath` is the full path to the `.db` file within the volume.
+- For a restore **source** the locator is exact: `s3.key` is the full object key (what `status.artifact.uri` reported, minus the `s3://bucket/` prefix), and for a PVC source `pvc.subPath` is the full path to the `.db` file within the volume.
 - The restore agent rebuilds the data dir with `etcdutl` using the seed's member identity (name / initial-cluster / token / peer URL), then etcd starts from it. Scale-up members added afterwards join the live cluster normally — only the seed restores.
 - The restore is idempotent: once the data dir is initialized, the init container no-ops, so Pod restarts after first boot never re-download or clobber live data.
 - After restore, etcd assigns a **new** cluster ID — this is a fresh cluster seeded with the old data, not a continuation of the old one.

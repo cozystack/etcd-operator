@@ -54,11 +54,11 @@ func TestBuildPod_NoRestoreInitContainerWithoutSpec(t *testing.T) {
 }
 
 func TestBuildPod_RestoreInitContainerS3(t *testing.T) {
-	restore := &lll.RestoreSpec{Source: lll.BackupDestination{
-		S3: &lll.S3BackupDestination{
+	restore := &lll.RestoreSpec{Source: lll.SnapshotLocation{
+		S3: &lll.S3SnapshotLocation{
 			Endpoint:             "https://minio.svc:9000",
 			Bucket:               "etcd",
-			Key:                  "backups/b1.db",
+			Key:                  "snapshots/b1.db",
 			ForcePathStyle:       true,
 			CredentialsSecretRef: corev1.LocalObjectReference{Name: "s3-creds"},
 		},
@@ -96,7 +96,7 @@ func TestBuildPod_RestoreInitContainerS3(t *testing.T) {
 	if vals["ETCD_VERSION"] != "3.6.4" {
 		t.Errorf("ETCD_VERSION = %q, want 3.6.4", vals["ETCD_VERSION"])
 	}
-	if vals["BACKUP_DEST_KIND"] != "s3" || vals["S3_KEY"] != "backups/b1.db" {
+	if vals["SNAPSHOT_DEST_KIND"] != "s3" || vals["S3_KEY"] != "snapshots/b1.db" {
 		t.Errorf("s3 source env = %+v", vals)
 	}
 	if got, ok := secretKeys["AWS_ACCESS_KEY_ID"]; !ok || got[0] != "s3-creds" {
@@ -137,8 +137,8 @@ func TestBuildPod_NoServiceAccountToken(t *testing.T) {
 // A seed that requests a restore must NOT get a Pod with an empty restore
 // image — that would brick bootstrap. ensurePod must error and create nothing.
 func TestEnsurePod_RestoreWithoutOperatorImageRefuses(t *testing.T) {
-	member := seedMember(&lll.RestoreSpec{Source: lll.BackupDestination{
-		PVC: &lll.PVCBackupDestination{ClaimName: "snap-pvc", SubPath: "b1.db"},
+	member := seedMember(&lll.RestoreSpec{Source: lll.SnapshotLocation{
+		PVC: &lll.PVCSnapshotLocation{ClaimName: "snap-pvc", SubPath: "b1.db"},
 	}})
 	c, s := newTestClient(t, member)
 	r := &EtcdMemberReconciler{Client: c, Scheme: s, OperatorImage: ""}
@@ -157,8 +157,8 @@ func TestEnsurePod_RestoreWithoutOperatorImageRefuses(t *testing.T) {
 }
 
 func TestBuildPod_RestoreInitContainerPVC(t *testing.T) {
-	restore := &lll.RestoreSpec{Source: lll.BackupDestination{
-		PVC: &lll.PVCBackupDestination{ClaimName: "snap-pvc", SubPath: "b1.db"},
+	restore := &lll.RestoreSpec{Source: lll.SnapshotLocation{
+		PVC: &lll.PVCSnapshotLocation{ClaimName: "snap-pvc", SubPath: "b1.db"},
 	}}
 	r := &EtcdMemberReconciler{Scheme: testScheme(t), OperatorImage: "operator:latest"}
 	pod := r.buildPod(seedMember(restore))
@@ -168,7 +168,7 @@ func TestBuildPod_RestoreInitContainerPVC(t *testing.T) {
 		t.Fatal("restore initContainer missing")
 	}
 	vals, _ := envMap(ic.Env)
-	if vals["BACKUP_DEST_KIND"] != "pvc" || vals["PVC_SUBPATH"] != "b1.db" {
+	if vals["SNAPSHOT_DEST_KIND"] != "pvc" || vals["PVC_SUBPATH"] != "b1.db" {
 		t.Errorf("pvc source env = %+v", vals)
 	}
 

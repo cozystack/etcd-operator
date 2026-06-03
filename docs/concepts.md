@@ -362,21 +362,21 @@ The cluster surfaces three conditions: `Available`, `Progressing`, `Degraded`. T
 
 All conditions carry `observedGeneration` so consumers can tell whether a condition reflects the latest spec. Status writes are gated on "did anything actually change" — the operator does not bump `resourceVersion` every 30 s just because of the periodic reconcile.
 
-## Backups & restore
+## Snapshots & restore
 
-Two surfaces, one agent. The operator image doubles as a snapshot agent: `main.go` dispatches on `os.Args[1]` so `manager backup-agent` / `manager restore-agent` run the agent and exit, while a bare `manager` runs the controller. This keeps one binary and one image — no separate agent build — and means the agent always matches the operator it ships with.
+Two surfaces, one agent. The operator image doubles as a snapshot agent: `main.go` dispatches on `os.Args[1]` so `manager snapshot-agent` / `manager restore-agent` run the agent and exit, while a bare `manager` runs the controller. This keeps one binary and one image — no separate agent build — and means the agent always matches the operator it ships with.
 
-### Backup (`EtcdBackup`)
+### Snapshot (`EtcdSnapshot`)
 
-An `EtcdBackup` is a one-shot record. The controller resolves `spec.clusterRef`, builds a Job (owned by the `EtcdBackup`, with `ttlSecondsAfterFinished` so it self-GCs, `automountServiceAccountToken: false`, and a restricted security context), and tracks `status.phase` through `Pending → Started → Complete | Failed`. The Job's Pod runs the backup agent, which:
+An `EtcdSnapshot` is a one-shot record. The controller resolves `spec.clusterRef`, builds a Job (owned by the `EtcdSnapshot`, with `ttlSecondsAfterFinished` so it self-GCs, `automountServiceAccountToken: false`, and a restricted security context), and tracks `status.phase` through `Pending → Started → Complete | Failed`. The Job's Pod runs the snapshot agent, which:
 
 1. dials the cluster's client Service — TLS material (server CA + operator-client cert) is mounted from the same Secrets the operator dials with, and when `status.authEnabled` is latched the agent authenticates as `root` using the password from `spec.auth.rootCredentialsSecretRef`;
 2. streams `clientv3` `Maintenance.Snapshot` to a local file (PVC destination) or a temp file it then multipart-uploads to S3, hashing (sha256) and counting bytes as it goes;
-3. prints a marker line — `snapshot uploaded: uri="..." size=N sha256=<hex>` — that the controller scans out of the Pod log (via an uncached `APIReader` to find the Pod and the typed Clientset to read its log) to populate `status.snapshot{uri,sizeBytes,checksum}`.
+3. prints a marker line — `snapshot uploaded: uri="..." size=N sha256=<hex>` — that the controller scans out of the Pod log (via an uncached `APIReader` to find the Pod and the typed Clientset to read its log) to populate `status.artifact{uri,sizeBytes,checksum}`.
 
-Why parse a log line rather than have the agent write status? The agent has no Kubernetes API access by design (`automountServiceAccountToken: false`), so the controller — which does — is the one that records the result. The marker is the agent→controller channel. Terminal phases are sticky: a `Complete`/`Failed` backup is a historical record and never re-runs.
+Why parse a log line rather than have the agent write status? The agent has no Kubernetes API access by design (`automountServiceAccountToken: false`), so the controller — which does — is the one that records the result. The marker is the agent→controller channel. Terminal phases are sticky: a `Complete`/`Failed` snapshot is a historical record and never re-runs.
 
-Snapshot integrity note: a `Maintenance.Snapshot` stream carries no appended hash (unlike `etcdutl snapshot save`), so the sha256 in `status.snapshot.checksum` is computed by the agent over the bytes it stored, and restore runs with `SkipHashCheck`.
+Snapshot integrity note: a `Maintenance.Snapshot` stream carries no appended hash (unlike `etcdutl snapshot save`), so the sha256 in `status.artifact.checksum` is computed by the agent over the bytes it stored, and restore runs with `SkipHashCheck`.
 
 ### Restore (`spec.bootstrap.restore`)
 
@@ -392,7 +392,7 @@ This idempotency relies on the data dir being **persistent**. Restore is therefo
 
 ### Intentionally out of scope: scheduling
 
-There is no `EtcdBackupSchedule`. Recurring snapshots are a `CronJob` that `kubectl apply`s date-stamped `EtcdBackup` objects — composable with the one-shot primitive without adding a cron surface (and its timezone/missed-run/concurrency semantics) to the operator. See the [backup runbook](operations.md#taking-a-backup) and [restore runbook](operations.md#restoring-a-cluster-from-a-snapshot).
+There is no `EtcdSnapshotSchedule`. Recurring snapshots are a `CronJob` that `kubectl apply`s date-stamped `EtcdSnapshot` objects — composable with the one-shot primitive without adding a cron surface (and its timezone/missed-run/concurrency semantics) to the operator. See the [snapshot runbook](operations.md#taking-a-snapshot) and [restore runbook](operations.md#restoring-a-cluster-from-a-snapshot).
 
 ## What is not in the design
 

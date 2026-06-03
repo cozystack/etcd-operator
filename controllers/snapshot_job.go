@@ -24,7 +24,7 @@ import (
 // agentResources sets modest requests/limits for the BACKUP agent container.
 // Without requests it runs BestEffort (first to be evicted under memory
 // pressure) and is rejected outright where a LimitRange demands requests. The
-// backup agent only streams the snapshot to its destination, so a 256Mi ceiling
+// snapshot agent only streams the snapshot to its destination, so a 256Mi ceiling
 // is ample. No CPU limit, so streaming a large snapshot isn't throttled.
 //
 // The RESTORE init container uses restoreAgentResources instead — see why there.
@@ -43,9 +43,9 @@ func agentResources() corev1.ResourceRequirements {
 // restoreAgentResources sets the resources for the restore init container. It
 // keeps the same requests as agentResources (so the container is Burstable, not
 // BestEffort — it gates bootstrap and must not be first to evict) but sets NO
-// memory limit. Unlike backup's streaming copy, etcdutl snapshot.Restore
+// memory limit. Unlike snapshot's streaming copy, etcdutl snapshot.Restore
 // rebuilds a bbolt database whose working set scales with the snapshot/keyspace
-// size; a fixed low ceiling (the backup agent's 256Mi) would get a large
+// size; a fixed low ceiling (the snapshot agent's 256Mi) would get a large
 // restore OOM-killed, bricking bootstrap with an opaque OOMKilled — the exact
 // failure class the restore path is built to avoid. Leaving the limit unset
 // lets the rebuild use up to node capacity.
@@ -59,26 +59,26 @@ func restoreAgentResources() corev1.ResourceRequirements {
 }
 
 const (
-	backupJobTTLSeconds int32 = 600
-	backupJobBackoffLim int32 = 3
-	// backupJobActiveDeadlineSeconds bounds a single backup Pod's wall-clock
+	snapshotJobTTLSeconds int32 = 600
+	snapshotJobBackoffLim int32 = 3
+	// snapshotJobActiveDeadlineSeconds bounds a single snapshot Pod's wall-clock
 	// run. BackoffLimit only counts Pods that EXIT non-zero; a Pod that HANGS —
 	// e.g. the agent dialing a parked (replicas:0) cluster or a client Service
 	// with no ready endpoints, where the clientv3 Snapshot RPC blocks — never
-	// increments it, so without this the Job (and the EtcdBackup, stuck in
+	// increments it, so without this the Job (and the EtcdSnapshot, stuck in
 	// Started) would requeue forever. On deadline the kubelet kills the Pod and
 	// the Job gets a Failed/DeadlineExceeded condition, which jobFailed() already
-	// turns into a terminal EtcdBackup failure. 30 min is generous for a large
+	// turns into a terminal EtcdSnapshot failure. 30 min is generous for a large
 	// snapshot + upload while still bounding a true hang.
-	backupJobActiveDeadlineSeconds int64 = 1800
-	backupCAMountPath                    = "/etc/etcd/pki/ca"
-	backupClientMountPath                = "/etc/etcd/pki/client"
-	backupPVCMountPath                   = "/backup/data"
+	snapshotJobActiveDeadlineSeconds int64 = 1800
+	snapshotCAMountPath                    = "/etc/etcd/pki/ca"
+	snapshotClientMountPath                = "/etc/etcd/pki/client"
+	snapshotPVCMountPath                   = "/snapshot/data"
 )
 
-// backupJobName is the deterministic, owned Job name for an EtcdBackup.
-func backupJobName(backup *lll.EtcdBackup) string {
-	return backup.Name + "-backup"
+// snapshotJobName is the deterministic, owned Job name for an EtcdSnapshot.
+func snapshotJobName(snapshot *lll.EtcdSnapshot) string {
+	return snapshot.Name + "-snapshot"
 }
 
 // clientServiceEndpoint returns the stable client-service URL the agent dials.
@@ -87,18 +87,18 @@ func clientServiceEndpoint(cluster *lll.EtcdCluster) string {
 		clusterClientScheme(cluster), cluster.Name, cluster.Namespace)
 }
 
-// buildBackupJob constructs the snapshot Job: the operator image run as
-// `manager backup-agent`, configured entirely via env. operatorImage is the
+// buildSnapshotJob constructs the snapshot Job: the operator image run as
+// `manager snapshot-agent`, configured entirely via env. operatorImage is the
 // operator's own image (the agent lives in the same binary).
-func buildBackupJob(backup *lll.EtcdBackup, cluster *lll.EtcdCluster, operatorImage string) *batchv1.Job {
-	dest := backup.Spec.Destination
+func buildSnapshotJob(snapshot *lll.EtcdSnapshot, cluster *lll.EtcdCluster, operatorImage string) *batchv1.Job {
+	dest := snapshot.Spec.Destination
 
 	env := []corev1.EnvVar{
 		{Name: "ETCD_ENDPOINTS", Value: clientServiceEndpoint(cluster)},
-		{Name: "BACKUP_NAME", Value: backup.Name},
+		{Name: "SNAPSHOT_NAME", Value: snapshot.Name},
 		// Stamped onto the S3 object so a Job retry recognizes its own prior
 		// upload instead of failing the overwrite guard.
-		{Name: "BACKUP_UID", Value: string(backup.UID)},
+		{Name: "SNAPSHOT_UID", Value: string(snapshot.UID)},
 	}
 
 	var volumes []corev1.Volume
@@ -111,18 +111,18 @@ func buildBackupJob(backup *lll.EtcdBackup, cluster *lll.EtcdCluster, operatorIm
 				Name:         "etcd-ca",
 				VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{SecretName: name}},
 			})
-			mounts = append(mounts, corev1.VolumeMount{Name: "etcd-ca", MountPath: backupCAMountPath, ReadOnly: true})
-			env = append(env, corev1.EnvVar{Name: "ETCD_TLS_CA_PATH", Value: backupCAMountPath + "/ca.crt"})
+			mounts = append(mounts, corev1.VolumeMount{Name: "etcd-ca", MountPath: snapshotCAMountPath, ReadOnly: true})
+			env = append(env, corev1.EnvVar{Name: "ETCD_TLS_CA_PATH", Value: snapshotCAMountPath + "/ca.crt"})
 		}
 		if name := operatorClientSecretName(cluster); name != "" {
 			volumes = append(volumes, corev1.Volume{
 				Name:         "etcd-client",
 				VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{SecretName: name}},
 			})
-			mounts = append(mounts, corev1.VolumeMount{Name: "etcd-client", MountPath: backupClientMountPath, ReadOnly: true})
+			mounts = append(mounts, corev1.VolumeMount{Name: "etcd-client", MountPath: snapshotClientMountPath, ReadOnly: true})
 			env = append(env,
-				corev1.EnvVar{Name: "ETCD_TLS_CERT_PATH", Value: backupClientMountPath + "/tls.crt"},
-				corev1.EnvVar{Name: "ETCD_TLS_KEY_PATH", Value: backupClientMountPath + "/tls.key"},
+				corev1.EnvVar{Name: "ETCD_TLS_CERT_PATH", Value: snapshotClientMountPath + "/tls.crt"},
+				corev1.EnvVar{Name: "ETCD_TLS_KEY_PATH", Value: snapshotClientMountPath + "/tls.key"},
 			)
 		}
 	}
@@ -144,7 +144,7 @@ func buildBackupJob(backup *lll.EtcdBackup, cluster *lll.EtcdCluster, operatorIm
 	case dest.S3 != nil:
 		s3 := dest.S3
 		env = append(env,
-			corev1.EnvVar{Name: "BACKUP_DEST_KIND", Value: "s3"},
+			corev1.EnvVar{Name: "SNAPSHOT_DEST_KIND", Value: "s3"},
 			corev1.EnvVar{Name: "S3_ENDPOINT", Value: s3.Endpoint},
 			corev1.EnvVar{Name: "S3_BUCKET", Value: s3.Bucket},
 			corev1.EnvVar{Name: "S3_KEY", Value: s3.Key},
@@ -159,30 +159,30 @@ func buildBackupJob(backup *lll.EtcdBackup, cluster *lll.EtcdCluster, operatorIm
 		)
 	case dest.PVC != nil:
 		env = append(env,
-			corev1.EnvVar{Name: "BACKUP_DEST_KIND", Value: "pvc"},
-			corev1.EnvVar{Name: "PVC_MOUNT_PATH", Value: backupPVCMountPath},
+			corev1.EnvVar{Name: "SNAPSHOT_DEST_KIND", Value: "pvc"},
+			corev1.EnvVar{Name: "PVC_MOUNT_PATH", Value: snapshotPVCMountPath},
 			corev1.EnvVar{Name: "PVC_SUBPATH", Value: dest.PVC.SubPath},
 		)
 		volumes = append(volumes, corev1.Volume{
-			Name: "backup-data",
+			Name: "snapshot-data",
 			VolumeSource: corev1.VolumeSource{PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
 				ClaimName: dest.PVC.ClaimName,
 			}},
 		})
-		mounts = append(mounts, corev1.VolumeMount{Name: "backup-data", MountPath: backupPVCMountPath})
+		mounts = append(mounts, corev1.VolumeMount{Name: "snapshot-data", MountPath: snapshotPVCMountPath})
 	}
 
-	ttl := backupJobTTLSeconds
-	backoff := backupJobBackoffLim
-	activeDeadline := backupJobActiveDeadlineSeconds
+	ttl := snapshotJobTTLSeconds
+	backoff := snapshotJobBackoffLim
+	activeDeadline := snapshotJobActiveDeadlineSeconds
 	notRoot := true
 	user := int64(65532)
 	noAutomount := false
 
 	return &batchv1.Job{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      backupJobName(backup),
-			Namespace: backup.Namespace,
+			Name:      snapshotJobName(snapshot),
+			Namespace: snapshot.Namespace,
 			Labels:    map[string]string{LabelCluster: cluster.Name},
 		},
 		Spec: batchv1.JobSpec{
@@ -202,9 +202,9 @@ func buildBackupJob(backup *lll.EtcdBackup, cluster *lll.EtcdCluster, operatorIm
 						SeccompProfile: &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault},
 					},
 					Containers: []corev1.Container{{
-						Name:    "backup-agent",
+						Name:    "snapshot-agent",
 						Image:   operatorImage,
-						Command: []string{"/manager", "backup-agent"},
+						Command: []string{"/manager", "snapshot-agent"},
 						Env:     env,
 						SecurityContext: &corev1.SecurityContext{
 							AllowPrivilegeEscalation: ptrBool(false),

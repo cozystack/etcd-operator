@@ -259,7 +259,7 @@ type BootstrapSpec struct {
 
 // RestoreSpec points at the snapshot a new cluster is restored from.
 //
-// Unlike a backup destination, a restore SOURCE addresses a single existing
+// Unlike a snapshot destination, a restore SOURCE addresses a single existing
 // object: when the source is S3 the key must be the exact object key, not a
 // prefix; when the source is a PVC the subPath must be the exact snapshot file
 // within the volume. An empty locator would only surface as an opaque failure
@@ -269,8 +269,8 @@ type BootstrapSpec struct {
 // +kubebuilder:validation:XValidation:rule="!has(self.source.pvc) || (has(self.source.pvc.subPath) && size(self.source.pvc.subPath) > 0)",message="bootstrap.restore.source.pvc.subPath must be the exact (non-empty) snapshot file path for a restore source"
 type RestoreSpec struct {
 	// Source is where the snapshot is read from (S3 or PVC). Same shape as
-	// an EtcdBackup destination.
-	Source BackupDestination `json:"source"`
+	// an EtcdSnapshot destination.
+	Source SnapshotLocation `json:"source"`
 }
 
 // StorageMedium selects the volume backend for each member's etcd data

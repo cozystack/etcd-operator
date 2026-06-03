@@ -21,23 +21,23 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-// BackupDestination selects where an etcd snapshot is stored (for EtcdBackup)
+// SnapshotLocation selects where an etcd snapshot is stored (for EtcdSnapshot)
 // or read from (for a restore source). Exactly one of S3/PVC must be set —
 // enforced by CEL.
 //
 // +kubebuilder:validation:XValidation:rule="has(self.s3) != has(self.pvc)",message="exactly one of destination.s3 or destination.pvc must be set"
-type BackupDestination struct {
+type SnapshotLocation struct {
 	// S3 stores the snapshot in an S3-compatible object store.
 	// +optional
-	S3 *S3BackupDestination `json:"s3,omitempty"`
+	S3 *S3SnapshotLocation `json:"s3,omitempty"`
 
 	// PVC stores the snapshot on a PersistentVolumeClaim.
 	// +optional
-	PVC *PVCBackupDestination `json:"pvc,omitempty"`
+	PVC *PVCSnapshotLocation `json:"pvc,omitempty"`
 }
 
-// S3BackupDestination describes an S3-compatible object-store location.
-type S3BackupDestination struct {
+// S3SnapshotLocation describes an S3-compatible object-store location.
+type S3SnapshotLocation struct {
 	// Endpoint is the S3 endpoint URL (e.g. "https://s3.amazonaws.com" or a
 	// MinIO/Ceph endpoint).
 	// +kubebuilder:validation:MinLength=1
@@ -48,7 +48,7 @@ type S3BackupDestination struct {
 	Bucket string `json:"bucket"`
 
 	// Key is an optional object-key prefix within the bucket. The operator
-	// appends "<backup-name>.db".
+	// appends "<snapshot-name>.db".
 	// +optional
 	Key string `json:"key,omitempty"`
 
@@ -66,8 +66,8 @@ type S3BackupDestination struct {
 	ForcePathStyle bool `json:"forcePathStyle,omitempty"`
 }
 
-// PVCBackupDestination describes a PersistentVolumeClaim location.
-type PVCBackupDestination struct {
+// PVCSnapshotLocation describes a PersistentVolumeClaim location.
+type PVCSnapshotLocation struct {
 	// ClaimName is the name of a PVC in the cluster's namespace.
 	// +kubebuilder:validation:MinLength=1
 	ClaimName string `json:"claimName"`
@@ -77,44 +77,44 @@ type PVCBackupDestination struct {
 	SubPath string `json:"subPath,omitempty"`
 }
 
-// EtcdBackupStatusPhase is the lifecycle phase of an EtcdBackup.
-type EtcdBackupStatusPhase string
+// EtcdSnapshotStatusPhase is the lifecycle phase of an EtcdSnapshot.
+type EtcdSnapshotStatusPhase string
 
 const (
-	// EtcdBackupStatusPhasePending is the initial phase before the Job is created.
-	EtcdBackupStatusPhasePending EtcdBackupStatusPhase = "Pending"
-	// EtcdBackupStatusPhaseStarted means the backup Job is running.
-	EtcdBackupStatusPhaseStarted EtcdBackupStatusPhase = "Started"
-	// EtcdBackupStatusPhaseComplete means the snapshot was captured and stored.
-	EtcdBackupStatusPhaseComplete EtcdBackupStatusPhase = "Complete"
-	// EtcdBackupStatusPhaseFailed means the backup failed.
-	EtcdBackupStatusPhaseFailed EtcdBackupStatusPhase = "Failed"
+	// EtcdSnapshotStatusPhasePending is the initial phase before the Job is created.
+	EtcdSnapshotStatusPhasePending EtcdSnapshotStatusPhase = "Pending"
+	// EtcdSnapshotStatusPhaseStarted means the snapshot Job is running.
+	EtcdSnapshotStatusPhaseStarted EtcdSnapshotStatusPhase = "Started"
+	// EtcdSnapshotStatusPhaseComplete means the snapshot was captured and stored.
+	EtcdSnapshotStatusPhaseComplete EtcdSnapshotStatusPhase = "Complete"
+	// EtcdSnapshotStatusPhaseFailed means the snapshot failed.
+	EtcdSnapshotStatusPhaseFailed EtcdSnapshotStatusPhase = "Failed"
 )
 
-// BackupReady is the single lifecycle condition on an EtcdBackup. Its Status is
+// SnapshotReady is the single lifecycle condition on an EtcdSnapshot. Its Status is
 // True only in the terminal Complete phase; Pending/Started/Failed report False
 // with the Reason carrying the specific state (e.g. JobRunning, JobFailed,
 // ClusterNotFound). One condition — rather than a distinct type per phase —
-// means a terminal backup can't report a stale "Started=True" alongside its
+// means a terminal snapshot can't report a stale "Started=True" alongside its
 // "Failed"/"Complete" outcome (setCondition only ever updates the matching
 // Type, so sibling types would otherwise never be flipped back to False).
-const BackupReady = "Ready"
+const SnapshotReady = "Ready"
 
-// EtcdBackupSpec defines a one-shot etcd snapshot of a cluster to a
-// destination. Backups are immutable: change the destination by creating a
-// new EtcdBackup.
-type EtcdBackupSpec struct {
+// EtcdSnapshotSpec defines a one-shot etcd snapshot of a cluster to a
+// destination. Snapshots are immutable: change the destination by creating a
+// new EtcdSnapshot.
+type EtcdSnapshotSpec struct {
 	// ClusterRef names the EtcdCluster (same namespace) to snapshot.
 	ClusterRef corev1.LocalObjectReference `json:"clusterRef"`
 
 	// Destination selects where the snapshot is stored (S3 or PVC).
-	Destination BackupDestination `json:"destination"`
+	Destination SnapshotLocation `json:"destination"`
 }
 
-// BackupSnapshot records the stored snapshot's coordinates.
-type BackupSnapshot struct {
+// SnapshotArtifact records the stored snapshot's coordinates.
+type SnapshotArtifact struct {
 	// URI is the full snapshot location, e.g. "s3://bucket/key.db" or
-	// "file:///backup/data/name.db".
+	// "file:///snapshot/data/name.db".
 	URI string `json:"uri"`
 
 	// SizeBytes is the snapshot size in bytes.
@@ -126,15 +126,15 @@ type BackupSnapshot struct {
 	Checksum string `json:"checksum,omitempty"`
 }
 
-// EtcdBackupStatus is the observed state of an EtcdBackup.
-type EtcdBackupStatus struct {
+// EtcdSnapshotStatus is the observed state of an EtcdSnapshot.
+type EtcdSnapshotStatus struct {
 	// Phase is the high-level lifecycle phase.
 	// +optional
-	Phase EtcdBackupStatusPhase `json:"phase,omitempty"`
+	Phase EtcdSnapshotStatusPhase `json:"phase,omitempty"`
 
-	// Snapshot is populated once the backup completes.
+	// Artifact is populated once the snapshot completes.
 	// +optional
-	Snapshot *BackupSnapshot `json:"snapshot,omitempty"`
+	Artifact *SnapshotArtifact `json:"artifact,omitempty"`
 
 	// Conditions represent the latest available observations.
 	// +optional
@@ -147,25 +147,25 @@ type EtcdBackupStatus struct {
 // +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=`.status.phase`
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 
-// EtcdBackup is the Schema for the etcdbackups API. It captures a one-shot
+// EtcdSnapshot is the Schema for the etcdsnapshots API. It captures a one-shot
 // snapshot of an EtcdCluster to a destination (S3 or PVC).
-type EtcdBackup struct {
+type EtcdSnapshot struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
 
-	Spec   EtcdBackupSpec   `json:"spec,omitempty"`
-	Status EtcdBackupStatus `json:"status,omitempty"`
+	Spec   EtcdSnapshotSpec   `json:"spec,omitempty"`
+	Status EtcdSnapshotStatus `json:"status,omitempty"`
 }
 
 // +kubebuilder:object:root=true
 
-// EtcdBackupList contains a list of EtcdBackup.
-type EtcdBackupList struct {
+// EtcdSnapshotList contains a list of EtcdSnapshot.
+type EtcdSnapshotList struct {
 	metav1.TypeMeta `json:",inline"`
 	metav1.ListMeta `json:"metadata,omitempty"`
-	Items           []EtcdBackup `json:"items"`
+	Items           []EtcdSnapshot `json:"items"`
 }
 
 func init() {
-	SchemeBuilder.Register(&EtcdBackup{}, &EtcdBackupList{})
+	SchemeBuilder.Register(&EtcdSnapshot{}, &EtcdSnapshotList{})
 }

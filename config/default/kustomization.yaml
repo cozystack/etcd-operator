@@ -31,7 +31,7 @@ patchesStrategicMerge:
 - manager_auth_proxy_patch.yaml
 
 # Keep the manager's OPERATOR_IMAGE env in sync with its own container image,
-# so the backup Job and restore init container always run the deployed
+# so the snapshot Job and restore init container always run the deployed
 # operator image. `make deploy IMG=...` rewrites the image; this copies that
 # value into the env var.
 replacements:

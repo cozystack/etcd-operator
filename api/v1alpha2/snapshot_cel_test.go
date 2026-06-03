@@ -22,30 +22,30 @@ import (
 	lll "github.com/cozystack/etcd-operator/api/v1alpha2"
 )
 
-func s3Source() lll.BackupDestination {
-	return lll.BackupDestination{S3: &lll.S3BackupDestination{
+func s3Source() lll.SnapshotLocation {
+	return lll.SnapshotLocation{S3: &lll.S3SnapshotLocation{
 		Endpoint:             "https://minio.svc:9000",
 		Bucket:               "etcd",
-		Key:                  "backups/snap.db", // exact key — required for a restore source
+		Key:                  "snapshots/snap.db", // exact key — required for a restore source
 		CredentialsSecretRef: corev1.LocalObjectReference{Name: "s3-creds"},
 	}}
 }
 
-func pvcSource() lll.BackupDestination {
+func pvcSource() lll.SnapshotLocation {
 	// subPath is the exact snapshot file — required for a restore source.
-	return lll.BackupDestination{PVC: &lll.PVCBackupDestination{ClaimName: "snap-pvc", SubPath: "snap.db"}}
+	return lll.SnapshotLocation{PVC: &lll.PVCSnapshotLocation{ClaimName: "snap-pvc", SubPath: "snap.db"}}
 }
 
-func TestCEL_BackupDestinationExactlyOne(t *testing.T) {
+func TestCEL_SnapshotLocationExactlyOne(t *testing.T) {
 	skipIfNoEnvtest(t)
 	ctx := context.Background()
 
 	t.Run("both rejected", func(t *testing.T) {
-		b := &lll.EtcdBackup{
+		b := &lll.EtcdSnapshot{
 			ObjectMeta: metav1.ObjectMeta{Name: "both", Namespace: "default"},
-			Spec: lll.EtcdBackupSpec{
+			Spec: lll.EtcdSnapshotSpec{
 				ClusterRef: corev1.LocalObjectReference{Name: "c1"},
-				Destination: lll.BackupDestination{
+				Destination: lll.SnapshotLocation{
 					S3:  s3Source().S3,
 					PVC: pvcSource().PVC,
 				},
@@ -62,9 +62,9 @@ func TestCEL_BackupDestinationExactlyOne(t *testing.T) {
 	})
 
 	t.Run("neither rejected", func(t *testing.T) {
-		b := &lll.EtcdBackup{
+		b := &lll.EtcdSnapshot{
 			ObjectMeta: metav1.ObjectMeta{Name: "neither", Namespace: "default"},
-			Spec:       lll.EtcdBackupSpec{ClusterRef: corev1.LocalObjectReference{Name: "c1"}},
+			Spec:       lll.EtcdSnapshotSpec{ClusterRef: corev1.LocalObjectReference{Name: "c1"}},
 		}
 		err := k8s.Create(ctx, b)
 		if err == nil {
@@ -77,9 +77,9 @@ func TestCEL_BackupDestinationExactlyOne(t *testing.T) {
 	})
 
 	t.Run("s3 only accepted", func(t *testing.T) {
-		b := &lll.EtcdBackup{
+		b := &lll.EtcdSnapshot{
 			ObjectMeta: metav1.ObjectMeta{Name: "s3-only", Namespace: "default"},
-			Spec: lll.EtcdBackupSpec{
+			Spec: lll.EtcdSnapshotSpec{
 				ClusterRef:  corev1.LocalObjectReference{Name: "c1"},
 				Destination: s3Source(),
 			},
@@ -99,8 +99,8 @@ func TestCEL_RestoreS3KeyRequired(t *testing.T) {
 
 	t.Run("empty key rejected", func(t *testing.T) {
 		c := validCluster("restore-nokey")
-		c.Spec.Bootstrap = &lll.BootstrapSpec{Restore: &lll.RestoreSpec{Source: lll.BackupDestination{
-			S3: &lll.S3BackupDestination{
+		c.Spec.Bootstrap = &lll.BootstrapSpec{Restore: &lll.RestoreSpec{Source: lll.SnapshotLocation{
+			S3: &lll.S3SnapshotLocation{
 				Endpoint:             "https://minio.svc:9000",
 				Bucket:               "etcd",
 				CredentialsSecretRef: corev1.LocalObjectReference{Name: "s3-creds"},
@@ -183,8 +183,8 @@ func TestCEL_RestorePVCSubPathRequired(t *testing.T) {
 	ctx := context.Background()
 
 	c := validCluster("restore-pvc-nosubpath")
-	c.Spec.Bootstrap = &lll.BootstrapSpec{Restore: &lll.RestoreSpec{Source: lll.BackupDestination{
-		PVC: &lll.PVCBackupDestination{ClaimName: "snap-pvc"}, // subPath intentionally omitted
+	c.Spec.Bootstrap = &lll.BootstrapSpec{Restore: &lll.RestoreSpec{Source: lll.SnapshotLocation{
+		PVC: &lll.PVCSnapshotLocation{ClaimName: "snap-pvc"}, // subPath intentionally omitted
 	}}}
 	err := k8s.Create(ctx, c)
 	if err == nil {

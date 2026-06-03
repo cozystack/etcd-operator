@@ -132,7 +132,7 @@ spec:
                       source:
                         description: |-
                           Source is where the snapshot is read from (S3 or PVC). Same shape as
-                          an EtcdBackup destination.
+                          an EtcdSnapshot destination.
                         properties:
                           pvc:
                             description: PVC stores the snapshot on a PersistentVolumeClaim.
@@ -187,7 +187,7 @@ spec:
                               key:
                                 description: |-
                                   Key is an optional object-key prefix within the bucket. The operator
-                                  appends "<backup-name>.db".
+                                  appends "<snapshot-name>.db".
                                 type: string
                               region:
                                 description: Region is the S3 region. Optional for

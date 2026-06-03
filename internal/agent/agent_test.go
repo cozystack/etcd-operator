@@ -19,8 +19,8 @@ func TestObjectKey(t *testing.T) {
 		want   string
 	}{
 		{name: "snap", prefix: "", want: "snap.db"},
-		{name: "snap", prefix: "backups", want: "backups/snap.db"},
-		{name: "snap", prefix: "backups/", want: "backups/snap.db"},
+		{name: "snap", prefix: "snapshots", want: "snapshots/snap.db"},
+		{name: "snap", prefix: "snapshots/", want: "snapshots/snap.db"},
 		{name: "snap", prefix: "a/b/c", want: "a/b/c/snap.db"},
 	}
 	for _, tc := range cases {
@@ -37,8 +37,8 @@ func TestURI(t *testing.T) {
 		t.Errorf("s3 uri = %q, want %q", got, want)
 	}
 
-	pvc := destination{kind: "pvc", pvcMount: "/backup/data", pvcSubPath: "sub"}
-	if got, want := pvc.uri("snap"), "file:///backup/data/sub/snap.db"; got != want {
+	pvc := destination{kind: "pvc", pvcMount: "/snapshot/data", pvcSubPath: "sub"}
+	if got, want := pvc.uri("snap"), "file:///snapshot/data/sub/snap.db"; got != want {
 		t.Errorf("pvc uri = %q, want %q", got, want)
 	}
 }
@@ -49,8 +49,8 @@ func TestLocalPath(t *testing.T) {
 		subPath string
 		want    string
 	}{
-		{mount: "/backup/data", subPath: "", want: "/backup/data/snap.db"},
-		{mount: "/backup/data", subPath: "sub", want: "/backup/data/sub/snap.db"},
+		{mount: "/snapshot/data", subPath: "", want: "/snapshot/data/snap.db"},
+		{mount: "/snapshot/data", subPath: "sub", want: "/snapshot/data/sub/snap.db"},
 	}
 	for _, tc := range cases {
 		d := destination{kind: "pvc", pvcMount: tc.mount, pvcSubPath: tc.subPath}
@@ -86,12 +86,12 @@ func TestLoadDestination(t *testing.T) {
 
 	t.Run("pvc valid", func(t *testing.T) {
 		t.Setenv(envDestKind, "pvc")
-		t.Setenv(envPVCMountPath, "/backup/data")
+		t.Setenv(envPVCMountPath, "/snapshot/data")
 		d, err := loadDestination()
 		if err != nil {
 			t.Fatalf("loadDestination: %v", err)
 		}
-		if d.kind != "pvc" || d.pvcMount != "/backup/data" {
+		if d.kind != "pvc" || d.pvcMount != "/snapshot/data" {
 			t.Fatalf("unexpected destination: %+v", d)
 		}
 	})

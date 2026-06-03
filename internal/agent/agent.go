@@ -8,9 +8,9 @@ You may obtain a copy of the License at
     http://www.apache.org/licenses/LICENSE-2.0
 */
 
-// Package agent implements the backup and restore agents that run inside the
-// operator image (invoked as `manager backup-agent` / `manager restore-agent`)
-// in a Job (backup) or an initContainer (restore). The controller configures
+// Package agent implements the snapshot and restore agents that run inside the
+// operator image (invoked as `manager snapshot-agent` / `manager restore-agent`)
+// in a Job (snapshot) or an initContainer (restore). The controller configures
 // them entirely through environment variables so the agent image needs no
 // Kubernetes API access.
 package agent
@@ -30,14 +30,14 @@ import (
 	clientv3 "go.etcd.io/etcd/client/v3"
 )
 
-// BackupTimeout bounds a single backup agent run. clientv3.New does not block
+// SnapshotTimeout bounds a single snapshot agent run. clientv3.New does not block
 // on connect, so a parked/unreachable cluster surfaces as the Snapshot RPC
 // hanging on a context with no deadline — this gives that context one, so the
 // agent exits with a clear "context deadline exceeded" rather than blocking
-// indefinitely. Kept under the backup Job's ActiveDeadlineSeconds (1800s) so
+// indefinitely. Kept under the snapshot Job's ActiveDeadlineSeconds (1800s) so
 // the agent self-terminates with a logged error before the kubelet SIGKILLs the
 // Pod; the Job deadline is the authoritative backstop for any other hang.
-const BackupTimeout = 25 * time.Minute
+const SnapshotTimeout = 25 * time.Minute
 
 // RestoreTimeout bounds a single restore agent run. The restore agent runs as a
 // Pod init container — there is no Job ActiveDeadlineSeconds backstop — so this
@@ -47,8 +47,8 @@ const BackupTimeout = 25 * time.Minute
 // fails with a clear "context deadline exceeded" the operator can surface.
 const RestoreTimeout = 30 * time.Minute
 
-// Environment variable contract shared by both agents. The backup-job factory
-// (controllers/backup_job.go) and the restore initContainer (buildPod) set
+// Environment variable contract shared by both agents. The snapshot-job factory
+// (controllers/snapshot_job.go) and the restore initContainer (buildPod) set
 // these.
 const (
 	// etcd connection.
@@ -59,10 +59,10 @@ const (
 	envUsername    = "ETCD_USERNAME"
 	envPassword    = "ETCD_PASSWORD"
 
-	// destination (backup) / source (restore).
-	envDestKind     = "BACKUP_DEST_KIND" // "s3" | "pvc"
-	envBackupName   = "BACKUP_NAME"
-	envBackupUID    = "BACKUP_UID" // EtcdBackup UID; stamped on the S3 object so a retry recognizes its own upload
+	// destination (snapshot) / source (restore).
+	envDestKind     = "SNAPSHOT_DEST_KIND" // "s3" | "pvc"
+	envSnapshotName = "SNAPSHOT_NAME"
+	envSnapshotUID  = "SNAPSHOT_UID" // EtcdSnapshot UID; stamped on the S3 object so a retry recognizes its own upload
 	envS3Endpoint   = "S3_ENDPOINT"
 	envS3Bucket     = "S3_BUCKET"
 	envS3Key        = "S3_KEY"
@@ -80,7 +80,7 @@ const (
 	envEtcdVersion    = "ETCD_VERSION"   // cluster's spec.version, for the restore version-compat pre-flight
 )
 
-// destination captures the resolved backup destination / restore source.
+// destination captures the resolved snapshot destination / restore source.
 type destination struct {
 	kind        string // "s3" | "pvc"
 	s3Endpoint  string

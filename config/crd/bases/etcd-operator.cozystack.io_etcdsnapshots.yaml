@@ -4,14 +4,14 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.18.0
-  name: etcdbackups.etcd-operator.cozystack.io
+  name: etcdsnapshots.etcd-operator.cozystack.io
 spec:
   group: etcd-operator.cozystack.io
   names:
-    kind: EtcdBackup
-    listKind: EtcdBackupList
-    plural: etcdbackups
-    singular: etcdbackup
+    kind: EtcdSnapshot
+    listKind: EtcdSnapshotList
+    plural: etcdsnapshots
+    singular: etcdsnapshot
   scope: Namespaced
   versions:
   - additionalPrinterColumns:
@@ -28,7 +28,7 @@ spec:
     schema:
       openAPIV3Schema:
         description: |-
-          EtcdBackup is the Schema for the etcdbackups API. It captures a one-shot
+          EtcdSnapshot is the Schema for the etcdsnapshots API. It captures a one-shot
           snapshot of an EtcdCluster to a destination (S3 or PVC).
         properties:
           apiVersion:
@@ -50,9 +50,9 @@ spec:
             type: object
           spec:
             description: |-
-              EtcdBackupSpec defines a one-shot etcd snapshot of a cluster to a
-              destination. Backups are immutable: change the destination by creating a
-              new EtcdBackup.
+              EtcdSnapshotSpec defines a one-shot etcd snapshot of a cluster to a
+              destination. Snapshots are immutable: change the destination by creating a
+              new EtcdSnapshot.
             properties:
               clusterRef:
                 description: ClusterRef names the EtcdCluster (same namespace) to
@@ -126,7 +126,7 @@ spec:
                       key:
                         description: |-
                           Key is an optional object-key prefix within the bucket. The operator
-                          appends "<backup-name>.db".
+                          appends "<snapshot-name>.db".
                         type: string
                       region:
                         description: Region is the S3 region. Optional for endpoints
@@ -147,8 +147,26 @@ spec:
             - destination
             type: object
           status:
-            description: EtcdBackupStatus is the observed state of an EtcdBackup.
+            description: EtcdSnapshotStatus is the observed state of an EtcdSnapshot.
             properties:
+              artifact:
+                description: Artifact is populated once the snapshot completes.
+                properties:
+                  checksum:
+                    description: Checksum is "<algo>:<hex>", e.g. "sha256:abc123...".
+                    type: string
+                  sizeBytes:
+                    description: SizeBytes is the snapshot size in bytes.
+                    format: int64
+                    type: integer
+                  uri:
+                    description: |-
+                      URI is the full snapshot location, e.g. "s3://bucket/key.db" or
+                      "file:///snapshot/data/name.db".
+                    type: string
+                required:
+                - uri
+                type: object
               conditions:
                 description: Conditions represent the latest available observations.
                 items:
@@ -209,24 +227,6 @@ spec:
               phase:
                 description: Phase is the high-level lifecycle phase.
                 type: string
-              snapshot:
-                description: Snapshot is populated once the backup completes.
-                properties:
-                  checksum:
-                    description: Checksum is "<algo>:<hex>", e.g. "sha256:abc123...".
-                    type: string
-                  sizeBytes:
-                    description: SizeBytes is the snapshot size in bytes.
-                    format: int64
-                    type: integer
-                  uri:
-                    description: |-
-                      URI is the full snapshot location, e.g. "s3://bucket/key.db" or
-                      "file:///backup/data/name.db".
-                    type: string
-                required:
-                - uri
-                type: object
             type: object
         type: object
     served: true

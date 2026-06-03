@@ -714,7 +714,7 @@ func (r *EtcdMemberReconciler) buildPod(member *lll.EtcdMember) *corev1.Pod {
 			InitContainers: initContainers,
 			// etcd and the restore agent never call the Kubernetes API, so
 			// don't mount a ServiceAccount token into the member Pod (matches
-			// the backup Job's stance and trims needless attack surface).
+			// the snapshot Job's stance and trims needless attack surface).
 			AutomountServiceAccountToken: ptrBool(false),
 			SecurityContext: &corev1.PodSecurityContext{
 				RunAsNonRoot: ptrBool(true),
@@ -803,7 +803,7 @@ func restoreInitContainer(member *lll.EtcdMember, peerAddr, operatorImage string
 	case src.S3 != nil:
 		s3 := src.S3
 		env = append(env,
-			corev1.EnvVar{Name: "BACKUP_DEST_KIND", Value: "s3"},
+			corev1.EnvVar{Name: "SNAPSHOT_DEST_KIND", Value: "s3"},
 			corev1.EnvVar{Name: "S3_ENDPOINT", Value: s3.Endpoint},
 			corev1.EnvVar{Name: "S3_BUCKET", Value: s3.Bucket},
 			corev1.EnvVar{Name: "S3_KEY", Value: s3.Key}, // exact object key for restore
@@ -818,7 +818,7 @@ func restoreInitContainer(member *lll.EtcdMember, peerAddr, operatorImage string
 		)
 	case src.PVC != nil:
 		env = append(env,
-			corev1.EnvVar{Name: "BACKUP_DEST_KIND", Value: "pvc"},
+			corev1.EnvVar{Name: "SNAPSHOT_DEST_KIND", Value: "pvc"},
 			corev1.EnvVar{Name: "PVC_MOUNT_PATH", Value: restoreSrcMountPath},
 			corev1.EnvVar{Name: "PVC_SUBPATH", Value: src.PVC.SubPath},
 		)

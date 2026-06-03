@@ -105,16 +105,16 @@ func TestEnsureObjectAbsent(t *testing.T) {
 	})
 
 	t.Run("own object from a prior attempt is ok (idempotent retry)", func(t *testing.T) {
-		out := &s3.HeadObjectOutput{Metadata: map[string]string{backupUIDMetaKey: "uid-1"}}
+		out := &s3.HeadObjectOutput{Metadata: map[string]string{snapshotUIDMetaKey: "uid-1"}}
 		if err := ensureObjectAbsent(ctx, fakeHead{out: out}, "etcd", "snap.db", "uid-1"); err != nil {
 			t.Errorf("an object stamped with our own UID must not block a retry: %v", err)
 		}
 	})
 
-	t.Run("object owned by a different backup refused", func(t *testing.T) {
-		out := &s3.HeadObjectOutput{Metadata: map[string]string{backupUIDMetaKey: "someone-else"}}
+	t.Run("object owned by a different snapshot refused", func(t *testing.T) {
+		out := &s3.HeadObjectOutput{Metadata: map[string]string{snapshotUIDMetaKey: "someone-else"}}
 		if err := ensureObjectAbsent(ctx, fakeHead{out: out}, "etcd", "snap.db", "uid-1"); err == nil {
-			t.Fatal("an object owned by a different backup must be refused")
+			t.Fatal("an object owned by a different snapshot must be refused")
 		}
 	})
 
@@ -143,7 +143,7 @@ func TestEnsureObjectAbsent(t *testing.T) {
 
 	// A 403 AccessDenied on HEAD of a missing key (S3/MinIO/Ceph return this
 	// when the credentials lack ListBucket) is NOT treated as "absent": we fail
-	// closed rather than risk overwriting. The runbook documents that backup
+	// closed rather than risk overwriting. The runbook documents that snapshot
 	// credentials must allow HEAD-on-missing to return 404 (i.e. ListBucket).
 	t.Run("403 access denied fails closed (not treated as absent)", func(t *testing.T) {
 		e := &smithy.GenericAPIError{Code: "AccessDenied", Message: "Access Denied"}
@@ -184,7 +184,7 @@ func TestEnsureFileAbsent(t *testing.T) {
 		if err := os.WriteFile(p, []byte("our snapshot"), 0o644); err != nil {
 			t.Fatal(err)
 		}
-		if err := os.WriteFile(p+backupUIDSuffix, []byte("uid-1"), 0o644); err != nil {
+		if err := os.WriteFile(p+snapshotUIDSuffix, []byte("uid-1"), 0o644); err != nil {
 			t.Fatal(err)
 		}
 		if err := ensureFileAbsent(p, "uid-1"); err != nil {
@@ -192,16 +192,16 @@ func TestEnsureFileAbsent(t *testing.T) {
 		}
 	})
 
-	t.Run("file owned by a different backup refused", func(t *testing.T) {
+	t.Run("file owned by a different snapshot refused", func(t *testing.T) {
 		p := filepath.Join(t.TempDir(), "snap.db")
 		if err := os.WriteFile(p, []byte("their snapshot"), 0o644); err != nil {
 			t.Fatal(err)
 		}
-		if err := os.WriteFile(p+backupUIDSuffix, []byte("someone-else"), 0o644); err != nil {
+		if err := os.WriteFile(p+snapshotUIDSuffix, []byte("someone-else"), 0o644); err != nil {
 			t.Fatal(err)
 		}
 		if err := ensureFileAbsent(p, "uid-1"); err == nil {
-			t.Fatal("a file owned by a different backup must be refused")
+			t.Fatal("a file owned by a different snapshot must be refused")
 		}
 	})
 }

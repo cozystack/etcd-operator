@@ -110,7 +110,7 @@ func TestOperatorImageError(t *testing.T) {
 	if err := operatorImageError(placeholderOperatorImage); err == nil {
 		t.Errorf("operatorImageError(%q) = nil, want error (placeholder must be rejected)", placeholderOperatorImage)
 	}
-	// A real image ref and empty (backups simply unavailable) are both allowed.
+	// A real image ref and empty (snapshots simply unavailable) are both allowed.
 	for _, img := range []string{"registry.example.com/etcd-operator:v1.2.3", ""} {
 		if err := operatorImageError(img); err != nil {
 			t.Errorf("operatorImageError(%q) = %v, want nil", img, err)

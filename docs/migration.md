@@ -10,7 +10,7 @@ credentials**.
 
 > **TODO — full legacy-operator migration.** The end-to-end story for moving an
 > existing `etcd.aenix.io/v1alpha1` cluster onto `etcd-operator.cozystack.io/v1alpha2`
-> (CRD shape, data-dir adoption vs backup/restore, member-ID continuity) is not
+> (CRD shape, data-dir adoption vs snapshot/restore, member-ID continuity) is not
 > written yet — the two operators manage members differently (the new one uses
 > per-member `EtcdMember` CRs + Pods, not a single StatefulSet), so this is not a
 > drop-in CRD swap. Fill this in as the migration path is validated.

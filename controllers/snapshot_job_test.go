@@ -53,16 +53,16 @@ func volumeByName(vols []corev1.Volume, name string) (corev1.Volume, bool) {
 	return corev1.Volume{}, false
 }
 
-func s3Backup(name, cluster string) *lll.EtcdBackup {
-	return &lll.EtcdBackup{
+func s3Snapshot(name, cluster string) *lll.EtcdSnapshot {
+	return &lll.EtcdSnapshot{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "ns", UID: types.UID("uid-" + name)},
-		Spec: lll.EtcdBackupSpec{
+		Spec: lll.EtcdSnapshotSpec{
 			ClusterRef: corev1.LocalObjectReference{Name: cluster},
-			Destination: lll.BackupDestination{
-				S3: &lll.S3BackupDestination{
+			Destination: lll.SnapshotLocation{
+				S3: &lll.S3SnapshotLocation{
 					Endpoint:             "https://minio.svc:9000",
 					Bucket:               "etcd",
-					Key:                  "backups",
+					Key:                  "snapshots",
 					Region:               "us-east-1",
 					ForcePathStyle:       true,
 					CredentialsSecretRef: corev1.LocalObjectReference{Name: "s3-creds"},
@@ -72,12 +72,12 @@ func s3Backup(name, cluster string) *lll.EtcdBackup {
 	}
 }
 
-func TestBuildBackupJob_S3(t *testing.T) {
+func TestBuildSnapshotJob_S3(t *testing.T) {
 	cluster := &lll.EtcdCluster{ObjectMeta: metav1.ObjectMeta{Name: "c1", Namespace: "ns"}}
-	job := buildBackupJob(s3Backup("b1", "c1"), cluster, "operator:latest")
+	job := buildSnapshotJob(s3Snapshot("b1", "c1"), cluster, "operator:latest")
 
-	if job.Name != "b1-backup" {
-		t.Errorf("job name = %q, want b1-backup", job.Name)
+	if job.Name != "b1-snapshot" {
+		t.Errorf("job name = %q, want b1-snapshot", job.Name)
 	}
 	if job.Namespace != "ns" {
 		t.Errorf("job namespace = %q, want ns", job.Namespace)
@@ -91,10 +91,10 @@ func TestBuildBackupJob_S3(t *testing.T) {
 		t.Fatal("TTLSecondsAfterFinished not set")
 	}
 	// A wall-clock bound is required so a Pod that HANGS (e.g. dialing a parked
-	// cluster) is killed and the Job goes Failed, rather than wedging the backup
+	// cluster) is killed and the Job goes Failed, rather than wedging the snapshot
 	// in Started forever — BackoffLimit only catches Pods that exit non-zero.
 	if job.Spec.ActiveDeadlineSeconds == nil {
-		t.Fatal("ActiveDeadlineSeconds not set: a hung backup Pod would never fail the Job")
+		t.Fatal("ActiveDeadlineSeconds not set: a hung snapshot Pod would never fail the Job")
 	}
 	pod := job.Spec.Template.Spec
 	if pod.RestartPolicy != corev1.RestartPolicyNever {
@@ -114,21 +114,21 @@ func TestBuildBackupJob_S3(t *testing.T) {
 	if ctr.Image != "operator:latest" {
 		t.Errorf("image = %q, want operator:latest", ctr.Image)
 	}
-	if got, want := ctr.Command, []string{"/manager", "backup-agent"}; len(got) != 2 || got[0] != want[0] || got[1] != want[1] {
+	if got, want := ctr.Command, []string{"/manager", "snapshot-agent"}; len(got) != 2 || got[0] != want[0] || got[1] != want[1] {
 		t.Errorf("command = %v, want %v", got, want)
 	}
 
 	vals, secretKeys := envMap(ctr.Env)
-	if vals["BACKUP_DEST_KIND"] != "s3" {
-		t.Errorf("BACKUP_DEST_KIND = %q, want s3", vals["BACKUP_DEST_KIND"])
+	if vals["SNAPSHOT_DEST_KIND"] != "s3" {
+		t.Errorf("SNAPSHOT_DEST_KIND = %q, want s3", vals["SNAPSHOT_DEST_KIND"])
 	}
-	if vals["BACKUP_NAME"] != "b1" {
-		t.Errorf("BACKUP_NAME = %q, want b1", vals["BACKUP_NAME"])
+	if vals["SNAPSHOT_NAME"] != "b1" {
+		t.Errorf("SNAPSHOT_NAME = %q, want b1", vals["SNAPSHOT_NAME"])
 	}
-	if vals["BACKUP_UID"] != "uid-b1" {
-		t.Errorf("BACKUP_UID = %q, want uid-b1 (object-ownership stamp)", vals["BACKUP_UID"])
+	if vals["SNAPSHOT_UID"] != "uid-b1" {
+		t.Errorf("SNAPSHOT_UID = %q, want uid-b1 (object-ownership stamp)", vals["SNAPSHOT_UID"])
 	}
-	if vals["S3_BUCKET"] != "etcd" || vals["S3_KEY"] != "backups" {
+	if vals["S3_BUCKET"] != "etcd" || vals["S3_KEY"] != "snapshots" {
 		t.Errorf("S3 bucket/key = %q/%q", vals["S3_BUCKET"], vals["S3_KEY"])
 	}
 	if vals["S3_FORCE_PATH_STYLE"] != "true" {
@@ -154,47 +154,47 @@ func TestBuildBackupJob_S3(t *testing.T) {
 
 	// Resources must be set so the Pod isn't BestEffort / rejected by a LimitRange.
 	if ctr.Resources.Requests.Cpu().IsZero() || ctr.Resources.Requests.Memory().IsZero() {
-		t.Errorf("backup-agent has no resource requests: %+v", ctr.Resources.Requests)
+		t.Errorf("snapshot-agent has no resource requests: %+v", ctr.Resources.Requests)
 	}
 	if ctr.Resources.Limits.Memory().IsZero() {
-		t.Errorf("backup-agent has no memory limit: %+v", ctr.Resources.Limits)
+		t.Errorf("snapshot-agent has no memory limit: %+v", ctr.Resources.Limits)
 	}
 }
 
-func TestBuildBackupJob_PVC(t *testing.T) {
-	backup := &lll.EtcdBackup{
+func TestBuildSnapshotJob_PVC(t *testing.T) {
+	snapshot := &lll.EtcdSnapshot{
 		ObjectMeta: metav1.ObjectMeta{Name: "b1", Namespace: "ns"},
-		Spec: lll.EtcdBackupSpec{
+		Spec: lll.EtcdSnapshotSpec{
 			ClusterRef:  corev1.LocalObjectReference{Name: "c1"},
-			Destination: lll.BackupDestination{PVC: &lll.PVCBackupDestination{ClaimName: "snap-pvc", SubPath: "sub"}},
+			Destination: lll.SnapshotLocation{PVC: &lll.PVCSnapshotLocation{ClaimName: "snap-pvc", SubPath: "sub"}},
 		},
 	}
 	cluster := &lll.EtcdCluster{ObjectMeta: metav1.ObjectMeta{Name: "c1", Namespace: "ns"}}
-	job := buildBackupJob(backup, cluster, "operator:latest")
+	job := buildSnapshotJob(snapshot, cluster, "operator:latest")
 	pod := job.Spec.Template.Spec
 	ctr := pod.Containers[0]
 
 	vals, _ := envMap(ctr.Env)
-	if vals["BACKUP_DEST_KIND"] != "pvc" {
-		t.Errorf("BACKUP_DEST_KIND = %q, want pvc", vals["BACKUP_DEST_KIND"])
+	if vals["SNAPSHOT_DEST_KIND"] != "pvc" {
+		t.Errorf("SNAPSHOT_DEST_KIND = %q, want pvc", vals["SNAPSHOT_DEST_KIND"])
 	}
-	if vals["PVC_MOUNT_PATH"] != backupPVCMountPath {
-		t.Errorf("PVC_MOUNT_PATH = %q, want %q", vals["PVC_MOUNT_PATH"], backupPVCMountPath)
+	if vals["PVC_MOUNT_PATH"] != snapshotPVCMountPath {
+		t.Errorf("PVC_MOUNT_PATH = %q, want %q", vals["PVC_MOUNT_PATH"], snapshotPVCMountPath)
 	}
 	if vals["PVC_SUBPATH"] != "sub" {
 		t.Errorf("PVC_SUBPATH = %q, want sub", vals["PVC_SUBPATH"])
 	}
 
-	v, ok := volumeByName(pod.Volumes, "backup-data")
+	v, ok := volumeByName(pod.Volumes, "snapshot-data")
 	if !ok || v.PersistentVolumeClaim == nil || v.PersistentVolumeClaim.ClaimName != "snap-pvc" {
-		t.Errorf("backup-data volume not wired to claim snap-pvc: %+v", v)
+		t.Errorf("snapshot-data volume not wired to claim snap-pvc: %+v", v)
 	}
-	if m, ok := mountByName(ctr.VolumeMounts, "backup-data"); !ok || m.MountPath != backupPVCMountPath {
-		t.Errorf("backup-data mount = %+v", m)
+	if m, ok := mountByName(ctr.VolumeMounts, "snapshot-data"); !ok || m.MountPath != snapshotPVCMountPath {
+		t.Errorf("snapshot-data mount = %+v", m)
 	}
 }
 
-func TestBuildBackupJob_TLSAndAuth(t *testing.T) {
+func TestBuildSnapshotJob_TLSAndAuth(t *testing.T) {
 	cluster := &lll.EtcdCluster{
 		ObjectMeta: metav1.ObjectMeta{Name: "c1", Namespace: "ns"},
 		Spec: lll.EtcdClusterSpec{
@@ -211,7 +211,7 @@ func TestBuildBackupJob_TLSAndAuth(t *testing.T) {
 		},
 		Status: lll.EtcdClusterStatus{AuthEnabled: true},
 	}
-	job := buildBackupJob(s3Backup("b1", "c1"), cluster, "operator:latest")
+	job := buildSnapshotJob(s3Snapshot("b1", "c1"), cluster, "operator:latest")
 	pod := job.Spec.Template.Spec
 	ctr := pod.Containers[0]
 	vals, secretKeys := envMap(ctr.Env)
@@ -241,7 +241,7 @@ func TestBuildBackupJob_TLSAndAuth(t *testing.T) {
 
 // When auth is configured on the spec but status.authEnabled is still false,
 // the agent must NOT be given credentials (auth isn't live yet).
-func TestBuildBackupJob_AuthNotYetEnabled(t *testing.T) {
+func TestBuildSnapshotJob_AuthNotYetEnabled(t *testing.T) {
 	cluster := &lll.EtcdCluster{
 		ObjectMeta: metav1.ObjectMeta{Name: "c1", Namespace: "ns"},
 		Spec: lll.EtcdClusterSpec{
@@ -252,7 +252,7 @@ func TestBuildBackupJob_AuthNotYetEnabled(t *testing.T) {
 		},
 		Status: lll.EtcdClusterStatus{AuthEnabled: false},
 	}
-	job := buildBackupJob(s3Backup("b1", "c1"), cluster, "operator:latest")
+	job := buildSnapshotJob(s3Snapshot("b1", "c1"), cluster, "operator:latest")
 	_, secretKeys := envMap(job.Spec.Template.Spec.Containers[0].Env)
 	if _, ok := secretKeys["ETCD_PASSWORD"]; ok {
 		t.Error("credentials passed before status.authEnabled latched")

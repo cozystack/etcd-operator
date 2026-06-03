@@ -28,22 +28,22 @@ import (
 	smithy "github.com/aws/smithy-go"
 )
 
-// backupUIDMetaKey is the S3 user-metadata key stamping which EtcdBackup wrote
+// snapshotUIDMetaKey is the S3 user-metadata key stamping which EtcdSnapshot wrote
 // an object. S3 lowercases user-metadata keys, so keep it lowercase.
-const backupUIDMetaKey = "etcd-backup-uid"
+const snapshotUIDMetaKey = "etcd-snapshot-uid"
 
-// backupUIDSuffix names the sidecar file that records which EtcdBackup wrote a
+// snapshotUIDSuffix names the sidecar file that records which EtcdSnapshot wrote a
 // PVC snapshot. A filesystem has no equivalent of S3 user-metadata, so we stamp
 // ownership in a sibling "<name>.db.uid" file — giving the PVC path the same
 // self-retry idempotency the S3 path gets from object metadata.
-const backupUIDSuffix = ".uid"
+const snapshotUIDSuffix = ".uid"
 
 // ensureFileAbsent refuses to overwrite an existing PVC snapshot written by a
-// different backup, mirroring ensureObjectAbsent for S3: two backups sharing a
+// different snapshot, mirroring ensureObjectAbsent for S3: two snapshots sharing a
 // name and PVC destination would otherwise silently clobber each other. A file
-// carrying this backup's UID (via its .uid sidecar) is our own from a prior
+// carrying this snapshot's UID (via its .uid sidecar) is our own from a prior
 // attempt and may be overwritten idempotently. Returns nil when the snapshot is
-// absent or owned by this backup.
+// absent or owned by this snapshot.
 func ensureFileAbsent(finalPath, uid string) error {
 	if _, err := os.Stat(finalPath); err != nil {
 		if os.IsNotExist(err) {
@@ -52,11 +52,11 @@ func ensureFileAbsent(finalPath, uid string) error {
 		return fmt.Errorf("check for existing snapshot file %s: %w", finalPath, err)
 	}
 	if uid != "" {
-		if owner, err := os.ReadFile(finalPath + backupUIDSuffix); err == nil && string(owner) == uid {
+		if owner, err := os.ReadFile(finalPath + snapshotUIDSuffix); err == nil && string(owner) == uid {
 			return nil // our own file from a previous attempt — retry is idempotent
 		}
 	}
-	return fmt.Errorf("snapshot file %s already exists and was not written by this backup; refusing to overwrite (use a unique backup name or destination subPath)", finalPath)
+	return fmt.Errorf("snapshot file %s already exists and was not written by this snapshot; refusing to overwrite (use a unique snapshot name or destination subPath)", finalPath)
 }
 
 // headObjectAPI is the slice of the S3 client used to check object existence —
@@ -66,23 +66,23 @@ type headObjectAPI interface {
 }
 
 // ensureObjectAbsent refuses to overwrite an existing snapshot. The S3 object
-// key is derived from the EtcdBackup name, so two backups sharing a name (e.g.
+// key is derived from the EtcdSnapshot name, so two snapshots sharing a name (e.g.
 // same name across namespaces, or a reused name) would otherwise silently
 // clobber an earlier snapshot with no trace.
 //
 // The one object we MAY overwrite is our own: a Job retry (BackoffLimit) or a
 // crash after PutObject but before the marker is read would otherwise find the
-// snapshot it just wrote and fail the whole backup. We stamp each object with
-// the EtcdBackup UID; an existing object carrying our uid is treated as a
+// snapshot it just wrote and fail the whole snapshot. We stamp each object with
+// the EtcdSnapshot UID; an existing object carrying our uid is treated as a
 // no-conflict (the re-upload is idempotent). Returns nil when the object is
-// absent or owned by this backup.
+// absent or owned by this snapshot.
 func ensureObjectAbsent(ctx context.Context, api headObjectAPI, bucket, key, uid string) error {
 	out, err := api.HeadObject(ctx, &s3.HeadObjectInput{Bucket: aws.String(bucket), Key: aws.String(key)})
 	if err == nil {
-		if uid != "" && out.Metadata[backupUIDMetaKey] == uid {
+		if uid != "" && out.Metadata[snapshotUIDMetaKey] == uid {
 			return nil // our own object from a previous attempt — retry is idempotent
 		}
-		return fmt.Errorf("snapshot object s3://%s/%s already exists and was not written by this backup; refusing to overwrite (use a unique backup name or destination key)", bucket, key)
+		return fmt.Errorf("snapshot object s3://%s/%s already exists and was not written by this snapshot; refusing to overwrite (use a unique snapshot name or destination key)", bucket, key)
 	}
 	// A genuine "not found" is the success case. Different S3-compatible
 	// stores surface it differently: the typed NotFound, or a bare smithy
@@ -102,14 +102,14 @@ func ensureObjectAbsent(ctx context.Context, api headObjectAPI, bucket, key, uid
 	return fmt.Errorf("check for existing snapshot object: %w", err)
 }
 
-// RunBackup takes an etcd snapshot and stores it at the configured
-// destination, then prints the marker line the EtcdBackup controller scans:
+// RunSnapshot takes an etcd snapshot and stores it at the configured
+// destination, then prints the marker line the EtcdSnapshot controller scans:
 //
 //	snapshot uploaded: uri="..." size=N sha256=<hex>
 //
 // All configuration comes from the environment (see agent.go).
-func RunBackup(ctx context.Context) error {
-	name := os.Getenv(envBackupName)
+func RunSnapshot(ctx context.Context) error {
+	name := os.Getenv(envSnapshotName)
 	if name == "" {
 		name = "snapshot"
 	}
@@ -134,16 +134,16 @@ func RunBackup(ctx context.Context) error {
 	var sum string
 	switch dest.kind {
 	case "pvc":
-		// Refuse to clobber a snapshot a different backup wrote (symmetric to
+		// Refuse to clobber a snapshot a different snapshot wrote (symmetric to
 		// the S3 overwrite guard); our own file from a prior attempt is fine.
 		finalPath := dest.localPath(name)
-		uid := os.Getenv(envBackupUID)
+		uid := os.Getenv(envSnapshotUID)
 		if err := ensureFileAbsent(finalPath, uid); err != nil {
 			return err
 		}
 		// Write atomically into the destination: stage to a temp file in the
 		// same directory, then rename into place. A crashed or interrupted
-		// backup never leaves a truncated <name>.db that a later restore
+		// snapshot never leaves a truncated <name>.db that a later restore
 		// would try to load.
 		size, sum, err = writeSnapshotAtomic(finalPath, rc)
 		if err != nil {
@@ -154,23 +154,23 @@ func RunBackup(ctx context.Context) error {
 		// safely in place — a missing sidecar only costs a retry the idempotent
 		// fast-path, never correctness.
 		if uid != "" {
-			_ = os.WriteFile(finalPath+backupUIDSuffix, []byte(uid), 0o644)
+			_ = os.WriteFile(finalPath+snapshotUIDSuffix, []byte(uid), 0o644)
 		}
 	default: // s3
-		// Stream straight to S3 — no local staging. The backup Pod has no sized
+		// Stream straight to S3 — no local staging. The snapshot Pod has no sized
 		// volume, so staging a multi-GB snapshot to the container's ephemeral
 		// storage risks eviction mid-upload (the restore path stages to the data
 		// volume with a free-space pre-flight precisely to avoid this class). The
 		// manager uploader holds only the in-flight parts in memory; we tee the
 		// stream through sha256 + a byte counter to get size/checksum as it goes.
 		// The S3 object only appears on a complete PutObject, so no atomic dance.
-		size, sum, err = uploadS3Stream(ctx, dest, dest.objectKey(name), rc, os.Getenv(envBackupUID))
+		size, sum, err = uploadS3Stream(ctx, dest, dest.objectKey(name), rc, os.Getenv(envSnapshotUID))
 		if err != nil {
 			return fmt.Errorf("upload to s3: %w", err)
 		}
 	}
 
-	// Marker line consumed by controllers/etcdbackup_controller.go.
+	// Marker line consumed by controllers/etcdsnapshot_controller.go.
 	fmt.Printf("snapshot uploaded: uri=%q size=%d sha256=%s\n", dest.uri(name), size, sum)
 	return nil
 }
@@ -196,7 +196,7 @@ func writeSnapshot(path string, src io.Reader) (int64, string, error) {
 
 // writeSnapshotAtomic stages the stream to a temp file in finalPath's
 // directory and renames it into place only after a fully-successful write, so
-// a partial/interrupted backup never leaves a truncated file at finalPath. On
+// a partial/interrupted snapshot never leaves a truncated file at finalPath. On
 // any write error the temp file is removed and finalPath is left untouched.
 func writeSnapshotAtomic(finalPath string, src io.Reader) (int64, string, error) {
 	dir := filepath.Dir(finalPath)
@@ -235,7 +235,7 @@ func uploadS3Stream(ctx context.Context, dest destination, key string, body io.R
 	}
 	var metadata map[string]string
 	if uid != "" {
-		metadata = map[string]string{backupUIDMetaKey: uid} // stamp ownership so a retry recognizes its own object
+		metadata = map[string]string{snapshotUIDMetaKey: uid} // stamp ownership so a retry recognizes its own object
 	}
 	return uploadStreamHashed(ctx, manager.NewUploader(client), &s3.PutObjectInput{
 		Bucket:   aws.String(dest.s3Bucket),
