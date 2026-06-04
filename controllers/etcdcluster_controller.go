@@ -452,8 +452,19 @@ func (r *EtcdClusterReconciler) bootstrap(
 		// Pod label on the first reconcile of the seed Pod, so the PDB
 		// selects it from creation rather than only after MemberList runs
 		// a few reconciles later.
+		//
+		// Written as a merge patch, not an Update: the member controller
+		// reconciles the seed the moment it is created and its own
+		// Status().Update races with this write — an optimistic-locked
+		// Update here loses that race with a conflict, and a cache-backed
+		// re-Get cannot recover (the informer may not even have the
+		// object yet). This stamp happens only in the create branch —
+		// losing it would leave the seed permanently IsVoter=false, and
+		// both learner memberID discovery and promotion filter their dial
+		// endpoints to voters, wedging every later scale-up.
+		stampBase := seed.DeepCopy()
 		seed.Status.IsVoter = true
-		if err := r.Status().Update(ctx, seed); err != nil {
+		if err := r.Status().Patch(ctx, seed, client.MergeFrom(stampBase)); err != nil {
 			return ctrl.Result{}, err
 		}
 	} else if !metav1.IsControlledBy(seed, cluster) {

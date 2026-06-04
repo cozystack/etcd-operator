@@ -1,0 +1,48 @@
+name: E2E
+
+on:
+  # No PR branch filter: PRs in this repo target main as well as integration
+  # branches (e.g. v1), and the suite must gate all of them. A filter naming
+  # a branch PRs never target (this said `master`, which does not exist) means
+  # the workflow never runs at all.
+  #
+  # paths-ignore: a kind+cert-manager+Kamaji provisioning run costs ~30-45
+  # minutes; skip it for PRs that touch nothing the suite exercises
+  # (docs-only changes). Everything else — Go code, manifests, the harness,
+  # the workflows themselves — still gates.
+  pull_request:
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+  push:
+    tags: [ "v*" ]
+  workflow_dispatch:
+
+concurrency:
+  group: e2e-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  kamaji-datastore:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: e2e (kind + cert-manager + Kamaji)
+        # Provisions an ephemeral kind cluster, installs cert-manager and
+        # Kamaji at the versions pinned in hack/e2e.sh, builds the operator
+        # from this checkout and runs test/e2e — the Kamaji DataStore
+        # consumer scenario.
+        #
+        # On failure, hack/e2e.sh's EXIT trap dumps the cluster state
+        # (CRs, pods, operator and Kamaji logs) into this step's output
+        # BEFORE tearing the kind cluster down. Don't add a separate
+        # dump step here: by the time it would run, the trap has already
+        # deleted the cluster and every kubectl call would come up empty.
+        run: make e2e

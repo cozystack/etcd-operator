@@ -31,7 +31,10 @@ spec:
           capabilities:
             drop:
               - "ALL"
-        image: gcr.io/kubebuilder/kube-rbac-proxy:v0.13.1
+        # gcr.io/kubebuilder/kube-rbac-proxy is gone (the gcr.io/kubebuilder
+        # registry shut down in early 2025); quay.io/brancz is the upstream
+        # home of kube-rbac-proxy that kubebuilder pointed users to.
+        image: quay.io/brancz/kube-rbac-proxy:v0.18.2
         args:
         - "--secure-listen-address=0.0.0.0:8443"
         - "--upstream=http://127.0.0.1:8080/"
