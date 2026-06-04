@@ -1,0 +1,22 @@
+# Minimal tenant control plane: one apiserver replica, ClusterIP service,
+# no konnectivity (the test attaches no worker nodes). The version must stay
+# within the skew supported by the pinned Kamaji release (hack/e2e.sh).
+apiVersion: kamaji.clastix.io/v1alpha1
+kind: TenantControlPlane
+metadata:
+  name: tenant1
+  namespace: kamaji-e2e
+spec:
+  dataStore: kamaji-e2e
+  controlPlane:
+    deployment:
+      replicas: 1
+    service:
+      serviceType: ClusterIP
+  kubernetes:
+    version: v1.30.2
+    kubelet:
+      cgroupfs: systemd
+  networkProfile:
+    port: 6443
+  addons: {}

@@ -61,6 +61,14 @@ vet: ## Run go vet against code.
 test: manifests generate fmt vet envtest ## Run tests.
 	KUBEBUILDER_ASSETS="$(shell $(ENVTEST) use $(ENVTEST_K8S_VERSION) --bin-dir $(LOCALBIN) -p path)" go test ./... -coverprofile cover.out
 
+.PHONY: test-e2e
+test-e2e: ## Run the e2e suite against the current kubeconfig context (expects cert-manager, Kamaji and the operator installed; see hack/e2e.sh).
+	go test -tags e2e -count=1 ./test/e2e/ -v -timeout 30m
+
+.PHONY: e2e
+e2e: ## Provision a kind cluster with cert-manager and Kamaji, deploy the operator, run the e2e suite. KEEP_CLUSTER=1 keeps the cluster for debugging.
+	hack/e2e.sh
+
 ##@ Build
 
 .PHONY: build

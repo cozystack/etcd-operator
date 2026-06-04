@@ -1,0 +1,24 @@
+# Full-mTLS EtcdCluster in cert-manager mode. operatorClientIssuerRef turns
+# on etcd client-cert verification (--client-cert-auth) against the issuing
+# CA, which is the same CA the Kamaji DataStore signs tenant clients with.
+apiVersion: etcd-operator.cozystack.io/v1alpha2
+kind: EtcdCluster
+metadata:
+  name: etcd
+  namespace: kamaji-e2e
+spec:
+  replicas: 3
+  version: "3.6.11"
+  storage:
+    size: 1Gi
+  tls:
+    peer:
+      certManager:
+        issuerRef:
+          name: etcd-ca-issuer
+    client:
+      certManager:
+        serverIssuerRef:
+          name: etcd-ca-issuer
+        operatorClientIssuerRef:
+          name: etcd-ca-issuer

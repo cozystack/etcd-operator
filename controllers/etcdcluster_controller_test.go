@@ -34,6 +34,8 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	lll "github.com/cozystack/etcd-operator/api/v1alpha2"
 )
@@ -109,6 +111,67 @@ func TestBootstrap_CreatesSingleSeedMember(t *testing.T) {
 	}
 	if !seed.Spec.Bootstrap {
 		t.Fatalf("seed member must be marked Bootstrap=true")
+	}
+	// The seed is pre-stamped IsVoter=true at create time (it forms the
+	// cluster on its own — never a learner). Losing the stamp wedges every
+	// later scale-up: learner memberID discovery and promotion dial voters
+	// only.
+	if !seed.Status.IsVoter {
+		t.Fatalf("seed Status.IsVoter must be pre-stamped true at create; got false")
+	}
+}
+
+// TestBootstrap_SeedIsVoterStampSurvivesConcurrentStatusWriter pins the
+// merge-patch choice in the seed IsVoter pre-stamp
+// (etcdcluster_controller.go bootstrap). The member controller starts
+// reconciling the seed the moment Create returns, and its own
+// Status().Update bumps the resourceVersion concurrently with this stamp.
+// An optimistic-locked Status().Update here loses that race with a
+// Conflict, and — because the stamp lives only in the create branch — the
+// seed would stay IsVoter=false forever. The interceptor models the
+// concurrent writer by failing every optimistic-locked EtcdMember status
+// Update with a Conflict; the merge patch carries no resourceVersion and
+// must land regardless. This test fails against the previous
+// Status().Update implementation.
+func TestBootstrap_SeedIsVoterStampSurvivesConcurrentStatusWriter(t *testing.T) {
+	ctx := context.Background()
+	cluster := &lll.EtcdCluster{
+		ObjectMeta: metav1.ObjectMeta{Name: "test", Namespace: "ns"},
+		Spec: lll.EtcdClusterSpec{
+			Replicas: ptrInt32(3),
+			Version:  "3.5.17",
+			Storage:  lll.StorageSpec{Size: quickQty(t, "1Gi")},
+		},
+	}
+	s := testScheme(t)
+	c := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(cluster).
+		WithStatusSubresource(&lll.EtcdCluster{}, &lll.EtcdMember{}, &lll.EtcdSnapshot{}).
+		WithInterceptorFuncs(interceptor.Funcs{
+			SubResourceUpdate: func(ctx context.Context, cl client.Client, sub string, obj client.Object, opts ...client.SubResourceUpdateOption) error {
+				if _, isMember := obj.(*lll.EtcdMember); isMember && sub == "status" {
+					return apierrors.NewConflict(
+						schema.GroupResource{Group: lll.GroupVersion.Group, Resource: "etcdmembers"},
+						obj.GetName(), errors.New("simulated concurrent status writer"))
+				}
+				return cl.SubResource(sub).Update(ctx, obj, opts...)
+			},
+		}).
+		Build()
+	r := &EtcdClusterReconciler{Client: c, Scheme: s, EtcdClientFactory: factoryReturning(newFakeEtcd(0xdeadbeef))}
+
+	reconcileUntilStable(t, r, c, "test", "ns", 8)
+
+	members := &lll.EtcdMemberList{}
+	if err := c.List(ctx, members, client.InNamespace("ns")); err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(members.Items) != 1 {
+		t.Fatalf("expected one seed member; got %d", len(members.Items))
+	}
+	if !members.Items[0].Status.IsVoter {
+		t.Fatal("seed IsVoter stamp lost under a concurrent status writer; the stamp must be a merge patch, not an optimistic-locked Update")
 	}
 }
 

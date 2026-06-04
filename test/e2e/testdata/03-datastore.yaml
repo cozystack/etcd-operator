@@ -1,0 +1,35 @@
+# Kamaji DataStore backed by the operator-managed cluster. Field layout is
+# the same as Cozystack's packages/extra/etcd/templates/datastore.yaml: the
+# CA entry carries both halves of the CA keypair (Kamaji signs per-TCP etcd
+# client certs with it), the clientCertificate is Kamaji's own identity.
+apiVersion: kamaji.clastix.io/v1alpha1
+kind: DataStore
+metadata:
+  name: kamaji-e2e
+spec:
+  driver: etcd
+  endpoints:
+  - etcd-client.kamaji-e2e.svc:2379
+  tlsConfig:
+    certificateAuthority:
+      certificate:
+        secretReference:
+          name: etcd-ca-tls
+          namespace: kamaji-e2e
+          keyPath: tls.crt
+      privateKey:
+        secretReference:
+          name: etcd-ca-tls
+          namespace: kamaji-e2e
+          keyPath: tls.key
+    clientCertificate:
+      certificate:
+        secretReference:
+          name: kamaji-etcd-client-tls
+          namespace: kamaji-e2e
+          keyPath: tls.crt
+      privateKey:
+        secretReference:
+          name: kamaji-etcd-client-tls
+          namespace: kamaji-e2e
+          keyPath: tls.key
