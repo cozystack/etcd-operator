@@ -2342,6 +2342,114 @@ func TestBuildPod_AppliesEtcdOptions(t *testing.T) {
 	}
 }
 
+// TestBuildPod_AdoptionAnnotations covers the two in-place-migration knobs,
+// now carried as reserved EtcdMember annotations rather than spec fields: the
+// AnnHeadlessServiceName annotation must drive both the Pod's spec.subdomain
+// and every constructed URL (so an adopted legacy member's DNS identity —
+// "<member>.<legacy-headless>.<ns>.svc" — keeps matching what etcd has
+// persisted), and AnnDataDirSubPath must relocate --data-dir into the PVC
+// subdirectory where the legacy operator kept the data. Without these, a
+// replacement Pod of an adopted member comes up unreachable (wrong
+// subdomain ⇒ its persisted peer URL stops resolving) and empty (wrong
+// data dir ⇒ crashloops against the cluster with a fresh identity).
+func TestBuildPod_AdoptionAnnotations(t *testing.T) {
+	r := &EtcdMemberReconciler{}
+	pod := r.buildPod(&lll.EtcdMember{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "etcd-0", Namespace: "ns",
+			Annotations: map[string]string{
+				AnnHeadlessServiceName: "etcd-headless",
+				AnnDataDirSubPath:      "default.etcd",
+			},
+		},
+		Spec: lll.EtcdMemberSpec{
+			ClusterName: "etcd", Version: "3.5.17",
+			Storage: lll.StorageSpec{Size: quickQty(t, "1Gi")},
+		},
+	})
+	if pod.Spec.Subdomain != "etcd-headless" {
+		t.Errorf("subdomain = %q; want the annotation's headless service name", pod.Spec.Subdomain)
+	}
+	cmd := pod.Spec.Containers[0].Command
+	for _, want := range []string{
+		"--data-dir=/var/lib/etcd/default.etcd",
+		"--advertise-client-urls=http://etcd-0.etcd-headless.ns.svc:2379",
+		"--initial-advertise-peer-urls=http://etcd-0.etcd-headless.ns.svc:2380",
+	} {
+		if !cmdContains(cmd, want) {
+			t.Errorf("command missing %q; got %v", want, cmd)
+		}
+	}
+
+	// Defaults preserved: no annotations ⇒ subdomain = cluster name, data dir
+	// at the volume root.
+	pod = r.buildPod(&lll.EtcdMember{
+		ObjectMeta: metav1.ObjectMeta{Name: "m", Namespace: "ns"},
+		Spec: lll.EtcdMemberSpec{
+			ClusterName: "test", Version: "3.5.17",
+			Storage: lll.StorageSpec{Size: quickQty(t, "1Gi")},
+		},
+	})
+	if pod.Spec.Subdomain != "test" {
+		t.Errorf("default subdomain = %q; want cluster name", pod.Spec.Subdomain)
+	}
+	if !cmdContains(pod.Spec.Containers[0].Command, "--data-dir=/var/lib/etcd") {
+		t.Errorf("default --data-dir missing: %v", pod.Spec.Containers[0].Command)
+	}
+}
+
+// TestBuildPod_DataDirSubPathFailsClosed pins the in-code validation that
+// replaced the apiserver-enforced pattern the spec field used to carry. An
+// annotation has no schema, so a value that could escape the mount (a slash
+// or "..") — or is otherwise malformed — must be ignored and --data-dir must
+// fall back to the volume root, never substituting the unsafe value.
+func TestBuildPod_DataDirSubPathFailsClosed(t *testing.T) {
+	r := &EtcdMemberReconciler{}
+	for _, bad := range []string{
+		"../../etc",  // parent-dir escape
+		"a/b",        // nested path
+		"..",         // bare parent
+		"/abs",       // absolute
+		".hidden",    // leading dot (pattern reject)
+		"with space", // pattern reject
+		"a..b",       // contains ".."
+	} {
+		pod := r.buildPod(&lll.EtcdMember{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: "m", Namespace: "ns",
+				Annotations: map[string]string{AnnDataDirSubPath: bad},
+			},
+			Spec: lll.EtcdMemberSpec{
+				ClusterName: "test", Version: "3.5.17",
+				Storage: lll.StorageSpec{Size: quickQty(t, "1Gi")},
+			},
+		})
+		if !cmdContains(pod.Spec.Containers[0].Command, "--data-dir=/var/lib/etcd") {
+			t.Errorf("subpath %q: --data-dir not fail-closed to volume root; got %v", bad, pod.Spec.Containers[0].Command)
+		}
+		for _, c := range pod.Spec.Containers[0].Command {
+			if c != "--data-dir=/var/lib/etcd" && len(c) > len("--data-dir=") && c[:len("--data-dir=")] == "--data-dir=" {
+				t.Errorf("subpath %q: unsafe value reached --data-dir: %q", bad, c)
+			}
+		}
+	}
+
+	// A valid single-component subpath is still honoured.
+	pod := r.buildPod(&lll.EtcdMember{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "m", Namespace: "ns",
+			Annotations: map[string]string{AnnDataDirSubPath: "default.etcd"},
+		},
+		Spec: lll.EtcdMemberSpec{
+			ClusterName: "test", Version: "3.5.17",
+			Storage: lll.StorageSpec{Size: quickQty(t, "1Gi")},
+		},
+	})
+	if !cmdContains(pod.Spec.Containers[0].Command, "--data-dir=/var/lib/etcd/default.etcd") {
+		t.Errorf("valid subpath rejected: %v", pod.Spec.Containers[0].Command)
+	}
+}
+
 // TestDeriveMemberTLS covers the cluster→member projection. ClientMTLS
 // must be true iff OperatorClientSecretRef is set; secret refs are deep-
 // copied so a later edit to the parent's pointer can't mutate the

@@ -231,6 +231,17 @@ The set is deliberately **closed and typed**. The legacy aenix operator exposed 
 
 Like `spec.resources`, options are latched through `status.observed` and apply **to newly-created members only** (scale-up, replacement) — the operator does not roll existing Pods when they change. To apply a tuning change to an existing cluster, delete one Pod at a time and let the operator recreate it with the new flags. A transient mix of old- and new-flag members is harmless: these are per-member settings (backend quota, compaction cadence, raft snapshot interval), the same heterogeneity any manual rolling flag change passes through.
 
+## Member DNS identity (adoption annotations)
+
+The operator's headless Service (per-member DNS for peer discovery) is always named after the cluster, and every URL the operator constructs for a member — peer/client dial endpoints, `--initial-cluster`, the Pod's `spec.subdomain` — derives from that member's resolved Service name. There is **no cluster-level override**: a natively-created member always resolves under the cluster's own name.
+
+For [in-place migration from the legacy operator](migration.md#tool-driven-in-place-migration-etcd-migrate), the migration tool stamps two **reserved annotations** on the `EtcdMember`s it creates for adopted pods — never on members the operator itself creates:
+
+- `etcd-operator.cozystack.io/headless-service-name` — overrides the Service name that member's DNS keys off. Adopted StatefulSet pods carry an immutable subdomain of `<cluster>-headless`, so the annotation makes the operator's URL convention match the adopted pods' actual DNS exactly.
+- `etcd-operator.cozystack.io/data-dir-subpath` — records where the legacy layout kept etcd's data inside the PVC (`default.etcd/`), so replacement Pods of adopted members resume from the existing data dir. The value is validated in code (a single safe path component — no `/`, no `..`) and fails closed to the volume root.
+
+Because the operator never stamps these annotations, every rolled or replaced member comes up native, and the override **self-wipes** as the cluster rolls — once fully rolled, the cluster is indistinguishable from one created natively. `additionalMetadata` cannot set keys under the `etcd-operator.cozystack.io/` reserved prefix, so the annotations can be neither forged by a user nor inherited by operator-created members.
+
 ## TLS
 
 `spec.tls` configures transport-layer security for the cluster's two etcd surfaces: the client API (port 2379) and the peer API (port 2380). Each subtree is independently optional — you can opt one surface into TLS without the other. The whole `tls` subtree is immutable post-create (see the validation table above): toggling TLS on an existing cluster is a rolling change that v1 doesn't perform, so the policy is delete-and-recreate.

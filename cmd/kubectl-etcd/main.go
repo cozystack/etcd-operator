@@ -6,8 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net/http"
-	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -23,11 +21,10 @@ import (
 	"k8s.io/client-go/kubernetes"
 	_ "k8s.io/client-go/plugin/pkg/client/auth" // Import all auth providers
 	"k8s.io/client-go/tools/clientcmd"
-	"k8s.io/client-go/tools/portforward"
-	"k8s.io/client-go/transport/spdy"
 	"k8s.io/client-go/util/homedir"
 
 	"github.com/cozystack/etcd-operator/internal/etcdclient"
+	"github.com/cozystack/etcd-operator/internal/portforward"
 )
 
 func main() {
@@ -547,85 +544,23 @@ This operation is typically used for backup purposes.`,
 	return snapshotCmd
 }
 
-// forwardReadyTimeout bounds how long setupPortForwarding waits for the
-// port-forward to signal ready before giving up.
-const forwardReadyTimeout = 10 * time.Second
-
-// awaitForward blocks until the port-forward signals ready, fails, or times
-// out — whichever comes first. It exists so a forward that dies before
-// becoming ready (which leaves readyChan unclosed) surfaces as an error
-// instead of hanging the CLI. On timeout it closes stopChan to tear the
-// forwarder down.
-func awaitForward(readyChan <-chan struct{}, forwardErr <-chan error, stopChan chan struct{}, timeout time.Duration) error {
-	select {
-	case <-readyChan:
-		return nil
-	case err := <-forwardErr:
-		if err == nil {
-			err = fmt.Errorf("exited before becoming ready")
-		}
-		return fmt.Errorf("port forwarding failed: %w", err)
-	case <-time.After(timeout):
-		close(stopChan)
-		return fmt.Errorf("timed out after %s waiting for port forwarding to become ready", timeout)
-	}
-}
-
 func setupPortForwarding(config *Config, clientset *kubernetes.Clientset) (*tls.Config, uint16, error) {
 	pod, err := clientset.CoreV1().Pods(config.Namespace).Get(context.Background(), config.PodName, metav1.GetOptions{})
 	if err != nil {
 		return nil, 0, fmt.Errorf("failed to get pod: %w", err)
 	}
 
-	path := fmt.Sprintf("/api/v1/namespaces/%s/pods/%s/portforward", config.Namespace, config.PodName)
 	clientConfig, err := clientcmd.BuildConfigFromFlags("", config.Kubeconfig)
 	if err != nil {
 		return nil, 0, fmt.Errorf("error building kubeconfig: %w", err)
 	}
 
-	transport, upgrader, err := spdy.RoundTripperFor(clientConfig)
+	// The forward lives for the rest of the process (each invocation runs
+	// one command and exits), so the stop function is deliberately unused.
+	localPort, _, err := portforward.ForwardToPod(clientConfig, config.Namespace, config.PodName, 2379)
 	if err != nil {
-		return nil, 0, fmt.Errorf("failed to create round tripper: %w", err)
-	}
-
-	hostURL, err := url.Parse(clientConfig.Host)
-	if err != nil {
-		return nil, 0, fmt.Errorf("failed to parse host URL: %w", err)
-	}
-
-	hostURL.Path = path
-
-	stopChan, readyChan := make(chan struct{}, 1), make(chan struct{}, 1)
-	dialer := spdy.NewDialer(upgrader, &http.Client{Transport: transport}, "POST", hostURL)
-
-	silentOut := &silentWriter{}
-	portForwarder, err := portforward.New(dialer, []string{"0:2379"}, stopChan, readyChan, silentOut, os.Stderr)
-	if err != nil {
-		return nil, 0, fmt.Errorf("failed to create port forwarder: %w", err)
-	}
-
-	// ForwardPorts blocks until the forward is torn down; run it in the
-	// background and surface a startup failure via forwardErr. On a dial
-	// failure (RBAC on pods/portforward, API-server connectivity, protocol
-	// negotiation) ForwardPorts returns WITHOUT ever closing readyChan, so
-	// blocking on readyChan alone would hang the CLI forever — awaitForward
-	// selects on the error and a timeout too.
-	forwardErr := make(chan error, 1)
-	go func() {
-		forwardErr <- portForwarder.ForwardPorts()
-	}()
-
-	if err := awaitForward(readyChan, forwardErr, stopChan, forwardReadyTimeout); err != nil {
 		return nil, 0, err
 	}
-
-	// Obtaining the local port used for forwarding
-	forwardedPorts, err := portForwarder.GetPorts()
-	if err != nil {
-		return nil, 0, fmt.Errorf("failed to get forwarded ports: %w", err)
-	}
-
-	localPort := forwardedPorts[0].Local
 
 	tlsConfig, err := getTLSConfig(clientset, pod, config.Namespace)
 	if err != nil {
@@ -767,10 +702,4 @@ func findSecretNameForTLS(pod *corev1.Pod, container corev1.Container) (string, 
 	}
 
 	return "", false, fmt.Errorf("secret for the TLS certificate file not found")
-}
-
-type silentWriter struct{}
-
-func (sw *silentWriter) Write(p []byte) (int, error) {
-	return len(p), nil
 }

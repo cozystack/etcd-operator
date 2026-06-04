@@ -254,7 +254,10 @@ func (r *EtcdMemberReconciler) removeMemberFromEtcd(ctx context.Context, cluster
 		}
 		otherMembers++
 		if m.Status.PodName != "" {
-			endpoints = append(endpoints, clientURL(scheme, m.Name, member.Spec.ClusterName, member.Namespace))
+			// Build each peer's endpoint with that peer's OWN Service name:
+			// an adopted peer resolves under the legacy headless Service even
+			// when `member` (the one being removed) is native, or vice versa.
+			endpoints = append(endpoints, clientURL(scheme, m.Name, memberServiceName(&m), member.Namespace))
 		}
 	}
 	if len(endpoints) == 0 {
@@ -325,7 +328,7 @@ func (r *EtcdMemberReconciler) resolveMemberID(
 		}
 		// Match by peer URL too — etcd may have a member added via MemberAdd
 		// whose Name is empty until it joins.
-		expected := peerURL(memberPeerScheme(member), member.Name, member.Spec.ClusterName, member.Namespace)
+		expected := peerURL(memberPeerScheme(member), member.Name, memberServiceName(member), member.Namespace)
 		for _, p := range m.PeerURLs {
 			if p == expected {
 				return m.ID, nil
@@ -619,8 +622,8 @@ func (r *EtcdMemberReconciler) buildPod(member *lll.EtcdMember) *corev1.Pod {
 	peerTLS := peerScheme == "https"
 	clientMTLS := clientTLS && member.Spec.TLS != nil && member.Spec.TLS.ClientMTLS
 
-	pAddr := peerURL(peerScheme, member.Name, member.Spec.ClusterName, member.Namespace)
-	cAddr := clientURL(clientScheme, member.Name, member.Spec.ClusterName, member.Namespace)
+	pAddr := peerURL(peerScheme, member.Name, memberServiceName(member), member.Namespace)
+	cAddr := clientURL(clientScheme, member.Name, memberServiceName(member), member.Namespace)
 
 	// Data volume source: tmpfs emptyDir for memory-backed members,
 	// PVC otherwise. SizeLimit on the emptyDir caps tmpfs allocation;
@@ -656,10 +659,16 @@ func (r *EtcdMemberReconciler) buildPod(member *lll.EtcdMember) *corev1.Pod {
 	}
 	labels, annotations := applyAdditionalMetadata(labels, nil, member.Spec.AdditionalMetadata)
 
+	// Data dir defaults to the volume root; adopted legacy members carry an
+	// AnnDataDirSubPath annotation (e.g. "default.etcd") so a replacement
+	// Pod resumes from the existing data dir instead of bootstrapping an
+	// empty one. memberDataDir validates the annotation and fails closed.
+	dataDir := memberDataDir(member)
+
 	cmd := []string{
 		"etcd",
 		"--name=" + member.Name,
-		"--data-dir=/var/lib/etcd",
+		"--data-dir=" + dataDir,
 		"--listen-peer-urls=" + peerScheme + "://0.0.0.0:2380",
 		"--listen-client-urls=" + clientScheme + "://0.0.0.0:2379",
 		"--advertise-client-urls=" + cAddr,
@@ -742,7 +751,7 @@ func (r *EtcdMemberReconciler) buildPod(member *lll.EtcdMember) *corev1.Pod {
 		},
 		Spec: corev1.PodSpec{
 			Hostname:                  member.Name,
-			Subdomain:                 member.Spec.ClusterName,
+			Subdomain:                 memberServiceName(member),
 			Affinity:                  member.Spec.Affinity,
 			TopologySpreadConstraints: member.Spec.TopologySpreadConstraints,
 			InitContainers:            initContainers,
@@ -1016,7 +1025,10 @@ func (r *EtcdMemberReconciler) discoverMemberID(ctx context.Context, member *lll
 			// context budget.
 			continue
 		}
-		endpoints = append(endpoints, clientURL(scheme, m.Name, member.Spec.ClusterName, member.Namespace))
+		// Each peer's endpoint uses that peer's own Service name (adopted
+		// peers resolve under the legacy headless Service); self below uses
+		// this member's.
+		endpoints = append(endpoints, clientURL(scheme, m.Name, memberServiceName(&m), member.Namespace))
 	}
 	// Self is a *fallback*, not an always-on endpoint: dial our own etcd
 	// only when no voter peer is available (single-node bootstrap, or no
@@ -1026,7 +1038,7 @@ func (r *EtcdMemberReconciler) discoverMemberID(ctx context.Context, member *lll
 	// with "rpc not supported for learner" — wedging discovery even though
 	// a voter was in the list. Mirrors memberEndpoints' voter-or-fallback.
 	if len(endpoints) == 0 {
-		endpoints = append(endpoints, clientURL(scheme, member.Name, member.Spec.ClusterName, member.Namespace))
+		endpoints = append(endpoints, clientURL(scheme, member.Name, memberServiceName(member), member.Namespace))
 	}
 
 	// Build the operator-side dial config. Only TLS clusters need the parent
@@ -1065,7 +1077,7 @@ func (r *EtcdMemberReconciler) discoverMemberID(ctx context.Context, member *lll
 	if err != nil {
 		return 0, err
 	}
-	expectedPeer := peerURL(memberPeerScheme(member), member.Name, member.Spec.ClusterName, member.Namespace)
+	expectedPeer := peerURL(memberPeerScheme(member), member.Name, memberServiceName(member), member.Namespace)
 	for _, m := range resp.Members {
 		if m.Name == member.Name {
 			return m.ID, nil

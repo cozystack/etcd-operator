@@ -4,17 +4,242 @@ Notes for migrating onto this operator (`etcd-operator.cozystack.io/v1alpha2`)
 from the legacy aenix operator (`etcd.aenix.io/v1alpha1`), and for behavioural
 changes that need an explicit migration step.
 
-This document grows as more legacy features are ported. Right now it covers the
-**`EtcdBackup` → `EtcdSnapshot` rename** (a pre-GA naming change), the
-**`spec.options` map → typed fields** change, and the one change that has a
-hard migration requirement: **etcd authentication credentials**.
+This document covers the **tool-driven migration from the legacy operator**
+(`etcd-migrate`), the **`EtcdBackup` → `EtcdSnapshot` rename** (a pre-GA naming
+change), the **`spec.options` map → typed fields** change, and the one change
+that has a hard migration requirement: **etcd authentication credentials**.
 
-> **TODO — full legacy-operator migration.** The end-to-end story for moving an
-> existing `etcd.aenix.io/v1alpha1` cluster onto `etcd-operator.cozystack.io/v1alpha2`
-> (CRD shape, data-dir adoption vs snapshot/restore, member-ID continuity) is not
-> written yet — the two operators manage members differently (the new one uses
-> per-member `EtcdMember` CRs + Pods, not a single StatefulSet), so this is not a
-> drop-in CRD swap. Fill this in as the migration path is validated.
+## Tool-driven in-place migration (`etcd-migrate`)
+
+`etcd-migrate` adopts running legacy clusters **in place**: the etcd pods and
+their PVCs stay exactly as they are — only ownership, labels, member
+annotations and CRs change, and the new operator takes over the live data
+plane. No data is moved, no pod is restarted, and quorum is never touched.
+Clients that connect by DNS name keep working; one Service changes shape
+(ClusterIP → headless) and has consumer prerequisites — see
+[Endpoint compatibility](#endpoint-compatibility) before you `--apply`.
+
+Build it with `make etcd-migrate` (lands in `bin/etcd-migrate`).
+
+### How adoption works
+
+The adopted pods are made to look native through **durable identity stamped
+as two reserved annotations on each adopted `EtcdMember`** — there is no
+permanent, user-facing API knob for this, and the annotations **self-wipe** as
+the cluster rolls:
+
+- **`etcd-operator.cozystack.io/headless-service-name`**. Legacy StatefulSet
+  pods carry an immutable `spec.subdomain` of `<cluster>-headless`, and the
+  peer URLs persisted *inside etcd* use that DNS domain. The annotation makes
+  every URL the operator constructs for that member (dial endpoints,
+  `--initial-cluster`, replacement-pod DNS) match the adopted pod's actual
+  identity — no special cases.
+- **`etcd-operator.cozystack.io/data-dir-subpath`**. The legacy operator kept
+  etcd's data under the `default.etcd/` subdirectory of the PVC; the annotation
+  relocates `--data-dir` so a future replacement Pod resumes from the existing
+  data dir instead of crashlooping with a fresh identity. The controller
+  validates the value in code (single safe path component — no `/`, no `..`)
+  and fails closed to the volume root on anything malformed.
+
+The operator **never stamps these annotations on members it creates**. So
+every member the operator rolls or replaces comes up *native* (cluster-name
+DNS, data dir at the volume root); once the cluster has fully rolled, no member
+carries either annotation and the cluster is indistinguishable from one created
+natively — no permanent knob, nothing to deprecate later. `additionalMetadata`
+cannot set keys under the `etcd-operator.cozystack.io/` reserved prefix, so a
+user can neither forge these annotations nor break the self-wipe.
+
+Per cluster, the tool:
+
+1. **Inspects** the live etcd (read-only, over a port-forward with the legacy
+   operator's client certificate): member list, cluster ID, auth status.
+   Runs in dry-run too, so the printed plan shows the real IDs.
+2. **Disables legacy auth** if enabled (the legacy NoPassword root can never
+   match a credentials Secret; the new operator re-enables auth itself). This
+   runs **before** the backup on purpose: the snapshot Job dials etcd
+   anonymously, and etcd rejects the Maintenance Snapshot RPC while auth is on.
+3. **Backs up** the cluster (see below) — before anything is mutated.
+4. **Creates the new CRs with prefilled status**: the `EtcdCluster` gets
+   `status.clusterID`/`clusterToken`/`observed` (so the operator's bootstrap
+   branch never fires against a cluster that already exists), and one
+   `EtcdMember` per pod — named exactly like the pod, carrying the reserved
+   adoption annotations above — gets its `status.memberID` and `isVoter=true`.
+5. **Owner-references the legacy headless Service to the adopted members,
+   then dismantles the legacy control plane** — in that order. The legacy
+   headless Service (`<cluster>-headless`) has its `ownerReferences` replaced
+   with one non-controller entry per adopted `EtcdMember`, so Kubernetes GC
+   removes it exactly when the last adopted member rolls away (new members
+   aren't owners, so they never keep it alive). Only then are the legacy
+   `EtcdCluster` and its StatefulSet deleted with **Orphan** propagation (pods
+   survive) and the cluster-state ConfigMap + legacy PDB removed. Doing the
+   owner-ref rewrite first avoids a window where the Service is sole-owned by
+   a now-deleted object and gets reaped prematurely.
+6. **Re-owns the data plane**: each pod and PVC gets the operator's labels
+   and a controller owner reference to its `EtcdMember` (only after the
+   StatefulSet is gone, so its controller can't re-adopt the pods).
+7. **Cuts over the client Service**: the legacy client Service is named after
+   the cluster (`<cluster>`), which collides with the operator's *native*
+   headless Service of the same name. The tool deletes the legacy client
+   Service and immediately recreates it as the native headless Service (owned
+   by the new `EtcdCluster`), so the DNS name keeps resolving with the minimum
+   possible gap rather than waiting for the operator's first reconcile. See
+   [Endpoint compatibility](#endpoint-compatibility) for what this means for
+   consumers.
+
+Every step is idempotent — re-running the tool completes a partially-applied
+adoption.
+
+### Prerequisites
+
+1. **Scale both operators to zero.** The legacy etcd Pods keep running — only
+   the controllers must be quiet:
+
+   ```sh
+   kubectl -n etcd-operator-system scale deploy etcd-operator-controller-manager --replicas=0
+   ```
+
+   The tool verifies this for both Deployments before doing anything
+   (`--legacy-controller` / `--new-controller` override the coordinates,
+   `--skip-controller-check` bypasses the gate).
+2. The new CRDs (`etcd-operator.cozystack.io/v1alpha2`) must be installed
+   (`make install`).
+3. A kubeconfig that can list/delete the legacy CRs cluster-wide, create the
+   new ones, and patch pods/PVCs/Services.
+4. **All etcd pods Ready.** Adoption refuses clusters with missing members,
+   learners, or unreachable etcd.
+
+### Workflow: dry-run first
+
+```sh
+# Dry-run (the default): inspects each live cluster and prints the planned
+# v1alpha2 manifests, the adoption steps, and warnings for legacy settings
+# that do not carry over.
+bin/etcd-migrate
+
+# Execute the adoption (backup destination required — see below).
+bin/etcd-migrate --apply \
+  --backup-s3-endpoint=https://s3.example.com \
+  --backup-s3-bucket=etcd-migration \
+  --backup-s3-credentials-secret=s3-creds   # needed in EVERY migrated namespace
+```
+
+What gets migrated:
+
+| Legacy (`etcd.aenix.io/v1alpha1`) | New (`etcd-operator.cozystack.io/v1alpha2`) |
+|---|---|
+| `EtcdCluster` | `EtcdCluster` + `EtcdMember`s **adopting the running pods in place** |
+| `EtcdBackup` | `EtcdSnapshot` (created; legacy CR deleted) |
+| `EtcdBackupSchedule` | a `CronJob` manifest creating `EtcdSnapshot`s — **printed only**, never applied; the legacy CR is left for you to delete |
+
+Every legacy knob with no v1alpha2 equivalent (`spec.options` keys beyond the
+[four typed ones](#specoptions-free-form-map--typed-fields), service/PDB
+templates, podTemplate overrides beyond affinity/topology-spread/resources/
+metadata) is reported as a warning — review them before `--apply`. Hard
+blockers (`emptyDir` storage — nothing to adopt, an unparsable etcd image tag
+without `--version`, `enableAuth` without server TLS, a non-integer
+`quota-backend-bytes`/`snapshot-count`, a failed inspection) skip that
+cluster and exit non-zero.
+
+TLS caveat: the legacy API kept CAs in separate Secrets
+(`serverTrustedCASecret`, `peerTrustedCASecret`); the new operator reads
+`ca.crt` from the server/peer Secret itself. The tool warns per cluster —
+merge the CA into the referenced Secret **before** starting the new operator
+(with cert-manager-issued secrets, `ca.crt` is typically already in place).
+
+### The safety backup
+
+Adoption rewires ownership of live storage, so the tool snapshots every
+cluster to the `--backup-s3-*`/`--backup-pvc-claim` destination **before any
+ownership/data-plane mutation** — the only step that precedes it is the
+auth-disable above, which the snapshot Job's anonymous dial depends on (a
+one-off Job running the operator image's snapshot agent —
+`--agent-image` overrides; by default the image is read from the new
+controller Deployment's spec, which works at replicas=0). Nothing is restored
+from the artifact — the data never moves — it exists purely for disaster
+recovery. A failed backup excludes that cluster from the apply. Skipping the
+backup requires an explicit `--skip-backup`.
+
+### Auth during migration
+
+The legacy operator provisioned the etcd `root` user with **NoPassword**
+(certificate-only identity). The new operator requires BYO root credentials
+(see [Authentication](#authentication-root-credentials-are-byo-and-required)
+below). The tool bridges this: it generates a `kubernetes.io/basic-auth`
+Secret (`<cluster>-root-credentials`, random password) per auth-enabled
+cluster — or references the one you name via `--auth-secret` — runs
+`auth disable` on the live etcd (authenticating with the legacy operator's
+client certificate), and lets the new operator re-enable auth with the
+Secret's password once it takes over. Mind the window: auth is off from that
+moment until the new operator latches `status.authEnabled`. Update consumers
+(e.g. a Kamaji `DataStore` `basicAuth`) to point at the Secret.
+
+### Endpoint compatibility
+
+The etcd cluster ID is preserved (it's an adoption, not a restore) and the pods
+keep their IPs, but the **client Service changes shape** because of a naming
+collision you must plan for.
+
+The legacy operator names its **client** Service `<cluster>` and its headless
+Service `<cluster>-headless`. The native operator names its **headless** Service
+`<cluster>` and its client Service `<cluster>-client`. So the native headless
+Service collides with the legacy client Service on the name `<cluster>`. Since
+a Service's `clusterIP` is immutable, the collision cannot be reconciled in
+place — the tool deletes the legacy client Service and recreates `<cluster>` as
+a **headless** Service (step 7 above).
+
+What this means for consumers connecting to `<cluster>.<ns>.svc:2379`:
+
+- **The DNS name keeps resolving** and the server-cert SAN still covers it, so
+  clients that connect **by DNS name** (a normal etcd client with retries — a
+  Kamaji `DataStore`, for example) keep working across the cutover. The
+  recreate happens back-to-back, so the no-resolution window is minimal.
+- **The ClusterIP VIP disappears.** `<cluster>` is now headless (it returns
+  pod A-records directly instead of a single virtual IP), and it publishes
+  not-ready addresses. Any consumer that **depends on the ClusterIP/VIP
+  semantics** — a cached service IP, a NetworkPolicy keyed on the VIP, a
+  customized legacy client Service (`LoadBalancer`/`NodePort`/external-dns
+  annotations) — will break, and the customizations are lost.
+
+> **Prerequisite — repoint VIP-dependent consumers before cutover.** If any
+> consumer relies on ClusterIP/VIP behaviour rather than plain DNS, point it at
+> the operator's native **`<cluster>-client`** Service (a regular ClusterIP
+> Service the operator creates) before you run `--apply`. DNS-name consumers
+> need no change.
+
+The legacy headless Service (`<cluster>-headless`) is **not** managed by the
+operator; it is owner-referenced to the adopted members and is garbage-collected
+automatically once the last adopted member is replaced (see step 5). The adopted
+pods remain reachable under it for their whole lifetime (their immutable
+`spec.subdomain` points at it); rolled/replacement members come up under the
+native `<cluster>` headless Service instead.
+
+> **Prerequisite — externally-issued certs must carry both DNS domains during
+> the mixed window.** Server/peer certs here are external (e.g. Cozystack
+> cert-manager); the operator does not synthesize them. The operator's SAN
+> contract is a wildcard pinned to the Service name (`*.<svc>.<ns>.svc`).
+> During rollover, adopted members resolve under `<cluster>-headless` and
+> rolled members under `<cluster>`, so the cert the pods mount must carry
+> **both** `*.<cluster>-headless.<ns>.svc` and `*.<cluster>.<ns>.svc` (plus the
+> `.<cluster-domain>` FQDN forms) for the duration. Drop the legacy SAN once
+> rollover completes. Coordinate this with whoever issues the certs before
+> starting the new operator.
+
+### Final cleanup
+
+After `--apply` succeeds, **scale the new operator up** — it takes over the
+adopted clusters without touching the pods:
+
+```sh
+kubectl -n etcd-operator-system scale deploy etcd-operator-controller-manager --replicas=1
+```
+
+The tool deletes the migrated legacy **CRs** but never the **CRDs**. Once no
+`etcd.aenix.io` CRs remain (remember `EtcdBackupSchedule`s are left in
+place), remove them:
+
+```sh
+kubectl delete crd etcdclusters.etcd.aenix.io etcdbackups.etcd.aenix.io etcdbackupschedules.etcd.aenix.io
+```
 
 ## Snapshot CRD renamed: `EtcdBackup` → `EtcdSnapshot`
 
@@ -65,9 +290,10 @@ The key mapping, using Cozystack's actual legacy values:
 ```
 
 Note the value types: `quotaBackendBytes` and `snapshotCount` are integers, not
-quoted strings. Any other key the legacy map accepted has no typed equivalent —
-if you relied on one, file an issue; the flag gets a typed field, not a
-pass-through.
+quoted strings. `etcd-migrate` performs this mapping automatically. Any other
+key the legacy map accepted has no typed equivalent — the tool drops it with a
+warning; if you relied on one, file an issue: the flag gets a typed field, not
+a pass-through.
 
 ## Authentication: root credentials are BYO and required
 

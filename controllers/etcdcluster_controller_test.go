@@ -2811,6 +2811,61 @@ func TestBootstrap_PropagatesOptionsToSeed(t *testing.T) {
 	}
 }
 
+// TestBootstrap_NativeServicesAndNoReservedAnnotations pins the post-review
+// contract: the operator's native services are "<cluster>" (headless) and
+// "<cluster>-client", and the operator NEVER stamps the reserved
+// AnnHeadlessServiceName annotation on members it creates — so a natively
+// created member resolves under the cluster's own name and its
+// --initial-cluster is built in the cluster's DNS domain. This is what makes
+// an adopted member's headless-service-name override self-wipe as the cluster
+// rolls: replacements come up native.
+func TestBootstrap_NativeServicesAndNoReservedAnnotations(t *testing.T) {
+	ctx := context.Background()
+	cluster := &lll.EtcdCluster{
+		ObjectMeta: metav1.ObjectMeta{Name: "etcd", Namespace: "ns"},
+		Spec: lll.EtcdClusterSpec{
+			Replicas: ptrInt32(1),
+			Version:  "3.5.17",
+			Storage:  lll.StorageSpec{Size: quickQty(t, "1Gi")},
+		},
+	}
+	c, _ := newTestClient(t, cluster)
+	r := &EtcdClusterReconciler{Client: c, Scheme: testScheme(t), EtcdClientFactory: factoryReturning(newFakeEtcd(0xdeadbeef))}
+
+	reconcileUntilStable(t, r, c, "etcd", "ns", 8)
+
+	// Native headless Service "<cluster>" and client Service "<cluster>-client".
+	headless := &corev1.Service{}
+	if err := c.Get(ctx, types.NamespacedName{Namespace: "ns", Name: "etcd"}, headless); err != nil {
+		t.Fatalf("native headless Service <cluster>: %v", err)
+	}
+	if headless.Spec.ClusterIP != corev1.ClusterIPNone {
+		t.Errorf("headless Service must be headless; ClusterIP=%q", headless.Spec.ClusterIP)
+	}
+	if err := c.Get(ctx, types.NamespacedName{Namespace: "ns", Name: "etcd-client"}, &corev1.Service{}); err != nil {
+		t.Errorf("client Service must be <cluster>-client: %v", err)
+	}
+
+	members := &lll.EtcdMemberList{}
+	if err := c.List(ctx, members, client.InNamespace("ns")); err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(members.Items) != 1 {
+		t.Fatalf("expected one seed member; got %d", len(members.Items))
+	}
+	seed := members.Items[0]
+	if _, ok := seed.Annotations[AnnHeadlessServiceName]; ok {
+		t.Errorf("operator stamped reserved annotation %s on a member it created; it must never do so", AnnHeadlessServiceName)
+	}
+	if _, ok := seed.Annotations[AnnDataDirSubPath]; ok {
+		t.Errorf("operator stamped reserved annotation %s on a member it created; it must never do so", AnnDataDirSubPath)
+	}
+	wantInitial := seed.Name + "=http://" + seed.Name + ".etcd.ns.svc:2380"
+	if seed.Spec.InitialCluster != wantInitial {
+		t.Errorf("seed InitialCluster = %q; want %q", seed.Spec.InitialCluster, wantInitial)
+	}
+}
+
 // TestBootstrap_PropagatesResourcesToSeed verifies the wiring of
 // spec.resources onto the seed EtcdMember at cluster creation. The
 // member controller reads its own Spec.Resources at buildPod time, so
