@@ -453,14 +453,17 @@ type EtcdClusterSpec struct {
 
 	// AdditionalMetadata holds extra labels and annotations the operator
 	// merges onto every object it creates for this cluster — member Pods,
-	// the client and headless Services, the PodDisruptionBudget, and the
-	// EtcdMember CRs. Operator-owned keys (the app.kubernetes.io/* set and
-	// the cluster/role labels) always win on collision, so this cannot be
-	// used to shadow the operator's own selectors.
+	// the per-member data PVCs, the client and headless Services, the
+	// PodDisruptionBudget, and the EtcdMember CRs. Operator-owned keys
+	// (the app.kubernetes.io/* set and the cluster/role labels, and any
+	// operator-set annotation) always win on collision, so this cannot be
+	// used to shadow the operator's own metadata.
 	//
 	// Like spec.resources, changes take effect on newly-created objects
 	// (scale-up, replacement); the operator does not re-stamp existing
-	// Pods in place.
+	// Pods in place. The value is latched through status.observed with the
+	// rest of the target spec, so a mid-flight edit only applies once the
+	// current target is reached.
 	// +optional
 	AdditionalMetadata *AdditionalMetadata `json:"additionalMetadata,omitempty"`
 
@@ -535,6 +538,13 @@ type ObservedClusterSpec struct {
 	// for member Pods. Latched with the rest of the target spec.
 	// +optional
 	TopologySpreadConstraints []corev1.TopologySpreadConstraint `json:"topologySpreadConstraints,omitempty"`
+
+	// AdditionalMetadata is the locked target extra labels/annotations
+	// stamped onto objects created for this cluster. Latched with the rest
+	// of the target spec so a mid-flight metadata edit only applies to
+	// objects created once the current target is reached.
+	// +optional
+	AdditionalMetadata *AdditionalMetadata `json:"additionalMetadata,omitempty"`
 }
 
 // EtcdClusterStatus defines the observed state of an etcd cluster.

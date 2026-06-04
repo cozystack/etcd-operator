@@ -120,7 +120,7 @@ spec:
     medium: Memory
 ```
 
-This trades durability for speed: a Pod that loses its tmpfs (eviction, node failure) loses its data and the member is automatically replaced via `MemberRemove` + scale-up. **Don't use it as a general-purpose etcd backend** — see [docs/concepts.md](concepts.md#storage) and [docs/operations.md](operations.md#memory-backed-clusters) for the full trade-off. The remaining production hardening gaps (anti-affinity, container memory limits) are tracked in [#16](https://github.com/lllamnyp/etcd-operator/issues/16). The apiserver rejects `replicas: 0` on memory clusters via the [CEL validation rules](concepts.md#apiserver-enforced-validation), and every cluster gets an auto-emitted [PodDisruptionBudget](concepts.md#poddisruptionbudget).
+This trades durability for speed: a Pod that loses its tmpfs (eviction, node failure) loses its data and the member is automatically replaced via `MemberRemove` + scale-up. **Don't use it as a general-purpose etcd backend** — see [docs/concepts.md](concepts.md#storage) and [docs/operations.md](operations.md#memory-backed-clusters) for the full trade-off. For production, set `spec.affinity` (pod anti-affinity) and `spec.resources.limits.memory` explicitly — neither is defaulted (tracked in [#16](https://github.com/lllamnyp/etcd-operator/issues/16)); see the [production checklist](operations.md#what-you-should-configure-before-going-to-production). The apiserver rejects `replicas: 0` on memory clusters via the [CEL validation rules](concepts.md#apiserver-enforced-validation), and every cluster gets an auto-emitted [PodDisruptionBudget](concepts.md#poddisruptionbudget).
 
 ### TLS-enabled variant
 

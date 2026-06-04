@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"crypto/tls"
-	"crypto/x509"
 	"errors"
 	"fmt"
 	"io"
@@ -26,6 +25,8 @@ import (
 	"k8s.io/client-go/tools/portforward"
 	"k8s.io/client-go/transport/spdy"
 	"k8s.io/client-go/util/homedir"
+
+	"github.com/cozystack/etcd-operator/internal/etcdclient"
 )
 
 func main() {
@@ -267,29 +268,22 @@ func setupEtcdClient(config *Config) (*clientv3.Client, error) {
 		return nil, fmt.Errorf("failed to setup port forwarding: %s", err)
 	}
 
-	etcdConfig := clientv3.Config{
-		Endpoints:   []string{fmt.Sprintf("localhost:%d", localPort)},
-		DialTimeout: 5 * time.Second,
-	}
-	if tlsConfig != nil {
-		etcdConfig.TLS = tlsConfig
-	}
-
 	// Single-user (root) auth: when --credentials-secret is given, read the
 	// username/password from a kubernetes.io/basic-auth Secret (the same shape
 	// the operator consumes via spec.auth.rootCredentialsSecretRef) and dial
 	// authenticated. etcd refuses password auth over a plaintext wire, so this
 	// is only meaningful alongside a TLS-enabled cluster.
+	var user, pass string
 	if config.CredentialsSecret != "" {
-		user, pass, err := loadCredentials(clientset, config.Namespace, config.CredentialsSecret)
+		user, pass, err = loadCredentials(clientset, config.Namespace, config.CredentialsSecret)
 		if err != nil {
 			return nil, fmt.Errorf("failed to load credentials: %s", err)
 		}
-		etcdConfig.Username = user
-		etcdConfig.Password = pass
 	}
 
-	etcdClient, err := clientv3.New(etcdConfig)
+	// Client construction is shared with the operator (internal/etcdclient);
+	// only the port-forward transport above is plugin-specific.
+	etcdClient, err := etcdclient.New([]string{fmt.Sprintf("localhost:%d", localPort)}, tlsConfig, user, pass)
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to etcd server: %s", err)
 	}
@@ -312,17 +306,11 @@ func loadCredentials(clientset kubernetes.Interface, defaultNamespace, secretRef
 		return "", "", err
 	}
 
-	password, ok := secret.Data[corev1.BasicAuthPasswordKey]
-	if !ok || len(password) == 0 {
-		return "", "", fmt.Errorf("secret %s/%s is missing a non-empty %q key", namespace, name, corev1.BasicAuthPasswordKey)
+	user, pass, err := etcdclient.BasicAuthCredentials(secret.Data)
+	if err != nil {
+		return "", "", fmt.Errorf("secret %s/%s: %w", namespace, name, err)
 	}
-
-	username := string(secret.Data[corev1.BasicAuthUsernameKey])
-	if username == "" {
-		username = "root"
-	}
-
-	return username, string(password), nil
+	return user, pass, nil
 }
 
 func createForfeitLeadershipCmd(config *Config) *cobra.Command {
@@ -696,16 +684,26 @@ func getTLSConfig(clientset kubernetes.Interface, pod *corev1.Pod, namespace str
 				return nil, err
 			}
 
-			caCertPool, clientCert, err := extractTLSFiles(clientset, namespace, secretName)
+			secret, err := clientset.CoreV1().Secrets(namespace).Get(context.Background(), secretName, metav1.GetOptions{})
 			if err != nil {
 				return nil, err
 			}
-
-			return &tls.Config{
-				Certificates: []tls.Certificate{*clientCert},
-				RootCAs:      caCertPool,
-				MinVersion:   tls.VersionTLS12,
-			}, nil
+			// --trusted-ca-file on the container means the server demands a
+			// client certificate, so the keypair is required here — check
+			// up front for a clear message instead of a handshake failure.
+			for _, key := range []string{"ca.crt", "tls.crt", "tls.key"} {
+				if len(secret.Data[key]) == 0 {
+					return nil, fmt.Errorf("secret %s/%s is missing a non-empty %q key", namespace, secretName, key)
+				}
+			}
+			// TLS-config assembly is shared with the operator
+			// (internal/etcdclient); only the secret discovery above is
+			// plugin-specific.
+			tlsConfig, err := etcdclient.TLSConfig(secret.Data["ca.crt"], secret.Data["tls.crt"], secret.Data["tls.key"])
+			if err != nil {
+				return nil, fmt.Errorf("secret %s/%s: %w", namespace, secretName, err)
+			}
+			return tlsConfig, nil
 		}
 	}
 	return nil, fmt.Errorf("etcd container not found")
@@ -736,39 +734,6 @@ func findSecretNameForTLS(pod *corev1.Pod, container corev1.Container) (string, 
 	}
 
 	return "", fmt.Errorf("secret for the trusted CA file not found")
-}
-
-func extractTLSFiles(clientset kubernetes.Interface, namespace, secretName string) (
-	*x509.CertPool, *tls.Certificate, error) {
-	secret, err := clientset.CoreV1().Secrets(namespace).Get(context.Background(), secretName, metav1.GetOptions{})
-	if err != nil {
-		return nil, nil, err
-	}
-
-	caPem, ok := secret.Data["ca.crt"]
-	if !ok {
-		return nil, nil, fmt.Errorf("CA certificate not found in secret")
-	}
-	caCertPool := x509.NewCertPool()
-	if !caCertPool.AppendCertsFromPEM(caPem) {
-		return nil, nil, fmt.Errorf("failed to parse CA certificate")
-	}
-
-	certPem, ok := secret.Data["tls.crt"]
-	if !ok {
-		return nil, nil, fmt.Errorf("TLS certificate not found in secret")
-	}
-	keyPem, ok := secret.Data["tls.key"]
-	if !ok {
-		return nil, nil, fmt.Errorf("TLS key not found in secret")
-	}
-
-	clientCert, err := tls.X509KeyPair(certPem, keyPem)
-	if err != nil {
-		return nil, nil, fmt.Errorf("failed to create X509 key pair: %s", err)
-	}
-
-	return caCertPool, &clientCert, nil
 }
 
 type silentWriter struct{}

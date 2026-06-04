@@ -426,9 +426,9 @@ kubectl get pvc -l etcd-operator.cozystack.io/cluster=my-mem-etcd -n default
 
 ### What you should configure before going to production
 
-The `PodDisruptionBudget` is auto-emitted now (see [Draining nodes](#draining-nodes-poddisruptionbudget) for the day-to-day picture). The remaining production gaps are tracked in [#16](https://github.com/lllamnyp/etcd-operator/issues/16):
+The `PodDisruptionBudget` is auto-emitted now (see [Draining nodes](#draining-nodes-poddisruptionbudget) for the day-to-day picture). Neither of the following is defaulted (tracked in [#16](https://github.com/lllamnyp/etcd-operator/issues/16)), so set both explicitly:
 
-1. **Pod anti-affinity** — pre-deploy a mutating webhook (e.g. `pod-topology-spread` admission controller, or your own) that adds:
+1. **Pod anti-affinity** — set `spec.affinity` on the cluster (passed through to every member Pod; see [concepts: Pod scheduling](concepts.md#pod-scheduling-and-additional-metadata)):
 
    ```yaml
    spec:
@@ -440,6 +440,8 @@ The `PodDisruptionBudget` is auto-emitted now (see [Draining nodes](#draining-no
                  etcd-operator.cozystack.io/cluster: my-mem-etcd
              topologyKey: kubernetes.io/hostname
    ```
+
+   `spec.topologySpreadConstraints` is also available for zone/node spreading. Both take effect on newly-created members; roll existing Pods one at a time to apply a change.
 
 2. **Container memory limit** — set `spec.resources.limits.memory` on the cluster so tmpfs writes account against the Pod's cgroup, not node memory:
 
@@ -558,7 +560,7 @@ kubectl logs -n <ns> "$LEADER" --tail=200
 
 Just `kubectl cordon` + `kubectl drain` works. The Pod gets evicted, reschedules onto another node, the PVC reattaches (if storage class supports relocation) or stays put (if not — then the Pod stays Pending until the node is back). Etcd is fine with this — `MemberAddAsLearner` isn't involved because the member ID and data dir are preserved in the PVC.
 
-PodAntiAffinity is not configured by default (see [What's not supported](../README.md#whats-not-supported-yet)). Two etcd pods can land on the same node, which means a single node drain can take out two voters simultaneously and lose quorum on a 3-member cluster. Recommended workaround: add a PodAntiAffinity rule via a `PodTopologySpread` mutating webhook or pre-deploy a `Deployment`-level affinity wrapper. (A native operator option is a future feature.)
+PodAntiAffinity is not configured by default. Two etcd pods can land on the same node, which means a single node drain can take out two voters simultaneously and lose quorum on a 3-member cluster. Set `spec.affinity` (and/or `spec.topologySpreadConstraints`) on the cluster to keep voters apart — see [concepts: Pod scheduling](concepts.md#pod-scheduling-and-additional-metadata) and the [production checklist](#what-you-should-configure-before-going-to-production).
 
 ## TLS-enabled clusters
 

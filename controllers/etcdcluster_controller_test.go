@@ -2628,6 +2628,40 @@ func TestSpecEqualsObserved_ResourcesMatter(t *testing.T) {
 	}
 }
 
+// TestSpecEqualsObserved_AdditionalMetadataMatters guards the locking
+// pattern for spec.additionalMetadata: like its siblings (resources,
+// affinity, topologySpreadConstraints) it is latched through
+// status.observed, so a mid-flight metadata edit must register as
+// "spec ≠ observed" to be snapshotted once the in-flight target lands.
+func TestSpecEqualsObserved_AdditionalMetadataMatters(t *testing.T) {
+	cluster := &lll.EtcdCluster{
+		Spec: lll.EtcdClusterSpec{
+			Replicas: ptrInt32(3),
+			Version:  "3.5.17",
+			Storage:  lll.StorageSpec{Size: quickQty(t, "1Gi")},
+			AdditionalMetadata: &lll.AdditionalMetadata{
+				Labels: map[string]string{"cozystack.io/tenant": "foo"},
+			},
+		},
+		Status: lll.EtcdClusterStatus{
+			Observed: &lll.ObservedClusterSpec{
+				Replicas: 3,
+				Version:  "3.5.17",
+				Storage:  lll.StorageSpec{Size: quickQty(t, "1Gi")},
+				// AdditionalMetadata nil — mismatch.
+			},
+		},
+	}
+	if specEqualsObserved(cluster) {
+		t.Fatalf("specEqualsObserved must return false when additionalMetadata differs")
+	}
+
+	cluster.Status.Observed.AdditionalMetadata = cluster.Spec.AdditionalMetadata.DeepCopy()
+	if !specEqualsObserved(cluster) {
+		t.Fatalf("specEqualsObserved must return true when additionalMetadata matches")
+	}
+}
+
 // TestBootstrap_PropagatesResourcesToSeed verifies the wiring of
 // spec.resources onto the seed EtcdMember at cluster creation. The
 // member controller reads its own Spec.Resources at buildPod time, so
@@ -2719,6 +2753,10 @@ func TestBootstrap_PropagatesSchedulingAndMetadataToSeed(t *testing.T) {
 	}
 	if !equality.Semantic.DeepEqual(got.Status.Observed.TopologySpreadConstraints, tsc) {
 		t.Errorf("Observed.TopologySpreadConstraints = %+v; want %+v", got.Status.Observed.TopologySpreadConstraints, tsc)
+	}
+	if got.Status.Observed.AdditionalMetadata == nil ||
+		got.Status.Observed.AdditionalMetadata.Labels["cozystack.io/tenant"] != "foo" {
+		t.Errorf("Observed.AdditionalMetadata not latched: %+v", got.Status.Observed.AdditionalMetadata)
 	}
 
 	members := &lll.EtcdMemberList{}

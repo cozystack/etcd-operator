@@ -70,14 +70,17 @@ spec:
                 description: |-
                   AdditionalMetadata holds extra labels and annotations the operator
                   merges onto every object it creates for this cluster — member Pods,
-                  the client and headless Services, the PodDisruptionBudget, and the
-                  EtcdMember CRs. Operator-owned keys (the app.kubernetes.io/* set and
-                  the cluster/role labels) always win on collision, so this cannot be
-                  used to shadow the operator's own selectors.
+                  the per-member data PVCs, the client and headless Services, the
+                  PodDisruptionBudget, and the EtcdMember CRs. Operator-owned keys
+                  (the app.kubernetes.io/* set and the cluster/role labels, and any
+                  operator-set annotation) always win on collision, so this cannot be
+                  used to shadow the operator's own metadata.
 
                   Like spec.resources, changes take effect on newly-created objects
                   (scale-up, replacement); the operator does not re-stamp existing
-                  Pods in place.
+                  Pods in place. The value is latched through status.observed with the
+                  rest of the target spec, so a mid-flight edit only applies once the
+                  current target is reached.
                 properties:
                   annotations:
                     additionalProperties:
@@ -1859,6 +1862,27 @@ spec:
                   target is met or its deadline has expired. nil before the first
                   reconcile.
                 properties:
+                  additionalMetadata:
+                    description: |-
+                      AdditionalMetadata is the locked target extra labels/annotations
+                      stamped onto objects created for this cluster. Latched with the rest
+                      of the target spec so a mid-flight metadata edit only applies to
+                      objects created once the current target is reached.
+                    properties:
+                      annotations:
+                        additionalProperties:
+                          type: string
+                        description: Annotations are extra annotations merged onto
+                          created objects.
+                        type: object
+                      labels:
+                        additionalProperties:
+                          type: string
+                        description: |-
+                          Labels are extra labels merged onto created objects. Operator-owned
+                          label keys take precedence on collision.
+                        type: object
+                    type: object
                   affinity:
                     description: |-
                       Affinity is the locked target scheduling affinity for member Pods.

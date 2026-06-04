@@ -425,6 +425,52 @@ func TestEnsurePVC_NilStorageClassNamePassesNil(t *testing.T) {
 	}
 }
 
+// TestEnsurePVC_AppliesAdditionalMetadata covers the metadata stamp on the
+// per-member data PVC: spec.additionalMetadata promises to land on every
+// object the operator creates, and PVCs are a prime target for it
+// (backup-tool selectors, cost-allocation labels). The PVC must carry the
+// merged labels/annotations without a user key shadowing an operator-owned
+// label.
+func TestEnsurePVC_AppliesAdditionalMetadata(t *testing.T) {
+	ctx := context.Background()
+	member := &lll.EtcdMember{
+		ObjectMeta: metav1.ObjectMeta{Name: "test-0", Namespace: "ns", UID: types.UID("mu"), Labels: memberLabels("test", "test-0")},
+		Spec: lll.EtcdMemberSpec{
+			ClusterName: "test", Version: "3.5.17",
+			Storage:        lll.StorageSpec{Size: quickQty(t, "1Gi")},
+			InitialCluster: "x", ClusterToken: "test",
+			AdditionalMetadata: &lll.AdditionalMetadata{
+				Labels: map[string]string{
+					"cozystack.io/tenant": "foo",
+					// Attempt to shadow an operator-owned label: must be ignored.
+					"app.kubernetes.io/managed-by": "evil",
+				},
+				Annotations: map[string]string{"example.com/note": "bar"},
+			},
+		},
+	}
+	c, _ := newTestClient(t, member)
+	r := &EtcdMemberReconciler{Client: c, Scheme: testScheme(t)}
+
+	if err := r.ensurePVC(ctx, member); err != nil {
+		t.Fatalf("ensurePVC: %v", err)
+	}
+
+	pvc := &corev1.PersistentVolumeClaim{}
+	if err := c.Get(ctx, types.NamespacedName{Namespace: "ns", Name: "data-test-0"}, pvc); err != nil {
+		t.Fatalf("PVC not created: %v", err)
+	}
+	if got := pvc.Labels["cozystack.io/tenant"]; got != "foo" {
+		t.Errorf("PVC additional label not merged: cozystack.io/tenant = %q, want foo", got)
+	}
+	if got := pvc.Labels["app.kubernetes.io/managed-by"]; got != "etcd-operator" {
+		t.Errorf("PVC operator-owned label clobbered: app.kubernetes.io/managed-by = %q, want etcd-operator", got)
+	}
+	if got := pvc.Annotations["example.com/note"]; got != "bar" {
+		t.Errorf("PVC additional annotation not merged: example.com/note = %q, want bar", got)
+	}
+}
+
 // TestEnsurePod_RefusesStaleOwner mirrors TestEnsurePVC_RefusesStaleOwner:
 // a same-named Pod owned by a now-deleted EtcdMember (pending GC) must
 // not be adopted by the fresh EtcdMember of the same name. Less severe

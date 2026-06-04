@@ -235,31 +235,33 @@ func memberLabels(cluster, member string) map[string]string {
 
 // applyAdditionalMetadata merges the user-supplied labels/annotations from
 // spec.additionalMetadata onto a child object's ObjectMeta. Operator-owned
-// label keys (everything already present in objLabels) always win on
-// collision, so the additional metadata can never shadow the operator's own
-// selectors. objLabels is mutated in place and returned; the merged
-// annotations are returned separately (nil when there are none) so callers
-// can assign them straight onto ObjectMeta.Annotations without clobbering an
-// existing map.
-func applyAdditionalMetadata(objLabels map[string]string, md *lll.AdditionalMetadata) (labels, annotations map[string]string) {
+// keys (everything already present in objLabels/objAnnotations) always win
+// on collision — symmetrically for both maps — so the additional metadata
+// can never shadow the operator's own selectors or annotations. The inputs
+// are mutated in place (allocated when nil and there is something to merge)
+// and returned, so callers can assign the results straight onto
+// ObjectMeta.{Labels,Annotations}.
+func applyAdditionalMetadata(objLabels, objAnnotations map[string]string, md *lll.AdditionalMetadata) (labels, annotations map[string]string) {
 	if md == nil {
-		return objLabels, nil
+		return objLabels, objAnnotations
 	}
-	if objLabels == nil {
-		objLabels = map[string]string{}
+	if objLabels == nil && len(md.Labels) > 0 {
+		objLabels = make(map[string]string, len(md.Labels))
 	}
 	for k, v := range md.Labels {
 		if _, taken := objLabels[k]; !taken {
 			objLabels[k] = v
 		}
 	}
-	if len(md.Annotations) > 0 {
-		annotations = make(map[string]string, len(md.Annotations))
-		for k, v := range md.Annotations {
-			annotations[k] = v
+	if objAnnotations == nil && len(md.Annotations) > 0 {
+		objAnnotations = make(map[string]string, len(md.Annotations))
+	}
+	for k, v := range md.Annotations {
+		if _, taken := objAnnotations[k]; !taken {
+			objAnnotations[k] = v
 		}
 	}
-	return objLabels, annotations
+	return objLabels, objAnnotations
 }
 
 // filterActiveMembers returns members that are not being deleted.

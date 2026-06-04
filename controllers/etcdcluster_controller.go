@@ -413,7 +413,7 @@ func (r *EtcdClusterReconciler) bootstrap(
 	}
 
 	if seed == nil {
-		seedLabels, seedAnnotations := applyAdditionalMetadata(clusterLabels(cluster.Name), cluster.Spec.AdditionalMetadata)
+		seedLabels, seedAnnotations := applyAdditionalMetadata(clusterLabels(cluster.Name), nil, observedAdditionalMetadata(cluster))
 		seed = &lll.EtcdMember{
 			ObjectMeta: metav1.ObjectMeta{
 				GenerateName: cluster.Name + "-",
@@ -426,7 +426,7 @@ func (r *EtcdClusterReconciler) bootstrap(
 				Version:                   cluster.Status.Observed.Version,
 				Storage:                   cluster.Status.Observed.Storage,
 				Resources:                 cluster.Status.Observed.Resources,
-				AdditionalMetadata:        cluster.Spec.AdditionalMetadata,
+				AdditionalMetadata:        cluster.Status.Observed.AdditionalMetadata,
 				Affinity:                  cluster.Status.Observed.Affinity,
 				TopologySpreadConstraints: cluster.Status.Observed.TopologySpreadConstraints,
 				Bootstrap:                 true,
@@ -805,7 +805,7 @@ func (r *EtcdClusterReconciler) scaleUp(
 	}
 
 	// Step 4: no learner waiting. Create a fresh CR, AddAsLearner, patch.
-	mLabels, mAnnotations := applyAdditionalMetadata(clusterLabels(cluster.Name), cluster.Spec.AdditionalMetadata)
+	mLabels, mAnnotations := applyAdditionalMetadata(clusterLabels(cluster.Name), nil, observedAdditionalMetadata(cluster))
 	newMember := &lll.EtcdMember{
 		ObjectMeta: metav1.ObjectMeta{
 			GenerateName: cluster.Name + "-",
@@ -818,7 +818,7 @@ func (r *EtcdClusterReconciler) scaleUp(
 			Version:                   cluster.Status.Observed.Version,
 			Storage:                   cluster.Status.Observed.Storage,
 			Resources:                 cluster.Status.Observed.Resources,
-			AdditionalMetadata:        cluster.Spec.AdditionalMetadata,
+			AdditionalMetadata:        cluster.Status.Observed.AdditionalMetadata,
 			Affinity:                  cluster.Status.Observed.Affinity,
 			TopologySpreadConstraints: cluster.Status.Observed.TopologySpreadConstraints,
 			Bootstrap:                 false,
@@ -1517,7 +1517,7 @@ func (r *EtcdClusterReconciler) reconcilePDB(
 	}
 
 	if errors.IsNotFound(getErr) {
-		pdbLabels, pdbAnnotations := applyAdditionalMetadata(clusterLabels(cluster.Name), cluster.Spec.AdditionalMetadata)
+		pdbLabels, pdbAnnotations := applyAdditionalMetadata(clusterLabels(cluster.Name), nil, observedAdditionalMetadata(cluster))
 		fresh := &policyv1.PodDisruptionBudget{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:        cluster.Name,
@@ -1812,7 +1812,7 @@ func (r *EtcdClusterReconciler) ensureService(
 	svc := &corev1.Service{}
 	err := r.Get(ctx, types.NamespacedName{Namespace: cluster.Namespace, Name: name}, svc)
 	if errors.IsNotFound(err) {
-		svcLabels, svcAnnotations := applyAdditionalMetadata(clusterLabels(cluster.Name), cluster.Spec.AdditionalMetadata)
+		svcLabels, svcAnnotations := applyAdditionalMetadata(clusterLabels(cluster.Name), nil, observedAdditionalMetadata(cluster))
 		svc = &corev1.Service{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:        name,
@@ -1997,6 +1997,7 @@ func snapshotSpecIntoObserved(cluster *lll.EtcdCluster) {
 		Resources:                 cluster.Spec.Resources,
 		Affinity:                  cluster.Spec.Affinity,
 		TopologySpreadConstraints: cluster.Spec.TopologySpreadConstraints,
+		AdditionalMetadata:        cluster.Spec.AdditionalMetadata,
 	}
 }
 
@@ -2015,7 +2016,20 @@ func specEqualsObserved(cluster *lll.EtcdCluster) bool {
 		o.Storage.Medium == cluster.Spec.Storage.Medium &&
 		equality.Semantic.DeepEqual(o.Resources, cluster.Spec.Resources) &&
 		equality.Semantic.DeepEqual(o.Affinity, cluster.Spec.Affinity) &&
-		equality.Semantic.DeepEqual(o.TopologySpreadConstraints, cluster.Spec.TopologySpreadConstraints)
+		equality.Semantic.DeepEqual(o.TopologySpreadConstraints, cluster.Spec.TopologySpreadConstraints) &&
+		equality.Semantic.DeepEqual(o.AdditionalMetadata, cluster.Spec.AdditionalMetadata)
+}
+
+// observedAdditionalMetadata returns the latched additionalMetadata target
+// the controller should stamp onto objects it creates. Before the first
+// Observed snapshot it falls back to Spec — ensureServices runs ahead of the
+// first-reconcile init, and at that point there is no in-flight target the
+// latch could be protecting (the imminent snapshot equals Spec anyway).
+func observedAdditionalMetadata(cluster *lll.EtcdCluster) *lll.AdditionalMetadata {
+	if cluster.Status.Observed != nil {
+		return cluster.Status.Observed.AdditionalMetadata
+	}
+	return cluster.Spec.AdditionalMetadata
 }
 
 func reconciliationComplete(cluster *lll.EtcdCluster, members []lll.EtcdMember) bool {

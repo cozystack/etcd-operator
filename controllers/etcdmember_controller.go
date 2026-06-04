@@ -368,11 +368,17 @@ func (r *EtcdMemberReconciler) ensurePVC(ctx context.Context, member *lll.EtcdMe
 		return err
 	}
 
+	// The PVC is operator-created and operator-owned, so it carries the
+	// cluster's additionalMetadata like every other child object (backup
+	// tooling and cost-allocation selectors target PVCs specifically).
+	pvcLabels, pvcAnnotations := applyAdditionalMetadata(
+		memberLabels(member.Spec.ClusterName, member.Name), nil, member.Spec.AdditionalMetadata)
 	pvc = &corev1.PersistentVolumeClaim{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      pvcName,
-			Namespace: member.Namespace,
-			Labels:    memberLabels(member.Spec.ClusterName, member.Name),
+			Name:        pvcName,
+			Namespace:   member.Namespace,
+			Labels:      pvcLabels,
+			Annotations: pvcAnnotations,
 		},
 		Spec: corev1.PersistentVolumeClaimSpec{
 			AccessModes:      []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
@@ -625,7 +631,7 @@ func (r *EtcdMemberReconciler) buildPod(member *lll.EtcdMember) *corev1.Pod {
 		// and Pod state consistent in one reconcile rather than two.
 		labels[LabelRole] = RoleVoter
 	}
-	labels, annotations := applyAdditionalMetadata(labels, member.Spec.AdditionalMetadata)
+	labels, annotations := applyAdditionalMetadata(labels, nil, member.Spec.AdditionalMetadata)
 
 	cmd := []string{
 		"etcd",

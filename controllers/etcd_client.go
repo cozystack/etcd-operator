@@ -13,9 +13,7 @@ package controllers
 import (
 	"context"
 	"crypto/tls"
-	"crypto/x509"
 	"fmt"
-	"time"
 
 	clientv3 "go.etcd.io/etcd/client/v3"
 	corev1 "k8s.io/api/core/v1"
@@ -23,6 +21,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	lll "github.com/cozystack/etcd-operator/api/v1alpha2"
+	"github.com/cozystack/etcd-operator/internal/etcdclient"
 )
 
 // EtcdClusterClient is the subset of the etcd v3 client used by the operator.
@@ -61,29 +60,21 @@ type EtcdClusterClient interface {
 // is required before `auth enable` has run.
 type EtcdClientFactory func(ctx context.Context, endpoints []string, tlsConfig *tls.Config, username, password string) (EtcdClusterClient, error)
 
-// DefaultEtcdClientFactory returns a real clientv3.Client.
+// DefaultEtcdClientFactory returns a real clientv3.Client. The construction
+// (dial timeout, anonymous-dial semantics of an empty username, TLS wiring)
+// lives in internal/etcdclient, shared with the kubectl-etcd plugin.
 func DefaultEtcdClientFactory(_ context.Context, endpoints []string, tlsConfig *tls.Config, username, password string) (EtcdClusterClient, error) {
-	cfg := clientv3.Config{
-		Endpoints:   endpoints,
-		DialTimeout: 5 * time.Second,
-		// Empty Username ⇒ clientv3 does not attempt the Authenticate RPC
-		// on connect. This is the anonymous-dial path used before auth is
-		// enabled and on clusters that never enable it.
-		Username: username,
-		Password: password,
-	}
-	if tlsConfig != nil {
-		cfg.TLS = tlsConfig
-	}
-	return clientv3.New(cfg)
+	return etcdclient.New(endpoints, tlsConfig, username, password)
 }
 
 // readRootPassword reads the etcd root user's password from the Secret named by
 // spec.auth.rootCredentialsSecretRef. The Secret is expected to be of type
 // kubernetes.io/basic-auth; the operator uses its `password` key (the etcd user
-// is always root). Returns an error when the ref is unset (should be impossible
-// once auth is enabled — CEL requires it) or the Secret/key is missing, so
-// callers keep the connection closed rather than dialling with no password.
+// is always root — reconcileAuth provisions exactly that user, so any username
+// key in the Secret is ignored here). Returns an error when the ref is unset
+// (should be impossible once auth is enabled — CEL requires it) or the
+// Secret/key is missing, so callers keep the connection closed rather than
+// dialling with no password.
 func readRootPassword(ctx context.Context, c client.Reader, cluster *lll.EtcdCluster) (string, error) {
 	if cluster.Spec.Auth == nil || cluster.Spec.Auth.RootCredentialsSecretRef == nil ||
 		cluster.Spec.Auth.RootCredentialsSecretRef.Name == "" {
@@ -95,11 +86,11 @@ func readRootPassword(ctx context.Context, c client.Reader, cluster *lll.EtcdClu
 	if err := c.Get(ctx, types.NamespacedName{Namespace: ns, Name: name}, sec); err != nil {
 		return "", fmt.Errorf("read root credentials secret %s/%s: %w", ns, name, err)
 	}
-	pw := sec.Data[corev1.BasicAuthPasswordKey]
-	if len(pw) == 0 {
-		return "", fmt.Errorf("root credentials secret %s/%s missing %q key", ns, name, corev1.BasicAuthPasswordKey)
+	_, pw, err := etcdclient.BasicAuthCredentials(sec.Data)
+	if err != nil {
+		return "", fmt.Errorf("root credentials secret %s/%s: %w", ns, name, err)
 	}
-	return string(pw), nil
+	return pw, nil
 }
 
 // resolveEtcdCredentials returns the username/password the operator should
@@ -153,21 +144,24 @@ func buildOperatorTLSConfig(ctx context.Context, c client.Reader, cluster *lll.E
 	if len(caPEM) == 0 {
 		return nil, fmt.Errorf("server TLS secret %s/%s missing ca.crt", ns, serverName)
 	}
-	pool := x509.NewCertPool()
-	if !pool.AppendCertsFromPEM(caPEM) {
-		return nil, fmt.Errorf("server TLS secret %s/%s: ca.crt is not valid PEM", ns, serverName)
-	}
-	cfg := &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS12}
-	if opName := operatorClientSecretName(cluster); opName != "" {
+	var certPEM, keyPEM []byte
+	opName := operatorClientSecretName(cluster)
+	if opName != "" {
 		opSec := &corev1.Secret{}
 		if err := c.Get(ctx, types.NamespacedName{Namespace: ns, Name: opName}, opSec); err != nil {
 			return nil, fmt.Errorf("read operator client TLS secret %s/%s: %w", ns, opName, err)
 		}
-		cert, err := tls.X509KeyPair(opSec.Data["tls.crt"], opSec.Data["tls.key"])
-		if err != nil {
-			return nil, fmt.Errorf("operator client TLS secret %s/%s: %w", ns, opName, err)
+		certPEM, keyPEM = opSec.Data["tls.crt"], opSec.Data["tls.key"]
+	}
+	cfg, err := etcdclient.TLSConfig(caPEM, certPEM, keyPEM)
+	if err != nil {
+		// The CA comes from the server secret, the keypair (if any) from
+		// the operator-client secret — name both when both are in play so
+		// the failing material is attributable.
+		if opName != "" {
+			return nil, fmt.Errorf("build TLS config from secrets %s/{%s,%s}: %w", ns, serverName, opName, err)
 		}
-		cfg.Certificates = []tls.Certificate{cert}
+		return nil, fmt.Errorf("server TLS secret %s/%s: %w", ns, serverName, err)
 	}
 	return cfg, nil
 }
