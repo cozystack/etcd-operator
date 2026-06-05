@@ -584,6 +584,29 @@ func containerResources(member *lll.EtcdMember) corev1.ResourceRequirements {
 	}
 }
 
+// optionFlags renders the member's typed tuning options (mirrored from
+// EtcdCluster.spec.options) as etcd command-line flags. Unset fields emit
+// nothing, leaving etcd's built-in defaults in force.
+func optionFlags(o *lll.EtcdOptions) []string {
+	if o == nil {
+		return nil
+	}
+	var flags []string
+	if o.QuotaBackendBytes != nil {
+		flags = append(flags, fmt.Sprintf("--quota-backend-bytes=%d", *o.QuotaBackendBytes))
+	}
+	if o.AutoCompactionMode != "" {
+		flags = append(flags, "--auto-compaction-mode="+string(o.AutoCompactionMode))
+	}
+	if o.AutoCompactionRetention != "" {
+		flags = append(flags, "--auto-compaction-retention="+o.AutoCompactionRetention)
+	}
+	if o.SnapshotCount != nil {
+		flags = append(flags, fmt.Sprintf("--snapshot-count=%d", *o.SnapshotCount))
+	}
+	return flags
+}
+
 func (r *EtcdMemberReconciler) buildPod(member *lll.EtcdMember) *corev1.Pod {
 	clusterState := "new"
 	if !member.Spec.Bootstrap {
@@ -652,6 +675,7 @@ func (r *EtcdMemberReconciler) buildPod(member *lll.EtcdMember) *corev1.Pod {
 		// "metrics" container port unconditionally.
 		"--listen-metrics-urls=http://0.0.0.0:2381",
 	}
+	cmd = append(cmd, optionFlags(member.Spec.Options)...)
 
 	volumes := []corev1.Volume{{Name: "data", VolumeSource: dataVolumeSource}}
 	mounts := []corev1.VolumeMount{{Name: "data", MountPath: "/var/lib/etcd"}}

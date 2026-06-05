@@ -574,6 +574,87 @@ func TestCEL_HappyPathAccepts(t *testing.T) {
 	}
 }
 
+// TestSchema_OptionsValidation exercises the typed spec.options schema
+// against a real apiserver: the autoCompactionMode enum, the
+// autoCompactionRetention pattern, and the numeric bounds. Not CEL —
+// plain OpenAPI validation — but apiserver-enforced all the same, so
+// envtest is the seam that actually tests the contract.
+func TestSchema_OptionsValidation(t *testing.T) {
+	skipIfNoEnvtest(t)
+	ctx := context.Background()
+
+	quota := int64(10200547328)
+	snapCount := int64(10000)
+
+	// The exact tuning Cozystack's legacy spec.options carried must be
+	// accepted in its typed form.
+	ok := validCluster("opts-cozystack-shape")
+	ok.Spec.Options = &lll.EtcdOptions{
+		QuotaBackendBytes:       &quota,
+		AutoCompactionMode:      lll.AutoCompactionModePeriodic,
+		AutoCompactionRetention: "5m",
+		SnapshotCount:           &snapCount,
+	}
+	if err := k8s.Create(ctx, ok); err != nil {
+		t.Fatalf("apiserver rejected valid options: %v", err)
+	}
+	t.Cleanup(func() { _ = k8s.Delete(ctx, ok) })
+
+	// Bare-integer retention (etcd: hours in periodic mode, revisions in
+	// revision mode) is also valid.
+	okInt := validCluster("opts-int-retention")
+	okInt.Spec.Options = &lll.EtcdOptions{
+		AutoCompactionMode:      lll.AutoCompactionModeRevision,
+		AutoCompactionRetention: "1000",
+	}
+	if err := k8s.Create(ctx, okInt); err != nil {
+		t.Fatalf("apiserver rejected bare-integer retention: %v", err)
+	}
+	t.Cleanup(func() { _ = k8s.Delete(ctx, okInt) })
+
+	rejects := []struct {
+		name string
+		mut  func(*lll.EtcdCluster)
+	}{
+		{
+			name: "bad compaction mode",
+			mut: func(c *lll.EtcdCluster) {
+				c.Spec.Options = &lll.EtcdOptions{AutoCompactionMode: "hourly"}
+			},
+		},
+		{
+			name: "garbage retention",
+			mut: func(c *lll.EtcdCluster) {
+				c.Spec.Options = &lll.EtcdOptions{AutoCompactionRetention: "five-minutes"}
+			},
+		},
+		{
+			name: "negative quota",
+			mut: func(c *lll.EtcdCluster) {
+				q := int64(-1)
+				c.Spec.Options = &lll.EtcdOptions{QuotaBackendBytes: &q}
+			},
+		},
+		{
+			name: "zero snapshot count",
+			mut: func(c *lll.EtcdCluster) {
+				s := int64(0)
+				c.Spec.Options = &lll.EtcdOptions{SnapshotCount: &s}
+			},
+		},
+	}
+	for _, tc := range rejects {
+		t.Run(tc.name, func(t *testing.T) {
+			c := validCluster("opts-" + strings.ReplaceAll(strings.ToLower(tc.name), " ", "-"))
+			tc.mut(c)
+			if err := k8s.Create(ctx, c); err == nil {
+				_ = k8s.Delete(ctx, c)
+				t.Fatalf("apiserver accepted invalid options (%s); expected rejection", tc.name)
+			}
+		})
+	}
+}
+
 // spec.auth.enabled requires spec.tls.client — auth credentials must
 // not cross a plaintext wire. This rule does not reference oldSelf, so it is
 // enforced on CREATE.

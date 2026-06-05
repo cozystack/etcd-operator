@@ -212,6 +212,25 @@ Merge semantics:
 - **Apply-on-create.** Objects are stamped when created; editing the field re-stamps nothing retroactively. Newly-created objects (scale-up members and their PVCs, replacements) pick up the latest latched value.
 - **Latched.** A mid-flight edit only takes effect once the current `status.observed` target is reached, like every other latched field.
 
+## etcd tuning options
+
+`spec.options` carries the etcd server tuning flags the operator renders onto each member's command line:
+
+```yaml
+spec:
+  options:
+    quotaBackendBytes: 10200547328   # --quota-backend-bytes
+    autoCompactionMode: periodic     # --auto-compaction-mode (periodic | revision)
+    autoCompactionRetention: "5m"    # --auto-compaction-retention
+    snapshotCount: 10000             # --snapshot-count (raft entries, not backups)
+```
+
+Every field is optional; an unset field emits no flag, leaving etcd's built-in default in force.
+
+The set is deliberately **closed and typed**. The legacy aenix operator exposed `spec.options` as a free-form `map[string]string`, which let users inject arbitrary flags — including ones that conflict with flags the operator itself manages (listen URLs, initial-cluster wiring, TLS paths). This operator types exactly the keys Cozystack's etcd package actually used; a new tuning knob lands as a new typed field with validation, not via an escape hatch.
+
+Like `spec.resources`, options are latched through `status.observed` and apply **to newly-created members only** (scale-up, replacement) — the operator does not roll existing Pods when they change. To apply a tuning change to an existing cluster, delete one Pod at a time and let the operator recreate it with the new flags. A transient mix of old- and new-flag members is harmless: these are per-member settings (backend quota, compaction cadence, raft snapshot interval), the same heterogeneity any manual rolling flag change passes through.
+
 ## TLS
 
 `spec.tls` configures transport-layer security for the cluster's two etcd surfaces: the client API (port 2379) and the peer API (port 2380). Each subtree is independently optional — you can opt one surface into TLS without the other. The whole `tls` subtree is immutable post-create (see the validation table above): toggling TLS on an existing cluster is a rolling change that v1 doesn't perform, so the policy is delete-and-recreate.

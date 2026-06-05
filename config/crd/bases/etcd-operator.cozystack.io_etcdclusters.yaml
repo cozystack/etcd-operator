@@ -1166,6 +1166,57 @@ spec:
                       rule: '!has(self.source.pvc) || (has(self.source.pvc.subPath)
                         && size(self.source.pvc.subPath) > 0)'
                 type: object
+              options:
+                description: |-
+                  Options carries etcd server tuning flags (backend quota,
+                  auto-compaction, raft snapshot count) passed to each member's
+                  command line. A closed typed set — see EtcdOptions for why there
+                  is deliberately no free-form flag map.
+
+                  Updates take effect on newly-created members (scale-up,
+                  replacement); the operator does not roll existing Pods to apply a
+                  tuning change in place.
+                properties:
+                  autoCompactionMode:
+                    description: |-
+                      AutoCompactionMode sets --auto-compaction-mode: how
+                      AutoCompactionRetention is interpreted, "periodic" (time-based)
+                      or "revision" (revision-count-based). Absent means etcd's default
+                      ("periodic" — though compaction only activates when a retention
+                      is set).
+                    enum:
+                    - periodic
+                    - revision
+                    type: string
+                  autoCompactionRetention:
+                    description: |-
+                      AutoCompactionRetention sets --auto-compaction-retention. In
+                      periodic mode a duration ("5m", "1h"; a bare integer means hours);
+                      in revision mode a revision count. Absent or "0" disables
+                      auto-compaction. The pattern admits what etcd itself parses: a
+                      bare non-negative integer or a Go duration.
+                    pattern: ^([0-9]+(\.[0-9]+)?(ms|s|m|h))+$|^[0-9]+$
+                    type: string
+                  quotaBackendBytes:
+                    description: |-
+                      QuotaBackendBytes sets --quota-backend-bytes: the backend database
+                      size limit in bytes before the member raises the cluster-wide
+                      NOSPACE alarm. 0 or absent means etcd's built-in default (2GiB).
+                      etcd's documented practical maximum is 8GiB.
+                    format: int64
+                    minimum: 0
+                    type: integer
+                  snapshotCount:
+                    description: |-
+                      SnapshotCount sets --snapshot-count: the number of committed
+                      raft entries to retain in memory before triggering an internal
+                      raft snapshot (this is unrelated to EtcdSnapshot backups). Absent
+                      means etcd's built-in default. Lower values trade replay speed on
+                      restart for a smaller memory footprint.
+                    format: int64
+                    minimum: 1
+                    type: integer
+                type: object
               progressDeadlineSeconds:
                 default: 600
                 description: |-
@@ -2804,6 +2855,53 @@ spec:
                             type: array
                             x-kubernetes-list-type: atomic
                         type: object
+                    type: object
+                  options:
+                    description: |-
+                      Options is the locked target etcd tuning flags for member Pods.
+                      Latched with the rest of the target spec so a mid-flight tuning
+                      edit only applies to members created once the current target is
+                      reached.
+                    properties:
+                      autoCompactionMode:
+                        description: |-
+                          AutoCompactionMode sets --auto-compaction-mode: how
+                          AutoCompactionRetention is interpreted, "periodic" (time-based)
+                          or "revision" (revision-count-based). Absent means etcd's default
+                          ("periodic" — though compaction only activates when a retention
+                          is set).
+                        enum:
+                        - periodic
+                        - revision
+                        type: string
+                      autoCompactionRetention:
+                        description: |-
+                          AutoCompactionRetention sets --auto-compaction-retention. In
+                          periodic mode a duration ("5m", "1h"; a bare integer means hours);
+                          in revision mode a revision count. Absent or "0" disables
+                          auto-compaction. The pattern admits what etcd itself parses: a
+                          bare non-negative integer or a Go duration.
+                        pattern: ^([0-9]+(\.[0-9]+)?(ms|s|m|h))+$|^[0-9]+$
+                        type: string
+                      quotaBackendBytes:
+                        description: |-
+                          QuotaBackendBytes sets --quota-backend-bytes: the backend database
+                          size limit in bytes before the member raises the cluster-wide
+                          NOSPACE alarm. 0 or absent means etcd's built-in default (2GiB).
+                          etcd's documented practical maximum is 8GiB.
+                        format: int64
+                        minimum: 0
+                        type: integer
+                      snapshotCount:
+                        description: |-
+                          SnapshotCount sets --snapshot-count: the number of committed
+                          raft entries to retain in memory before triggering an internal
+                          raft snapshot (this is unrelated to EtcdSnapshot backups). Absent
+                          means etcd's built-in default. Lower values trade replay speed on
+                          restart for a smaller memory footprint.
+                        format: int64
+                        minimum: 1
+                        type: integer
                     type: object
                   replicas:
                     description: Replicas is the locked target replica count.

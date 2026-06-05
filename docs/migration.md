@@ -5,9 +5,9 @@ from the legacy aenix operator (`etcd.aenix.io/v1alpha1`), and for behavioural
 changes that need an explicit migration step.
 
 This document grows as more legacy features are ported. Right now it covers the
-**`EtcdBackup` → `EtcdSnapshot` rename** (a pre-GA naming change), and the one
-change that has a hard migration requirement: **etcd authentication
-credentials**.
+**`EtcdBackup` → `EtcdSnapshot` rename** (a pre-GA naming change), the
+**`spec.options` map → typed fields** change, and the one change that has a
+hard migration requirement: **etcd authentication credentials**.
 
 > **TODO — full legacy-operator migration.** The end-to-end story for moving an
 > existing `etcd.aenix.io/v1alpha1` cluster onto `etcd-operator.cozystack.io/v1alpha2`
@@ -40,6 +40,34 @@ an `EtcdBackup` from a pre-rename build, recreate it under the new kind:
 The spec is otherwise unchanged (`spec.clusterRef`, `spec.destination`). The
 restore path (`spec.bootstrap.restore.source`) is unaffected — `restore` keeps
 its name.
+
+## `spec.options`: free-form map → typed fields
+
+The legacy operator's `spec.options` was a free-form `map[string]string` passed
+through as etcd flags. This operator keeps the `spec.options` path but types it
+as a closed struct covering exactly the keys Cozystack's etcd package set —
+arbitrary flag injection is no longer possible (see
+[concepts: etcd tuning options](concepts.md#etcd-tuning-options) for why).
+
+The key mapping, using Cozystack's actual legacy values:
+
+```diff
+ spec:
+   options:
+-    quota-backend-bytes: "10200547328"
+-    auto-compaction-mode: "periodic"
+-    auto-compaction-retention: "5m"
+-    snapshot-count: "10000"
++    quotaBackendBytes: 10200547328
++    autoCompactionMode: periodic
++    autoCompactionRetention: "5m"
++    snapshotCount: 10000
+```
+
+Note the value types: `quotaBackendBytes` and `snapshotCount` are integers, not
+quoted strings. Any other key the legacy map accepted has no typed equivalent —
+if you relied on one, file an issue; the flag gets a typed field, not a
+pass-through.
 
 ## Authentication: root credentials are BYO and required
 

@@ -2291,6 +2291,57 @@ func TestBuildPod_DefaultsResourcesWhenUnset(t *testing.T) {
 	}
 }
 
+// TestBuildPod_AppliesEtcdOptions covers the typed spec.options →
+// command-line rendering: every set field must surface as its etcd flag,
+// and an absent Options struct must add no tuning flags at all (leaving
+// etcd's built-in defaults in force). The four fields are exactly the
+// legacy spec.options keys Cozystack's etcd package used.
+func TestBuildPod_AppliesEtcdOptions(t *testing.T) {
+	r := &EtcdMemberReconciler{}
+	quota := int64(10200547328) // 9.5Gi, the shape cozystack computes
+	snapCount := int64(10000)
+	pod := r.buildPod(&lll.EtcdMember{
+		ObjectMeta: metav1.ObjectMeta{Name: "m", Namespace: "ns"},
+		Spec: lll.EtcdMemberSpec{
+			ClusterName: "test", Version: "3.5.17",
+			Storage: lll.StorageSpec{Size: quickQty(t, "1Gi")},
+			Options: &lll.EtcdOptions{
+				QuotaBackendBytes:       &quota,
+				AutoCompactionMode:      lll.AutoCompactionModePeriodic,
+				AutoCompactionRetention: "5m",
+				SnapshotCount:           &snapCount,
+			},
+		},
+	})
+	cmd := pod.Spec.Containers[0].Command
+	for _, want := range []string{
+		"--quota-backend-bytes=10200547328",
+		"--auto-compaction-mode=periodic",
+		"--auto-compaction-retention=5m",
+		"--snapshot-count=10000",
+	} {
+		if !cmdContains(cmd, want) {
+			t.Errorf("command missing %q; got %v", want, cmd)
+		}
+	}
+
+	// Nil options ⇒ none of the tuning flags appear.
+	pod = r.buildPod(&lll.EtcdMember{
+		ObjectMeta: metav1.ObjectMeta{Name: "m", Namespace: "ns"},
+		Spec: lll.EtcdMemberSpec{
+			ClusterName: "test", Version: "3.5.17",
+			Storage: lll.StorageSpec{Size: quickQty(t, "1Gi")},
+		},
+	})
+	for _, arg := range pod.Spec.Containers[0].Command {
+		for _, prefix := range []string{"--quota-backend-bytes", "--auto-compaction", "--snapshot-count"} {
+			if strings.HasPrefix(arg, prefix) {
+				t.Errorf("nil Options must emit no tuning flags; found %q", arg)
+			}
+		}
+	}
+}
+
 // TestDeriveMemberTLS covers the cluster→member projection. ClientMTLS
 // must be true iff OperatorClientSecretRef is set; secret refs are deep-
 // copied so a later edit to the parent's pointer can't mutate the
