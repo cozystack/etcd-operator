@@ -16,6 +16,7 @@ import (
 
 	"github.com/dustin/go-humanize"
 	"github.com/spf13/cobra"
+	pb "go.etcd.io/etcd/api/v3/etcdserverpb"
 	clientv3 "go.etcd.io/etcd/client/v3"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -340,18 +341,30 @@ func createForfeitLeadershipCmd(config *Config) *cobra.Command {
 				return fmt.Errorf("failed to get etcd member list: %w", err)
 			}
 
-			for _, member := range members.Members {
-				if member.ID != status.Leader {
-					if _, err = etcdClient.MoveLeader(ctx, member.ID); err != nil {
-						return fmt.Errorf("failed to forfeit leadership: %w", err)
-					}
-					return nil
-				}
+			target := leadershipTarget(members.Members, status.Leader)
+			if target == nil {
+				fmt.Println("No eligible member found to transfer leadership to or already not the leader.")
+				return nil
 			}
-			fmt.Println("No eligible member found to transfer leadership to or already not the leader.")
+			if _, err = etcdClient.MoveLeader(ctx, target.ID); err != nil {
+				return fmt.Errorf("failed to forfeit leadership: %w", err)
+			}
 			return nil
 		},
 	}
+}
+
+// leadershipTarget picks the member to receive leadership: the first voting
+// member other than the current leader. Learners are skipped — etcd rejects
+// MoveLeader to a learner, and mid-scale-up the member list typically
+// contains one.
+func leadershipTarget(members []*pb.Member, leaderID uint64) *pb.Member {
+	for _, member := range members {
+		if member.ID != leaderID && !member.IsLearner {
+			return member
+		}
+	}
+	return nil
 }
 
 func createLeaveCmd(config *Config) *cobra.Command {
@@ -668,17 +681,18 @@ type Config struct {
 	CredentialsSecret string
 }
 
-// errNoTrustedCAFile signals that the etcd container has no --trusted-ca-file
-// argument, i.e. the cluster is plaintext and no TLS config is needed. A
-// sentinel (matched via errors.Is) avoids string-comparing the error message.
-var errNoTrustedCAFile = errors.New("trusted CA file path not specified in container args")
+// errNoCertFile signals that the etcd container has no --cert-file argument,
+// i.e. the cluster serves plaintext on the client port and no TLS config is
+// needed. A sentinel (matched via errors.Is) avoids string-comparing the
+// error message.
+var errNoCertFile = errors.New("certificate file path not specified in container args")
 
 func getTLSConfig(clientset kubernetes.Interface, pod *corev1.Pod, namespace string) (*tls.Config, error) {
 	for _, container := range pod.Spec.Containers {
 		if container.Name == "etcd" {
-			secretName, err := findSecretNameForTLS(pod, container)
+			secretName, mTLS, err := findSecretNameForTLS(pod, container)
 			if err != nil {
-				if errors.Is(err, errNoTrustedCAFile) {
+				if errors.Is(err, errNoCertFile) {
 					return nil, nil // plaintext cluster — dial without TLS
 				}
 				return nil, err
@@ -688,18 +702,27 @@ func getTLSConfig(clientset kubernetes.Interface, pod *corev1.Pod, namespace str
 			if err != nil {
 				return nil, err
 			}
-			// --trusted-ca-file on the container means the server demands a
-			// client certificate, so the keypair is required here — check
-			// up front for a clear message instead of a handshake failure.
-			for _, key := range []string{"ca.crt", "tls.crt", "tls.key"} {
+			// ca.crt verifies the server in both TLS modes. The client
+			// keypair is required only when the server demands a client
+			// certificate (mTLS) — check up front for a clear message
+			// instead of a handshake failure.
+			required := []string{"ca.crt"}
+			if mTLS {
+				required = append(required, "tls.crt", "tls.key")
+			}
+			for _, key := range required {
 				if len(secret.Data[key]) == 0 {
 					return nil, fmt.Errorf("secret %s/%s is missing a non-empty %q key", namespace, secretName, key)
 				}
 			}
+			var certPEM, keyPEM []byte
+			if mTLS {
+				certPEM, keyPEM = secret.Data["tls.crt"], secret.Data["tls.key"]
+			}
 			// TLS-config assembly is shared with the operator
 			// (internal/etcdclient); only the secret discovery above is
 			// plugin-specific.
-			tlsConfig, err := etcdclient.TLSConfig(secret.Data["ca.crt"], secret.Data["tls.crt"], secret.Data["tls.key"])
+			tlsConfig, err := etcdclient.TLSConfig(secret.Data["ca.crt"], certPEM, keyPEM)
 			if err != nil {
 				return nil, fmt.Errorf("secret %s/%s: %w", namespace, secretName, err)
 			}
@@ -709,31 +732,41 @@ func getTLSConfig(clientset kubernetes.Interface, pod *corev1.Pod, namespace str
 	return nil, fmt.Errorf("etcd container not found")
 }
 
-func findSecretNameForTLS(pod *corev1.Pod, container corev1.Container) (string, error) {
-	caFilePath := ""
+// findSecretNameForTLS resolves the Secret backing the etcd container's TLS
+// material. Detection keys on --cert-file, which the operator emits in BOTH
+// client-TLS modes; --trusted-ca-file appears only under mTLS
+// (controllers/etcdmember_controller.go), so keying on it would misread a
+// server-TLS-only cluster as plaintext and dial its TLS listener in the
+// clear. The second result reports whether the server demands a client
+// certificate (mTLS).
+func findSecretNameForTLS(pod *corev1.Pod, container corev1.Container) (string, bool, error) {
+	certFilePath, mTLS := "", false
 	for _, arg := range append(container.Command, container.Args...) {
-		if strings.HasPrefix(arg, "--trusted-ca-file=") {
-			caFilePath = strings.TrimPrefix(arg, "--trusted-ca-file=")
-			break
+		switch {
+		case strings.HasPrefix(arg, "--cert-file="):
+			certFilePath = strings.TrimPrefix(arg, "--cert-file=")
+		case arg == "--client-cert-auth" || arg == "--client-cert-auth=true",
+			strings.HasPrefix(arg, "--trusted-ca-file="):
+			mTLS = true
 		}
 	}
 
-	if caFilePath == "" {
-		return "", errNoTrustedCAFile
+	if certFilePath == "" {
+		return "", false, errNoCertFile
 	}
 
 	for _, vm := range container.VolumeMounts {
-		if strings.HasPrefix(caFilePath, vm.MountPath) {
+		if strings.HasPrefix(certFilePath, vm.MountPath) {
 			// We found the mount path, now find the volume
 			for _, vol := range pod.Spec.Volumes {
 				if vol.Name == vm.Name && vol.Secret != nil {
-					return vol.Secret.SecretName, nil
+					return vol.Secret.SecretName, mTLS, nil
 				}
 			}
 		}
 	}
 
-	return "", fmt.Errorf("secret for the trusted CA file not found")
+	return "", false, fmt.Errorf("secret for the TLS certificate file not found")
 }
 
 type silentWriter struct{}
