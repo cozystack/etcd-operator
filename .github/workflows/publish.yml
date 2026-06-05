@@ -2,9 +2,7 @@ name: Build and Publish Docker Image
 
 on:
   push:
-    # The default branch is main; the old `master` filter matched nothing,
-    # so images were never published.
-    branches: [ main ]
+    branches: [ master ]
 
 jobs:
   build-and-publish:

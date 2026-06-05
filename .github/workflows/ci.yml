@@ -1,11 +1,10 @@
 name: CI
 
 on:
-  # No PR branch filter: PRs here target main and integration branches (e.g.
-  # v1) alike; the old `master` filter matched nothing, so CI never ran on PRs.
   pull_request:
+    branches: [ master ]
   push:
-    branches: [ main ]
+    branches: [ master ]
 
 jobs:
   verify:
