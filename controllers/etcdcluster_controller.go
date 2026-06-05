@@ -413,20 +413,25 @@ func (r *EtcdClusterReconciler) bootstrap(
 	}
 
 	if seed == nil {
+		seedLabels, seedAnnotations := applyAdditionalMetadata(clusterLabels(cluster.Name), nil, observedAdditionalMetadata(cluster))
 		seed = &lll.EtcdMember{
 			ObjectMeta: metav1.ObjectMeta{
 				GenerateName: cluster.Name + "-",
 				Namespace:    cluster.Namespace,
-				Labels:       clusterLabels(cluster.Name),
+				Labels:       seedLabels,
+				Annotations:  seedAnnotations,
 			},
 			Spec: lll.EtcdMemberSpec{
-				ClusterName:  cluster.Name,
-				Version:      cluster.Status.Observed.Version,
-				Storage:      cluster.Status.Observed.Storage,
-				Resources:    cluster.Status.Observed.Resources,
-				Bootstrap:    true,
-				ClusterToken: cluster.Status.ClusterToken,
-				TLS:          deriveMemberTLS(cluster),
+				ClusterName:               cluster.Name,
+				Version:                   cluster.Status.Observed.Version,
+				Storage:                   cluster.Status.Observed.Storage,
+				Resources:                 cluster.Status.Observed.Resources,
+				AdditionalMetadata:        cluster.Status.Observed.AdditionalMetadata,
+				Affinity:                  cluster.Status.Observed.Affinity,
+				TopologySpreadConstraints: cluster.Status.Observed.TopologySpreadConstraints,
+				Bootstrap:                 true,
+				ClusterToken:              cluster.Status.ClusterToken,
+				TLS:                       deriveMemberTLS(cluster),
 				// Restore is carried only by the seed: when the cluster
 				// requests a restore, the member controller runs a restore
 				// initContainer that populates the data dir from the snapshot
@@ -800,20 +805,25 @@ func (r *EtcdClusterReconciler) scaleUp(
 	}
 
 	// Step 4: no learner waiting. Create a fresh CR, AddAsLearner, patch.
+	mLabels, mAnnotations := applyAdditionalMetadata(clusterLabels(cluster.Name), nil, observedAdditionalMetadata(cluster))
 	newMember := &lll.EtcdMember{
 		ObjectMeta: metav1.ObjectMeta{
 			GenerateName: cluster.Name + "-",
 			Namespace:    cluster.Namespace,
-			Labels:       clusterLabels(cluster.Name),
+			Labels:       mLabels,
+			Annotations:  mAnnotations,
 		},
 		Spec: lll.EtcdMemberSpec{
-			ClusterName:  cluster.Name,
-			Version:      cluster.Status.Observed.Version,
-			Storage:      cluster.Status.Observed.Storage,
-			Resources:    cluster.Status.Observed.Resources,
-			Bootstrap:    false,
-			ClusterToken: cluster.Status.ClusterToken,
-			TLS:          deriveMemberTLS(cluster),
+			ClusterName:               cluster.Name,
+			Version:                   cluster.Status.Observed.Version,
+			Storage:                   cluster.Status.Observed.Storage,
+			Resources:                 cluster.Status.Observed.Resources,
+			AdditionalMetadata:        cluster.Status.Observed.AdditionalMetadata,
+			Affinity:                  cluster.Status.Observed.Affinity,
+			TopologySpreadConstraints: cluster.Status.Observed.TopologySpreadConstraints,
+			Bootstrap:                 false,
+			ClusterToken:              cluster.Status.ClusterToken,
+			TLS:                       deriveMemberTLS(cluster),
 			// InitialCluster filled in by completePendingMember below.
 		},
 	}
@@ -1507,11 +1517,13 @@ func (r *EtcdClusterReconciler) reconcilePDB(
 	}
 
 	if errors.IsNotFound(getErr) {
+		pdbLabels, pdbAnnotations := applyAdditionalMetadata(clusterLabels(cluster.Name), nil, observedAdditionalMetadata(cluster))
 		fresh := &policyv1.PodDisruptionBudget{
 			ObjectMeta: metav1.ObjectMeta{
-				Name:      cluster.Name,
-				Namespace: cluster.Namespace,
-				Labels:    clusterLabels(cluster.Name),
+				Name:        cluster.Name,
+				Namespace:   cluster.Namespace,
+				Labels:      pdbLabels,
+				Annotations: pdbAnnotations,
 			},
 			Spec: policyv1.PodDisruptionBudgetSpec{
 				MaxUnavailable: &max,
@@ -1800,11 +1812,13 @@ func (r *EtcdClusterReconciler) ensureService(
 	svc := &corev1.Service{}
 	err := r.Get(ctx, types.NamespacedName{Namespace: cluster.Namespace, Name: name}, svc)
 	if errors.IsNotFound(err) {
+		svcLabels, svcAnnotations := applyAdditionalMetadata(clusterLabels(cluster.Name), nil, observedAdditionalMetadata(cluster))
 		svc = &corev1.Service{
 			ObjectMeta: metav1.ObjectMeta{
-				Name:      name,
-				Namespace: cluster.Namespace,
-				Labels:    clusterLabels(cluster.Name),
+				Name:        name,
+				Namespace:   cluster.Namespace,
+				Labels:      svcLabels,
+				Annotations: svcAnnotations,
 			},
 			Spec: desired,
 		}
@@ -1977,10 +1991,13 @@ func snapshotSpecIntoObserved(cluster *lll.EtcdCluster) {
 		replicas = *cluster.Spec.Replicas
 	}
 	cluster.Status.Observed = &lll.ObservedClusterSpec{
-		Replicas:  replicas,
-		Version:   cluster.Spec.Version,
-		Storage:   cluster.Spec.Storage,
-		Resources: cluster.Spec.Resources,
+		Replicas:                  replicas,
+		Version:                   cluster.Spec.Version,
+		Storage:                   cluster.Spec.Storage,
+		Resources:                 cluster.Spec.Resources,
+		Affinity:                  cluster.Spec.Affinity,
+		TopologySpreadConstraints: cluster.Spec.TopologySpreadConstraints,
+		AdditionalMetadata:        cluster.Spec.AdditionalMetadata,
 	}
 }
 
@@ -1997,7 +2014,22 @@ func specEqualsObserved(cluster *lll.EtcdCluster) bool {
 		o.Version == cluster.Spec.Version &&
 		o.Storage.Size.Cmp(cluster.Spec.Storage.Size) == 0 &&
 		o.Storage.Medium == cluster.Spec.Storage.Medium &&
-		equality.Semantic.DeepEqual(o.Resources, cluster.Spec.Resources)
+		equality.Semantic.DeepEqual(o.Resources, cluster.Spec.Resources) &&
+		equality.Semantic.DeepEqual(o.Affinity, cluster.Spec.Affinity) &&
+		equality.Semantic.DeepEqual(o.TopologySpreadConstraints, cluster.Spec.TopologySpreadConstraints) &&
+		equality.Semantic.DeepEqual(o.AdditionalMetadata, cluster.Spec.AdditionalMetadata)
+}
+
+// observedAdditionalMetadata returns the latched additionalMetadata target
+// the controller should stamp onto objects it creates. Before the first
+// Observed snapshot it falls back to Spec — ensureServices runs ahead of the
+// first-reconcile init, and at that point there is no in-flight target the
+// latch could be protecting (the imminent snapshot equals Spec anyway).
+func observedAdditionalMetadata(cluster *lll.EtcdCluster) *lll.AdditionalMetadata {
+	if cluster.Status.Observed != nil {
+		return cluster.Status.Observed.AdditionalMetadata
+	}
+	return cluster.Spec.AdditionalMetadata
 }
 
 func reconciliationComplete(cluster *lll.EtcdCluster, members []lll.EtcdMember) bool {

@@ -67,6 +67,10 @@ test: manifests generate fmt vet envtest ## Run tests.
 build: manifests generate fmt vet ## Build manager binary.
 	go build -o bin/manager main.go
 
+.PHONY: kubectl-etcd
+kubectl-etcd: fmt vet ## Build the kubectl-etcd plugin binary.
+	go build -o bin/kubectl-etcd ./cmd/kubectl-etcd
+
 .PHONY: run
 run: manifests generate fmt vet ## Run a controller from your host.
 	go run ./main.go

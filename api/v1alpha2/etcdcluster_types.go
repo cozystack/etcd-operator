@@ -450,6 +450,56 @@ type EtcdClusterSpec struct {
 	// delete one Pod at a time to recreate them with the new spec.
 	// +optional
 	Resources corev1.ResourceRequirements `json:"resources,omitempty"`
+
+	// AdditionalMetadata holds extra labels and annotations the operator
+	// merges onto every object it creates for this cluster — member Pods,
+	// the per-member data PVCs, the client and headless Services, the
+	// PodDisruptionBudget, and the EtcdMember CRs. Operator-owned keys
+	// (the app.kubernetes.io/* set and the cluster/role labels, and any
+	// operator-set annotation) always win on collision, so this cannot be
+	// used to shadow the operator's own metadata.
+	//
+	// Like spec.resources, changes take effect on newly-created objects
+	// (scale-up, replacement); the operator does not re-stamp existing
+	// Pods in place. The value is latched through status.observed with the
+	// rest of the target spec, so a mid-flight edit only applies once the
+	// current target is reached.
+	// +optional
+	AdditionalMetadata *AdditionalMetadata `json:"additionalMetadata,omitempty"`
+
+	// Affinity sets the scheduling affinity/anti-affinity for member Pods.
+	// Passed straight through to each member Pod's spec.affinity. A common
+	// use is a pod anti-affinity on app.kubernetes.io/instance=<cluster> to
+	// keep members off the same node.
+	//
+	// Updates take effect on newly-created members (scale-up, replacement);
+	// the operator does not roll existing Pods to apply an affinity change
+	// in place.
+	// +optional
+	Affinity *corev1.Affinity `json:"affinity,omitempty"`
+
+	// TopologySpreadConstraints controls how member Pods are spread across
+	// topology domains (zones, nodes). Passed straight through to each
+	// member Pod's spec.topologySpreadConstraints.
+	//
+	// Updates take effect on newly-created members (scale-up, replacement);
+	// the operator does not roll existing Pods to apply a change in place.
+	// +optional
+	TopologySpreadConstraints []corev1.TopologySpreadConstraint `json:"topologySpreadConstraints,omitempty"`
+}
+
+// AdditionalMetadata is a set of labels and annotations the operator merges
+// onto every resource it creates for a cluster. See
+// EtcdClusterSpec.AdditionalMetadata for the precedence and timing rules.
+type AdditionalMetadata struct {
+	// Labels are extra labels merged onto created objects. Operator-owned
+	// label keys take precedence on collision.
+	// +optional
+	Labels map[string]string `json:"labels,omitempty"`
+
+	// Annotations are extra annotations merged onto created objects.
+	// +optional
+	Annotations map[string]string `json:"annotations,omitempty"`
 }
 
 // ObservedClusterSpec is the locked-in target the controller is currently
@@ -477,6 +527,24 @@ type ObservedClusterSpec struct {
 	// reached or its deadline expires.
 	// +optional
 	Resources corev1.ResourceRequirements `json:"resources,omitempty"`
+
+	// Affinity is the locked target scheduling affinity for member Pods.
+	// Latched alongside the rest of the target spec so a mid-flight change
+	// only applies to members created once the current target is reached.
+	// +optional
+	Affinity *corev1.Affinity `json:"affinity,omitempty"`
+
+	// TopologySpreadConstraints is the locked target spread configuration
+	// for member Pods. Latched with the rest of the target spec.
+	// +optional
+	TopologySpreadConstraints []corev1.TopologySpreadConstraint `json:"topologySpreadConstraints,omitempty"`
+
+	// AdditionalMetadata is the locked target extra labels/annotations
+	// stamped onto objects created for this cluster. Latched with the rest
+	// of the target spec so a mid-flight metadata edit only applies to
+	// objects created once the current target is reached.
+	// +optional
+	AdditionalMetadata *AdditionalMetadata `json:"additionalMetadata,omitempty"`
 }
 
 // EtcdClusterStatus defines the observed state of an etcd cluster.

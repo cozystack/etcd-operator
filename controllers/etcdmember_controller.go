@@ -368,11 +368,17 @@ func (r *EtcdMemberReconciler) ensurePVC(ctx context.Context, member *lll.EtcdMe
 		return err
 	}
 
+	// The PVC is operator-created and operator-owned, so it carries the
+	// cluster's additionalMetadata like every other child object (backup
+	// tooling and cost-allocation selectors target PVCs specifically).
+	pvcLabels, pvcAnnotations := applyAdditionalMetadata(
+		memberLabels(member.Spec.ClusterName, member.Name), nil, member.Spec.AdditionalMetadata)
 	pvc = &corev1.PersistentVolumeClaim{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      pvcName,
-			Namespace: member.Namespace,
-			Labels:    memberLabels(member.Spec.ClusterName, member.Name),
+			Name:        pvcName,
+			Namespace:   member.Namespace,
+			Labels:      pvcLabels,
+			Annotations: pvcAnnotations,
 		},
 		Spec: corev1.PersistentVolumeClaimSpec{
 			AccessModes:      []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
@@ -625,6 +631,7 @@ func (r *EtcdMemberReconciler) buildPod(member *lll.EtcdMember) *corev1.Pod {
 		// and Pod state consistent in one reconcile rather than two.
 		labels[LabelRole] = RoleVoter
 	}
+	labels, annotations := applyAdditionalMetadata(labels, nil, member.Spec.AdditionalMetadata)
 
 	cmd := []string{
 		"etcd",
@@ -704,14 +711,17 @@ func (r *EtcdMemberReconciler) buildPod(member *lll.EtcdMember) *corev1.Pod {
 
 	return &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      member.Name,
-			Namespace: member.Namespace,
-			Labels:    labels,
+			Name:        member.Name,
+			Namespace:   member.Namespace,
+			Labels:      labels,
+			Annotations: annotations,
 		},
 		Spec: corev1.PodSpec{
-			Hostname:       member.Name,
-			Subdomain:      member.Spec.ClusterName,
-			InitContainers: initContainers,
+			Hostname:                  member.Name,
+			Subdomain:                 member.Spec.ClusterName,
+			Affinity:                  member.Spec.Affinity,
+			TopologySpreadConstraints: member.Spec.TopologySpreadConstraints,
+			InitContainers:            initContainers,
 			// etcd and the restore agent never call the Kubernetes API, so
 			// don't mount a ServiceAccount token into the member Pod (matches
 			// the snapshot Job's stance and trims needless attack surface).

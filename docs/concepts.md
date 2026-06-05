@@ -157,9 +157,9 @@ If quorum is already lost across multiple simultaneous failures, `MemberRemove` 
 
 ### What is missing from memory clusters today
 
-Two things are not yet auto-emitted and matter for production memory clusters — both tracked in [issue #16](https://github.com/lllamnyp/etcd-operator/issues/16):
+Two things are not auto-defaulted and matter for production memory clusters — both tracked in [issue #16](https://github.com/lllamnyp/etcd-operator/issues/16):
 
-- **Pod anti-affinity**. Without it, scheduling can co-locate voters on one node; a single node failure then loses quorum on a 3-member cluster.
+- **Pod anti-affinity**. Configurable via `spec.affinity` (see [Pod scheduling and additional metadata](#pod-scheduling-and-additional-metadata)) but not defaulted. Without it, scheduling can co-locate voters on one node; a single node failure then loses quorum on a 3-member cluster.
 - **Container memory limits**. Without `limits.memory`, tmpfs writes count against node memory rather than the pod's cgroup and the etcd container ends up in BestEffort/Burstable QoS — first to be evicted under pressure. Set `spec.resources.limits.memory` ≥ `spec.storage.size` + ~128Mi for etcd headroom on memory-backed clusters.
 
 The `PodDisruptionBudget` *is* auto-emitted now — see the [PodDisruptionBudget section](#poddisruptionbudget) below.
@@ -180,6 +180,37 @@ Four CEL `x-kubernetes-validations` rules on `EtcdClusterSpec` are evaluated at 
 | `tls` subtree immutable | UPDATE | Same reason — secret-ref swaps, mTLS-flip via `operatorClientSecretRef`, peer-only ↔ both toggles are all in-place rolling changes that v1 doesn't perform. |
 
 These rules live in the CRD itself; the apiserver enforces them with no separate webhook, no cert-manager, no extra Deployment. Errors come back as standard apiserver admission rejections (`kubectl apply` prints the rule's `message` field).
+
+## Pod scheduling and additional metadata
+
+Three spec fields shape where member Pods land and what metadata the operator's child objects carry. All three are latched through `status.observed` like the rest of the target spec (see [Locking pattern](#locking-pattern)) and apply **at object creation only** — the operator does not roll existing Pods or re-stamp existing objects when they change.
+
+### `spec.affinity` and `spec.topologySpreadConstraints`
+
+Passed through verbatim to each member Pod's `spec.affinity` / `spec.topologySpreadConstraints`. The common production use is a required pod anti-affinity keyed on the cluster label, so two voters never share a node:
+
+```yaml
+spec:
+  affinity:
+    podAntiAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+        - labelSelector:
+            matchLabels:
+              etcd-operator.cozystack.io/cluster: my-etcd
+          topologyKey: kubernetes.io/hostname
+```
+
+Changes take effect on newly-created members (scale-up, replacement). To apply a scheduling change to an existing cluster, delete one Pod at a time and let the operator recreate it with the new constraints.
+
+### `spec.additionalMetadata`
+
+Extra labels and annotations the operator merges onto **every object it creates** for the cluster: member Pods, the per-member data PVCs (`data-<member>`), the client and headless Services, the PodDisruptionBudget, and the `EtcdMember` CRs. Typical uses are backup-tool selectors on the PVCs and cost-allocation/tenancy labels across the board.
+
+Merge semantics:
+
+- **Operator-owned keys win.** A user-supplied key that collides with a key the operator already sets (the `app.kubernetes.io/*` set, the cluster/role labels, or any operator-set annotation) is silently ignored — the field cannot shadow the operator's own selectors or metadata. The rule holds symmetrically for labels and annotations.
+- **Apply-on-create.** Objects are stamped when created; editing the field re-stamps nothing retroactively. Newly-created objects (scale-up members and their PVCs, replacements) pick up the latest latched value.
+- **Latched.** A mid-flight edit only takes effect once the current `status.observed` target is reached, like every other latched field.
 
 ## TLS
 
