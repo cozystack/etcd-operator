@@ -261,6 +261,12 @@ func portForwardAPIServer(ctx context.Context, t *testing.T) (uint16, func()) {
 // a member pod, authenticating with the server keypair (issued with
 // clientAuth EKU for exactly this kind of loopback use). Member pods carry
 // operator-generated names, so the pod is found via the cluster label.
+//
+// The pod must be picked by READINESS, not list order: the dump runs while
+// the cluster may still be scaling up (Available latches on quorum, not on
+// the full replica count), and a freshly-created member pod whose etcd
+// container has not started yet fails the exec with "container not found".
+// etcdctl get is linearizable, so any ready member returns the same keys.
 func etcdKeys(ctx context.Context, t *testing.T) string {
 	t.Helper()
 	pods := &corev1.PodList{}
@@ -268,7 +274,26 @@ func etcdKeys(ctx context.Context, t *testing.T) string {
 		client.MatchingLabels{"etcd-operator.cozystack.io/cluster": clusterName}); err != nil || len(pods.Items) == 0 {
 		t.Fatalf("list etcd member pods: %v (found %d)", err, len(pods.Items))
 	}
-	stdout, stderr, err := podExec(ctx, e2eNamespace, pods.Items[0].Name, "etcd", []string{
+	podName := ""
+	for i := range pods.Items {
+		p := &pods.Items[i]
+		if p.Status.Phase != corev1.PodRunning {
+			continue
+		}
+		for _, cs := range p.Status.ContainerStatuses {
+			if cs.Name == "etcd" && cs.Ready {
+				podName = p.Name
+				break
+			}
+		}
+		if podName != "" {
+			break
+		}
+	}
+	if podName == "" {
+		t.Fatalf("no Running etcd member pod with a ready etcd container (of %d pods)", len(pods.Items))
+	}
+	stdout, stderr, err := podExec(ctx, e2eNamespace, podName, "etcd", []string{
 		"etcdctl",
 		"--endpoints=https://localhost:2379",
 		"--cert=/etc/etcd/tls/client/tls.crt",
