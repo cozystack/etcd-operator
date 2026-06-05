@@ -1,0 +1,59 @@
+# PKI for the Kamaji DataStore scenario. One CA signs everything: the
+# operator's cert-manager-mode certificates (server, operator-client, peer)
+# and Kamaji's own client certificate. Kamaji additionally receives the CA
+# *private key* through the DataStore — its etcd driver signs a per-TCP
+# apiserver-etcd-client certificate with it, so etcd (which trusts this CA
+# for client auth) accepts tenant API servers without further wiring.
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: selfsigned
+  namespace: kamaji-e2e
+spec:
+  selfSigned: {}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: etcd-ca
+  namespace: kamaji-e2e
+spec:
+  isCA: true
+  commonName: etcd-ca
+  secretName: etcd-ca-tls
+  duration: 87600h
+  usages:
+  - signing
+  - key encipherment
+  - cert sign
+  issuerRef:
+    name: selfsigned
+    kind: Issuer
+---
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: etcd-ca-issuer
+  namespace: kamaji-e2e
+spec:
+  ca:
+    secretName: etcd-ca-tls
+---
+# Client certificate Kamaji presents on its own dials (health checks,
+# datastore setup). CN=root mirrors Cozystack's packages/extra/etcd chart.
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: kamaji-etcd-client
+  namespace: kamaji-e2e
+spec:
+  commonName: root
+  secretName: kamaji-etcd-client-tls
+  duration: 87600h
+  usages:
+  - signing
+  - key encipherment
+  - client auth
+  issuerRef:
+    name: etcd-ca-issuer
+    kind: Issuer

@@ -31,7 +31,10 @@ spec:
           capabilities:
             drop:
               - "ALL"
-        image: gcr.io/kubebuilder/kube-rbac-proxy:v0.13.1
+        # gcr.io/kubebuilder/kube-rbac-proxy is gone (the gcr.io/kubebuilder
+        # registry shut down in early 2025); upstream now releases under its
+        # own GitHub org at ghcr.io/kube-rbac-proxy/kube-rbac-proxy.
+        image: ghcr.io/kube-rbac-proxy/kube-rbac-proxy:v0.22.0
         args:
         - "--secure-listen-address=0.0.0.0:8443"
         - "--upstream=http://127.0.0.1:8080/"
