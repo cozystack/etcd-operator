@@ -98,6 +98,13 @@ type EtcdMemberSpec struct {
 	// +optional
 	TopologySpreadConstraints []corev1.TopologySpreadConstraint `json:"topologySpreadConstraints,omitempty"`
 
+	// Options mirrors EtcdCluster.spec.options at the time this member
+	// was created. The member controller renders the set fields as etcd
+	// command-line flags at Pod-build time; existing members are not
+	// re-templated when the cluster spec changes.
+	// +optional
+	Options *EtcdOptions `json:"options,omitempty"`
+
 	// Bootstrap indicates this member is part of the initial cluster formation.
 	// When true the member starts with --initial-cluster-state=new.
 	// +optional

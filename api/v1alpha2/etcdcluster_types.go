@@ -238,6 +238,67 @@ type IssuerReference struct {
 	Kind string `json:"kind,omitempty"`
 }
 
+// AutoCompactionMode selects etcd's auto-compaction interpretation of
+// the retention value: "periodic" treats it as a time duration,
+// "revision" as a revision-count delta.
+//
+// +kubebuilder:validation:Enum=periodic;revision
+type AutoCompactionMode string
+
+const (
+	// AutoCompactionModePeriodic compacts by time window (--auto-compaction-mode=periodic).
+	AutoCompactionModePeriodic AutoCompactionMode = "periodic"
+	// AutoCompactionModeRevision compacts by revision delta (--auto-compaction-mode=revision).
+	AutoCompactionModeRevision AutoCompactionMode = "revision"
+)
+
+// EtcdOptions carries the etcd server tuning flags the operator passes to
+// each member's `etcd` command line. Deliberately a closed, typed set — the
+// legacy aenix operator exposed a free-form `spec.options` map[string]string,
+// which let users inject arbitrary (and operator-conflicting) flags; this
+// port types exactly the keys Cozystack's etcd package actually used. New
+// flags land here as new typed fields, not as an escape hatch.
+//
+// Like spec.resources, options are latched through status.observed and take
+// effect on newly-created members (scale-up, replacement) only; the operator
+// does not roll existing Pods to apply a tuning change in place. Delete one
+// Pod at a time to re-template members, or recreate the cluster.
+type EtcdOptions struct {
+	// QuotaBackendBytes sets --quota-backend-bytes: the backend database
+	// size limit in bytes before the member raises the cluster-wide
+	// NOSPACE alarm. 0 or absent means etcd's built-in default (2GiB).
+	// etcd's documented practical maximum is 8GiB.
+	// +kubebuilder:validation:Minimum=0
+	// +optional
+	QuotaBackendBytes *int64 `json:"quotaBackendBytes,omitempty"`
+
+	// AutoCompactionMode sets --auto-compaction-mode: how
+	// AutoCompactionRetention is interpreted, "periodic" (time-based)
+	// or "revision" (revision-count-based). Absent means etcd's default
+	// ("periodic" — though compaction only activates when a retention
+	// is set).
+	// +optional
+	AutoCompactionMode AutoCompactionMode `json:"autoCompactionMode,omitempty"`
+
+	// AutoCompactionRetention sets --auto-compaction-retention. In
+	// periodic mode a duration ("5m", "1h"; a bare integer means hours);
+	// in revision mode a revision count. Absent or "0" disables
+	// auto-compaction. The pattern admits what etcd itself parses: a
+	// bare non-negative integer or a Go duration.
+	// +kubebuilder:validation:Pattern=`^([0-9]+(\.[0-9]+)?(ms|s|m|h))+$|^[0-9]+$`
+	// +optional
+	AutoCompactionRetention string `json:"autoCompactionRetention,omitempty"`
+
+	// SnapshotCount sets --snapshot-count: the number of committed
+	// raft entries to retain in memory before triggering an internal
+	// raft snapshot (this is unrelated to EtcdSnapshot backups). Absent
+	// means etcd's built-in default. Lower values trade replay speed on
+	// restart for a smaller memory footprint.
+	// +kubebuilder:validation:Minimum=1
+	// +optional
+	SnapshotCount *int64 `json:"snapshotCount,omitempty"`
+}
+
 // Condition types for EtcdCluster.
 const (
 	// ClusterAvailable indicates the cluster has a healthy quorum.
@@ -486,6 +547,17 @@ type EtcdClusterSpec struct {
 	// the operator does not roll existing Pods to apply a change in place.
 	// +optional
 	TopologySpreadConstraints []corev1.TopologySpreadConstraint `json:"topologySpreadConstraints,omitempty"`
+
+	// Options carries etcd server tuning flags (backend quota,
+	// auto-compaction, raft snapshot count) passed to each member's
+	// command line. A closed typed set — see EtcdOptions for why there
+	// is deliberately no free-form flag map.
+	//
+	// Updates take effect on newly-created members (scale-up,
+	// replacement); the operator does not roll existing Pods to apply a
+	// tuning change in place.
+	// +optional
+	Options *EtcdOptions `json:"options,omitempty"`
 }
 
 // AdditionalMetadata is a set of labels and annotations the operator merges
@@ -545,6 +617,13 @@ type ObservedClusterSpec struct {
 	// objects created once the current target is reached.
 	// +optional
 	AdditionalMetadata *AdditionalMetadata `json:"additionalMetadata,omitempty"`
+
+	// Options is the locked target etcd tuning flags for member Pods.
+	// Latched with the rest of the target spec so a mid-flight tuning
+	// edit only applies to members created once the current target is
+	// reached.
+	// +optional
+	Options *EtcdOptions `json:"options,omitempty"`
 }
 
 // EtcdClusterStatus defines the observed state of an etcd cluster.

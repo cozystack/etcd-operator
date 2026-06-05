@@ -1025,6 +1025,53 @@ spec:
                   InitialCluster is the value passed to etcd's --initial-cluster flag.
                   Set by the cluster controller at creation time.
                 type: string
+              options:
+                description: |-
+                  Options mirrors EtcdCluster.spec.options at the time this member
+                  was created. The member controller renders the set fields as etcd
+                  command-line flags at Pod-build time; existing members are not
+                  re-templated when the cluster spec changes.
+                properties:
+                  autoCompactionMode:
+                    description: |-
+                      AutoCompactionMode sets --auto-compaction-mode: how
+                      AutoCompactionRetention is interpreted, "periodic" (time-based)
+                      or "revision" (revision-count-based). Absent means etcd's default
+                      ("periodic" — though compaction only activates when a retention
+                      is set).
+                    enum:
+                    - periodic
+                    - revision
+                    type: string
+                  autoCompactionRetention:
+                    description: |-
+                      AutoCompactionRetention sets --auto-compaction-retention. In
+                      periodic mode a duration ("5m", "1h"; a bare integer means hours);
+                      in revision mode a revision count. Absent or "0" disables
+                      auto-compaction. The pattern admits what etcd itself parses: a
+                      bare non-negative integer or a Go duration.
+                    pattern: ^([0-9]+(\.[0-9]+)?(ms|s|m|h))+$|^[0-9]+$
+                    type: string
+                  quotaBackendBytes:
+                    description: |-
+                      QuotaBackendBytes sets --quota-backend-bytes: the backend database
+                      size limit in bytes before the member raises the cluster-wide
+                      NOSPACE alarm. 0 or absent means etcd's built-in default (2GiB).
+                      etcd's documented practical maximum is 8GiB.
+                    format: int64
+                    minimum: 0
+                    type: integer
+                  snapshotCount:
+                    description: |-
+                      SnapshotCount sets --snapshot-count: the number of committed
+                      raft entries to retain in memory before triggering an internal
+                      raft snapshot (this is unrelated to EtcdSnapshot backups). Absent
+                      means etcd's built-in default. Lower values trade replay speed on
+                      restart for a smaller memory footprint.
+                    format: int64
+                    minimum: 1
+                    type: integer
+                type: object
               replicas:
                 default: 1
                 description: |-

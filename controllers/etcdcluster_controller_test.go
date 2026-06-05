@@ -2725,6 +2725,92 @@ func TestSpecEqualsObserved_AdditionalMetadataMatters(t *testing.T) {
 	}
 }
 
+// TestSpecEqualsObserved_OptionsMatter guards the locking pattern for
+// spec.options: like its siblings (resources, affinity, additionalMetadata)
+// it is latched through status.observed, so a mid-flight tuning edit must
+// register as "spec ≠ observed" to be snapshotted once the in-flight
+// target lands.
+func TestSpecEqualsObserved_OptionsMatter(t *testing.T) {
+	quota := int64(10200547328)
+	cluster := &lll.EtcdCluster{
+		Spec: lll.EtcdClusterSpec{
+			Replicas: ptrInt32(3),
+			Version:  "3.5.17",
+			Storage:  lll.StorageSpec{Size: quickQty(t, "1Gi")},
+			Options: &lll.EtcdOptions{
+				QuotaBackendBytes:       &quota,
+				AutoCompactionMode:      lll.AutoCompactionModePeriodic,
+				AutoCompactionRetention: "5m",
+			},
+		},
+		Status: lll.EtcdClusterStatus{
+			Observed: &lll.ObservedClusterSpec{
+				Replicas: 3,
+				Version:  "3.5.17",
+				Storage:  lll.StorageSpec{Size: quickQty(t, "1Gi")},
+				// Options nil — mismatch.
+			},
+		},
+	}
+	if specEqualsObserved(cluster) {
+		t.Fatalf("specEqualsObserved must return false when options differ")
+	}
+
+	cluster.Status.Observed.Options = cluster.Spec.Options.DeepCopy()
+	if !specEqualsObserved(cluster) {
+		t.Fatalf("specEqualsObserved must return true when options match")
+	}
+}
+
+// TestBootstrap_PropagatesOptionsToSeed verifies the wiring of
+// spec.options onto the seed EtcdMember at cluster creation. The member
+// controller reads its own Spec.Options at buildPod time, so any
+// propagation gap shows up as the seed's etcd running with built-in
+// defaults instead of the user's tuning (e.g. no backend quota).
+func TestBootstrap_PropagatesOptionsToSeed(t *testing.T) {
+	ctx := context.Background()
+	quota := int64(10200547328)
+	snapCount := int64(10000)
+	opts := &lll.EtcdOptions{
+		QuotaBackendBytes:       &quota,
+		AutoCompactionMode:      lll.AutoCompactionModePeriodic,
+		AutoCompactionRetention: "5m",
+		SnapshotCount:           &snapCount,
+	}
+	cluster := &lll.EtcdCluster{
+		ObjectMeta: metav1.ObjectMeta{Name: "test", Namespace: "ns"},
+		Spec: lll.EtcdClusterSpec{
+			Replicas: ptrInt32(3),
+			Version:  "3.5.17",
+			Storage:  lll.StorageSpec{Size: quickQty(t, "1Gi")},
+			Options:  opts,
+		},
+	}
+	c, _ := newTestClient(t, cluster)
+	r := &EtcdClusterReconciler{Client: c, Scheme: testScheme(t), EtcdClientFactory: factoryReturning(newFakeEtcd(0xdeadbeef))}
+
+	reconcileUntilStable(t, r, c, "test", "ns", 8)
+
+	got := mustGet(t, c, "test", "ns", &lll.EtcdCluster{})
+	if got.Status.Observed == nil {
+		t.Fatalf("Status.Observed must be set after first reconciles")
+	}
+	if !equality.Semantic.DeepEqual(got.Status.Observed.Options, opts) {
+		t.Errorf("Observed.Options = %+v; want %+v", got.Status.Observed.Options, opts)
+	}
+
+	members := &lll.EtcdMemberList{}
+	if err := c.List(ctx, members, client.InNamespace("ns")); err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(members.Items) != 1 {
+		t.Fatalf("expected exactly one seed member; got %d", len(members.Items))
+	}
+	if !equality.Semantic.DeepEqual(members.Items[0].Spec.Options, opts) {
+		t.Fatalf("seed Spec.Options = %+v; want %+v", members.Items[0].Spec.Options, opts)
+	}
+}
+
 // TestBootstrap_PropagatesResourcesToSeed verifies the wiring of
 // spec.resources onto the seed EtcdMember at cluster creation. The
 // member controller reads its own Spec.Resources at buildPod time, so
@@ -2915,6 +3001,77 @@ func TestScaleUp_PropagatesResourcesToNewMember(t *testing.T) {
 	if fresh.Spec.Resources.Requests.Cpu().Cmp(wantCPU) != 0 {
 		t.Fatalf("scaled-up member Spec.Resources.Requests.cpu = %v; want %v",
 			fresh.Spec.Resources.Requests.Cpu(), wantCPU)
+	}
+}
+
+// TestScaleUp_PropagatesOptionsToNewMember covers the second member-
+// creation site for spec.options: scaleUp's fresh-CR path. Bootstrap is
+// covered by TestBootstrap_PropagatesOptionsToSeed; this one makes sure
+// a member added later runs with the same tuning as the seed.
+func TestScaleUp_PropagatesOptionsToNewMember(t *testing.T) {
+	ctx := context.Background()
+	now := metav1.Now()
+	quota := int64(10200547328)
+	opts := &lll.EtcdOptions{
+		QuotaBackendBytes:       &quota,
+		AutoCompactionMode:      lll.AutoCompactionModePeriodic,
+		AutoCompactionRetention: "5m",
+	}
+
+	// Cluster targets 2 replicas; 1 ready voter already exists. scaleUp
+	// must create a fresh second member carrying Observed.Options.
+	cluster := &lll.EtcdCluster{
+		ObjectMeta: metav1.ObjectMeta{Name: "test", Namespace: "ns", UID: types.UID("cluster-uid")},
+		Spec: lll.EtcdClusterSpec{
+			Replicas: ptrInt32(2),
+			Version:  "3.5.17",
+			Storage:  lll.StorageSpec{Size: quickQty(t, "1Gi")},
+			Options:  opts,
+		},
+		Status: lll.EtcdClusterStatus{
+			ClusterToken: "ns-test-x",
+			ClusterID:    "deadbeef",
+			Observed: &lll.ObservedClusterSpec{
+				Replicas: 2,
+				Version:  "3.5.17",
+				Storage:  lll.StorageSpec{Size: quickQty(t, "1Gi")},
+				Options:  opts,
+			},
+			ProgressDeadline: &metav1.Time{Time: metav1.Now().Add(time.Hour)},
+		},
+	}
+	seed := &lll.EtcdMember{
+		ObjectMeta: metav1.ObjectMeta{Name: "test-seed", Namespace: "ns", Labels: memberLabels("test", "test-seed")},
+		Spec:       lll.EtcdMemberSpec{ClusterName: "test", Version: "3.5.17", InitialCluster: "x", ClusterToken: "ns-test-x"},
+		Status: lll.EtcdMemberStatus{
+			PodName: "test-seed", MemberID: "a01", IsVoter: true,
+			Conditions: []metav1.Condition{{Type: lll.MemberReady, Status: metav1.ConditionTrue, Reason: "PodReady", LastTransitionTime: now}},
+		},
+	}
+	c, _ := newTestClient(t, cluster, seed)
+	fe := newFakeEtcd(0xdeadbeef,
+		&etcdserverpb.Member{ID: 0xa01, Name: "test-seed", PeerURLs: []string{peerURL("http", "test-seed", "test", "ns")}},
+	)
+	r := &EtcdClusterReconciler{Client: c, Scheme: testScheme(t), EtcdClientFactory: factoryReturning(fe)}
+
+	if _, err := r.scaleUp(ctx, cluster, []lll.EtcdMember{*seed}); err != nil {
+		t.Fatalf("scaleUp: %v", err)
+	}
+
+	all := &lll.EtcdMemberList{}
+	_ = c.List(ctx, all, client.InNamespace("ns"))
+	var fresh *lll.EtcdMember
+	for i := range all.Items {
+		if all.Items[i].Name != seed.Name {
+			fresh = &all.Items[i]
+			break
+		}
+	}
+	if fresh == nil {
+		t.Fatalf("scaleUp must create a second member; got only %d", len(all.Items))
+	}
+	if !equality.Semantic.DeepEqual(fresh.Spec.Options, opts) {
+		t.Fatalf("scaled-up member Spec.Options = %+v; want %+v", fresh.Spec.Options, opts)
 	}
 }
 
