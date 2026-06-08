@@ -8,6 +8,8 @@
 bin
 # kubectl-etcd plugin: build to bin/ (see Makefile); never commit a root-level build artifact
 /kubectl-etcd
+# etcd-migrate tool: same rule — build to bin/, never commit the root-level artifact
+/etcd-migrate
 
 # Test binary, build with `go test -c`
 *.test

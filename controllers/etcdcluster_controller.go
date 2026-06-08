@@ -322,7 +322,7 @@ func (r *EtcdClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	// here too. Cheap: list etcd once and try to promote any learner;
 	// no-op if none.
 	if cluster.Status.ClusterID != "" && len(running) > 0 {
-		endpoints := memberEndpoints(clusterClientScheme(cluster), running, cluster.Name, cluster.Namespace)
+		endpoints := memberEndpoints(clusterClientScheme(cluster), running, cluster.Namespace)
 		tlsCfg, tlsErr := buildOperatorTLSConfig(ctx, r.Client, cluster)
 		if tlsErr != nil {
 			// Don't bail out of the whole reconcile — updateStatus
@@ -485,7 +485,7 @@ func (r *EtcdClusterReconciler) bootstrap(
 
 	if seed.Spec.InitialCluster == "" {
 		original := seed.DeepCopy()
-		seed.Spec.InitialCluster = buildInitialCluster(clusterPeerScheme(cluster), []string{seed.Name}, cluster.Name, cluster.Namespace)
+		seed.Spec.InitialCluster = buildInitialCluster(clusterPeerScheme(cluster), []string{seed.Name}, memberServiceName(seed), cluster.Namespace)
 		// Now that apiserver-assigned name is known, populate the
 		// per-member component label so the seed CR's label set matches
 		// the Pod/PVC the member controller will create.
@@ -548,7 +548,7 @@ func (r *EtcdClusterReconciler) tryDiscoverCluster(
 		}
 		return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
 	}
-	endpoints := []string{clientURL(clusterClientScheme(cluster), seed.Name, cluster.Name, cluster.Namespace)}
+	endpoints := []string{clientURL(clusterClientScheme(cluster), seed.Name, memberServiceName(seed), cluster.Namespace)}
 
 	tlsCfg, err := buildOperatorTLSConfig(ctx, r.Client, cluster)
 	if err != nil {
@@ -580,7 +580,7 @@ func (r *EtcdClusterReconciler) tryDiscoverCluster(
 		log.Info("waiting for definitive single-member response", "members", len(resp.Members))
 		return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
 	}
-	expectedPeer := peerURL(clusterPeerScheme(cluster), seed.Name, cluster.Name, cluster.Namespace)
+	expectedPeer := peerURL(clusterPeerScheme(cluster), seed.Name, memberServiceName(seed), cluster.Namespace)
 	matched := resp.Members[0].Name == seed.Name
 	if !matched {
 		for _, p := range resp.Members[0].PeerURLs {
@@ -770,7 +770,7 @@ func (r *EtcdClusterReconciler) scaleUp(
 	// CR, which we just handled). From this point on we only care about
 	// running (non-dormant) members for the etcd-side flow.
 	running := filterRunningMembers(members)
-	endpoints := memberEndpoints(clusterClientScheme(cluster), running, cluster.Name, cluster.Namespace)
+	endpoints := memberEndpoints(clusterClientScheme(cluster), running, cluster.Namespace)
 	tlsCfg, err := buildOperatorTLSConfig(ctx, r.Client, cluster)
 	if err != nil {
 		log.Error(err, "cannot build operator TLS config for scale-up")
@@ -869,7 +869,7 @@ func (r *EtcdClusterReconciler) completePendingMember(
 	pending *lll.EtcdMember,
 ) (ctrl.Result, error) {
 	log := log.FromContext(ctx)
-	pendingPeerURL := peerURL(clusterPeerScheme(cluster), pending.Name, cluster.Name, cluster.Namespace)
+	pendingPeerURL := peerURL(clusterPeerScheme(cluster), pending.Name, memberServiceName(pending), cluster.Namespace)
 
 	alreadyAdded := false
 	for _, m := range listResp.Members {
@@ -897,21 +897,30 @@ func (r *EtcdClusterReconciler) completePendingMember(
 		etcdMembers = addResp.Members
 	}
 
-	// Build --initial-cluster from etcd's view. The new pod's flags MUST
-	// match what etcd will report when it tries to join, so use the list
-	// from etcd directly rather than the CR set.
-	allNames := make([]string, 0, len(etcdMembers))
+	// Build --initial-cluster from etcd's view, using each member's peer URL
+	// VERBATIM rather than reconstructing it from a single cluster Service
+	// name. During an in-place migration adopted members carry peer URLs
+	// under the legacy headless Service while the joining (native) member
+	// uses the cluster name, so a reconstruction keyed off one Service name
+	// would emit the wrong DNS for half the cluster. etcd already reports the
+	// correct persisted peer URL for every member (and the one we just
+	// registered via pendingPeerURL), so echo it back.
+	parts := make([]string, 0, len(etcdMembers))
 	for _, m := range etcdMembers {
+		if len(m.PeerURLs) == 0 {
+			continue
+		}
 		name := m.Name
-		if name == "" && len(m.PeerURLs) > 0 {
+		if name == "" {
 			name = memberNameFromPeerURL(m.PeerURLs[0])
 		}
-		if name != "" {
-			allNames = append(allNames, name)
+		if name == "" {
+			continue
 		}
+		parts = append(parts, name+"="+m.PeerURLs[0])
 	}
-	sort.Strings(allNames)
-	initialCluster := buildInitialCluster(clusterPeerScheme(cluster), allNames, cluster.Name, cluster.Namespace)
+	sort.Strings(parts)
+	initialCluster := strings.Join(parts, ",")
 
 	original := pending.DeepCopy()
 	pending.Spec.InitialCluster = initialCluster
@@ -1046,7 +1055,7 @@ func (r *EtcdClusterReconciler) syncIsVoter(
 		if !m.DeletionTimestamp.IsZero() {
 			continue
 		}
-		url := peerURL(clusterPeerScheme(cluster), m.Name, cluster.Name, cluster.Namespace)
+		url := peerURL(clusterPeerScheme(cluster), m.Name, memberServiceName(m), cluster.Namespace)
 		var wantVoter bool
 		switch {
 		case voterByURL[url]:
@@ -1126,7 +1135,7 @@ func (r *EtcdClusterReconciler) reconcileAuth(ctx context.Context, cluster *lll.
 		return nil, nil
 	}
 
-	endpoints := memberEndpoints(clusterClientScheme(cluster), running, cluster.Name, cluster.Namespace)
+	endpoints := memberEndpoints(clusterClientScheme(cluster), running, cluster.Namespace)
 	tlsCfg, err := buildOperatorTLSConfig(ctx, r.Client, cluster)
 	if err != nil {
 		log.Error(err, "cannot build operator TLS config for auth-enable; retrying")
@@ -1789,7 +1798,14 @@ func peerCertDNSNames(cluster *lll.EtcdCluster, clusterDomain string) []string {
 // ── Services ─────────────────────────────────────────────────────────────
 
 func (r *EtcdClusterReconciler) ensureServices(ctx context.Context, cluster *lll.EtcdCluster) error {
-	// Headless service — provides per-pod DNS for peer discovery.
+	// Headless service — provides per-pod DNS for peer discovery. Always
+	// named after the cluster: this is the operator's native Service, and
+	// it is the name every operator-created (non-adopted) member resolves
+	// under. In-place-migrated clusters additionally keep the legacy
+	// headless Service alive (owner-referenced to the adopted members, so it
+	// self-GCs as they roll) for the adopted pods, which carry the legacy
+	// name in their AnnHeadlessServiceName annotation; the operator does not
+	// manage that one.
 	if err := r.ensureService(ctx, cluster, cluster.Name, corev1.ServiceSpec{
 		ClusterIP:                corev1.ClusterIPNone,
 		PublishNotReadyAddresses: true,

@@ -2,6 +2,8 @@ package controllers
 
 import (
 	"fmt"
+	"path"
+	"regexp"
 	"strings"
 
 	corev1 "k8s.io/api/core/v1"
@@ -27,18 +29,100 @@ const (
 	// MemberFinalizer is placed on EtcdMember resources to ensure
 	// graceful removal from the etcd cluster before deletion.
 	MemberFinalizer = "etcd-operator.cozystack.io/member-cleanup"
+
+	// ReservedAnnotationPrefix namespaces the operator-interpreted
+	// annotations below. additionalMetadata must never be able to set a
+	// key under this prefix (applyAdditionalMetadata strips it): the
+	// reserved annotations drive member DNS identity and the --data-dir
+	// path, so a user-settable copy would (a) make every operator-created
+	// member inherit a migration knob — breaking the self-wipe — and (b)
+	// turn data-dir-subpath into a user-controllable path into --data-dir.
+	ReservedAnnotationPrefix = "etcd-operator.cozystack.io/"
+
+	// AnnHeadlessServiceName overrides the headless Service name a member's
+	// DNS identity keys off: its Pod subdomain and every peer/client URL
+	// the operator constructs for it. Absent ⇒ the cluster's own name
+	// (native behaviour). Stamped ONLY by the in-place migration tool on
+	// the EtcdMembers it creates for adopted pods (whose immutable
+	// spec.subdomain and persisted peer URLs use the legacy Service name);
+	// the operator never stamps it, so every rolled/replaced member comes
+	// up native and the override self-wipes once the cluster fully rolls.
+	AnnHeadlessServiceName = ReservedAnnotationPrefix + "headless-service-name"
+
+	// AnnDataDirSubPath relocates etcd's --data-dir to a subdirectory of
+	// the member's data volume (/var/lib/etcd/<subpath>). Absent ⇒ the
+	// volume root. Same migration-only contract as AnnHeadlessServiceName:
+	// the legacy operator kept etcd data under "default.etcd" inside the
+	// PVC, so an adopted member's replacement Pod finds the existing data
+	// dir instead of bootstrapping empty. The value is validated in code
+	// (validDataDirSubPath) — an annotation has no apiserver schema, so the
+	// controller fails closed against a mount-escaping value.
+	AnnDataDirSubPath = ReservedAnnotationPrefix + "data-dir-subpath"
 )
 
-// peerURL returns the etcd peer URL for a member, using the headless Service DNS.
-// scheme is "http" or "https" depending on whether peer TLS is enabled.
-func peerURL(scheme, member, cluster, namespace string) string {
-	return fmt.Sprintf("%s://%s.%s.%s.svc:2380", scheme, member, cluster, namespace)
+// etcdDataDirRoot is the mount path of every member's data volume; --data-dir
+// is this root or, for adopted members, a validated subdirectory of it.
+const etcdDataDirRoot = "/var/lib/etcd"
+
+// dataDirSubPathRe is the same pattern the removed spec.dataDirSubPath field
+// carried as an apiserver-enforced kubebuilder marker. Now that the value
+// arrives as an unvalidated annotation, the controller enforces it here.
+var dataDirSubPathRe = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._-]*$`)
+
+// validDataDirSubPath fails closed: the value must be a single safe path
+// component — no slash (so it cannot name a nested path) and no ".." (so it
+// cannot escape the mount) — matching the original field's pattern. Anything
+// else is rejected and the caller falls back to the native data-dir root.
+func validDataDirSubPath(s string) bool {
+	if strings.ContainsRune(s, '/') || strings.Contains(s, "..") {
+		return false
+	}
+	return dataDirSubPathRe.MatchString(s)
 }
 
-// clientURL returns the etcd client URL for a member.
+// memberDataDir resolves a member's etcd --data-dir from its
+// AnnDataDirSubPath annotation, falling back to the volume root when the
+// annotation is absent or fails validation (fail-closed: an invalid value is
+// ignored, never substituted into the path).
+func memberDataDir(member *lll.EtcdMember) string {
+	sub := member.Annotations[AnnDataDirSubPath]
+	if sub == "" || !validDataDirSubPath(sub) {
+		return etcdDataDirRoot
+	}
+	return path.Join(etcdDataDirRoot, sub)
+}
+
+// peerURL returns the etcd peer URL for a member, using the headless Service
+// DNS. `service` is the headless Service name the member resolves under —
+// resolve it per-member via memberServiceName (the cluster's own name by
+// default, or the AnnHeadlessServiceName override an adopted member carries),
+// never assume cluster.Name for every member: during an in-place migration
+// adopted and rolled members live under different Service names at once.
+// scheme is "http" or "https" depending on whether peer TLS is enabled.
+func peerURL(scheme, member, service, namespace string) string {
+	return fmt.Sprintf("%s://%s.%s.%s.svc:2380", scheme, member, service, namespace)
+}
+
+// clientURL returns the etcd client URL for a member. Same service-name
+// contract as peerURL.
 // scheme is "http" or "https" depending on whether client TLS is enabled.
-func clientURL(scheme, member, cluster, namespace string) string {
-	return fmt.Sprintf("%s://%s.%s.%s.svc:2379", scheme, member, cluster, namespace)
+func clientURL(scheme, member, service, namespace string) string {
+	return fmt.Sprintf("%s://%s.%s.%s.svc:2379", scheme, member, service, namespace)
+}
+
+// memberServiceName resolves the headless Service name a member resolves
+// under: the AnnHeadlessServiceName annotation when present (set only by the
+// migration tool on adopted members), the owning cluster's own name
+// otherwise. Every constructed member URL and the Pod's spec.subdomain key
+// off this. The operator never stamps the annotation on members it creates,
+// so a rolled/replaced member defaults to the cluster name and the override
+// self-wipes as the cluster rolls — there is deliberately no cluster-level
+// equivalent (the operator's native headless Service is always cluster.Name).
+func memberServiceName(member *lll.EtcdMember) string {
+	if v := member.Annotations[AnnHeadlessServiceName]; v != "" {
+		return v
+	}
+	return member.Spec.ClusterName
 }
 
 // clusterClientScheme returns "https" when the cluster has client TLS
@@ -78,10 +162,10 @@ func memberPeerScheme(member *lll.EtcdMember) string {
 }
 
 // buildInitialCluster builds the --initial-cluster flag value from member names.
-func buildInitialCluster(peerScheme string, names []string, cluster, namespace string) string {
+func buildInitialCluster(peerScheme string, names []string, service, namespace string) string {
 	parts := make([]string, len(names))
 	for i, name := range names {
-		parts[i] = name + "=" + peerURL(peerScheme, name, cluster, namespace)
+		parts[i] = name + "=" + peerURL(peerScheme, name, service, namespace)
 	}
 	return strings.Join(parts, ",")
 }
@@ -199,19 +283,25 @@ func peerSecretName(cluster *lll.EtcdCluster) string {
 // learner's own discoverMemberID call where the peer list is just
 // "self" — letting the dialer try anyway is no worse than silently
 // returning [].
-func memberEndpoints(scheme string, members []lll.EtcdMember, cluster, namespace string) []string {
+//
+// Each endpoint is built with the member's OWN Service name
+// (memberServiceName), not a single cluster-wide name: during an in-place
+// migration adopted members resolve under the legacy headless Service while
+// rolled members resolve under the cluster name, so a shared `service` would
+// dial the wrong DNS for half the cluster.
+func memberEndpoints(scheme string, members []lll.EtcdMember, namespace string) []string {
 	voters := make([]string, 0, len(members))
-	for _, m := range members {
-		if m.Status.IsVoter {
-			voters = append(voters, clientURL(scheme, m.Name, cluster, namespace))
+	for i := range members {
+		if members[i].Status.IsVoter {
+			voters = append(voters, clientURL(scheme, members[i].Name, memberServiceName(&members[i]), namespace))
 		}
 	}
 	if len(voters) > 0 {
 		return voters
 	}
 	eps := make([]string, len(members))
-	for i, m := range members {
-		eps[i] = clientURL(scheme, m.Name, cluster, namespace)
+	for i := range members {
+		eps[i] = clientURL(scheme, members[i].Name, memberServiceName(&members[i]), namespace)
 	}
 	return eps
 }
@@ -233,6 +323,20 @@ func memberLabels(cluster, member string) map[string]string {
 	return l
 }
 
+// MemberLabels exposes the operator's member-level label set to external
+// writers that must stamp objects exactly the way the controllers expect —
+// the in-place migration tool labels adopted Pods/PVCs with it so the
+// headless-Service selector, the PDB selector and the /scale Selector all
+// match from the moment the new operator starts.
+func MemberLabels(cluster, member string) map[string]string {
+	return memberLabels(cluster, member)
+}
+
+// ClusterLabels is the cluster-level counterpart of MemberLabels.
+func ClusterLabels(cluster string) map[string]string {
+	return clusterLabels(cluster)
+}
+
 // applyAdditionalMetadata merges the user-supplied labels/annotations from
 // spec.additionalMetadata onto a child object's ObjectMeta. Operator-owned
 // keys (everything already present in objLabels/objAnnotations) always win
@@ -241,6 +345,13 @@ func memberLabels(cluster, member string) map[string]string {
 // are mutated in place (allocated when nil and there is something to merge)
 // and returned, so callers can assign the results straight onto
 // ObjectMeta.{Labels,Annotations}.
+//
+// Keys under ReservedAnnotationPrefix are dropped from BOTH maps before
+// merging. This is load-bearing, not hygiene: additionalMetadata is mirrored
+// onto every EtcdMember the operator creates, so if a user could set
+// AnnHeadlessServiceName / AnnDataDirSubPath through it, every new member
+// would inherit the migration knobs (breaking the self-wipe) and
+// data-dir-subpath would become a user-controllable path into --data-dir.
 func applyAdditionalMetadata(objLabels, objAnnotations map[string]string, md *lll.AdditionalMetadata) (labels, annotations map[string]string) {
 	if md == nil {
 		return objLabels, objAnnotations
@@ -249,6 +360,9 @@ func applyAdditionalMetadata(objLabels, objAnnotations map[string]string, md *ll
 		objLabels = make(map[string]string, len(md.Labels))
 	}
 	for k, v := range md.Labels {
+		if strings.HasPrefix(k, ReservedAnnotationPrefix) {
+			continue
+		}
 		if _, taken := objLabels[k]; !taken {
 			objLabels[k] = v
 		}
@@ -257,6 +371,9 @@ func applyAdditionalMetadata(objLabels, objAnnotations map[string]string, md *ll
 		objAnnotations = make(map[string]string, len(md.Annotations))
 	}
 	for k, v := range md.Annotations {
+		if strings.HasPrefix(k, ReservedAnnotationPrefix) {
+			continue
+		}
 		if _, taken := objAnnotations[k]; !taken {
 			objAnnotations[k] = v
 		}

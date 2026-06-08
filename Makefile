@@ -79,6 +79,10 @@ build: manifests generate fmt vet ## Build manager binary.
 kubectl-etcd: fmt vet ## Build the kubectl-etcd plugin binary.
 	go build -o bin/kubectl-etcd ./cmd/kubectl-etcd
 
+.PHONY: etcd-migrate
+etcd-migrate: fmt vet ## Build the etcd-migrate (legacy v1alpha1 -> v1alpha2) CLI binary.
+	go build -o bin/etcd-migrate ./cmd/etcd-migrate
+
 .PHONY: run
 run: manifests generate fmt vet ## Run a controller from your host.
 	go run ./main.go
