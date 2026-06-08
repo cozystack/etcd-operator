@@ -3,7 +3,7 @@
 IMG ?= ghcr.io/aenix-io/etcd-operator:latest
 # K8S_VERSION refers to the version of kubebuilder assets to be downloaded by envtest binary.
 # renovate: datasource=github-tags depName=kubernetes/kubernetes
-K8S_VERSION ?= v1.30.0
+K8S_VERSION ?= v1.36.1
 K8S_VERSION_TRIMMED_V = $(subst v,,$(K8S_VERSION))
 
 # Get the currently used golang install path (in GOPATH/bin, unless GOBIN is set)
@@ -177,9 +177,9 @@ KIND_CLUSTER_NAME ?= etcd-operator-kind
 NAMESPACE ?= etcd-operator-system
 
 # renovate: datasource=github-tags depName=prometheus-operator/prometheus-operator
-PROMETHEUS_OPERATOR_VERSION ?= v0.74.0
+PROMETHEUS_OPERATOR_VERSION ?= v0.91.0
 # renovate: datasource=github-tags depName=jetstack/cert-manager
-CERT_MANAGER_VERSION ?= v1.15.0
+CERT_MANAGER_VERSION ?= v1.20.2
 
 ifndef ignore-not-found
   ignore-not-found = false
@@ -265,20 +265,20 @@ CRD_REF_DOCS ?= $(LOCALBIN)/crd-ref-docs
 # renovate: datasource=github-tags depName=kubernetes-sigs/kustomize
 KUSTOMIZE_VERSION ?= v5.3.0
 # renovate: datasource=github-tags depName=kubernetes-sigs/controller-tools
-CONTROLLER_TOOLS_VERSION ?= v0.16.5
+CONTROLLER_TOOLS_VERSION ?= v0.21.0
 ENVTEST_VERSION ?= latest
 # renovate: datasource=github-tags depName=golangci/golangci-lint
-GOLANGCI_LINT_VERSION ?= v1.60.0
+GOLANGCI_LINT_VERSION ?= v1.64.8
 # renovate: datasource=github-tags depName=kubernetes-sigs/kind
-KIND_VERSION ?= v0.23.0
+KIND_VERSION ?= v0.32.0
 # renovate: datasource=github-tags depName=helm/helm
-HELM_VERSION ?= v3.15.2
+HELM_VERSION ?= v3.21.0
 # renovate: datasource=github-tags depName=losisin/helm-values-schema-json
-HELM_SCHEMA_VERSION ?= v1.4.1
+HELM_SCHEMA_VERSION ?= v1.9.2
 # renovate: datasource=github-tags depName=norwoodj/helm-docs
-HELM_DOCS_VERSION ?= v1.13.1
+HELM_DOCS_VERSION ?= v1.14.2
 # renovate: datasource=github-tags depName=mikefarah/yq
-YQ_VERSION ?= v4.44.1
+YQ_VERSION ?= v4.53.3
 
 ## Tool install scripts
 KUSTOMIZE_INSTALL_SCRIPT ?= "https://raw.githubusercontent.com/kubernetes-sigs/kustomize/master/hack/install_kustomize.sh"

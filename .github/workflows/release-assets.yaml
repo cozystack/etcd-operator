@@ -16,10 +16,10 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4.1.7
-      - uses: actions/setup-go@v5.0.1
+      - uses: actions/checkout@v4.3.1
+      - uses: actions/setup-go@v5.6.0
         with:
-          go-version: 1.23.0
+          go-version: 1.26.4
       - name: Get tag from current run
         run: |
           TAG=${{ github.ref_name }}
@@ -27,21 +27,21 @@ jobs:
           echo "RELEASE_TAG=${TAG}" >> $GITHUB_ENV
           echo "RELEASE_TAG_TRIMMED_V=${TAG#v}" >> $GITHUB_ENV
       - run: make build-dist-manifests IMG=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${RELEASE_TAG}
-      - uses: svenstaro/upload-release-action@2.9.0
+      - uses: svenstaro/upload-release-action@2.11.5
         with:
           repo_token: ${{ secrets.GITHUB_TOKEN }}
           file: dist/etcd-operator.yaml
           asset_name: etcd-operator.yaml
           tag: ${{ github.ref }}
           overwrite: true
-      - uses: svenstaro/upload-release-action@2.9.0
+      - uses: svenstaro/upload-release-action@2.11.5
         with:
           repo_token: ${{ secrets.GITHUB_TOKEN }}
           file: dist/etcd-operator.crds.yaml
           asset_name: etcd-operator.crds.yaml
           tag: ${{ github.ref }}
           overwrite: true
-      - uses: svenstaro/upload-release-action@2.9.0
+      - uses: svenstaro/upload-release-action@2.11.5
         with:
           repo_token: ${{ secrets.GITHUB_TOKEN }}
           file: dist/etcd-operator.non-crds.yaml

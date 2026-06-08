@@ -104,7 +104,7 @@ kubeRbacProxy:
     pullPolicy: IfNotPresent
 
     # -- Version of image
-    tag: v0.18.1
+    tag: v0.22.0
 
   args:
     - --secure-listen-address=0.0.0.0:8443
