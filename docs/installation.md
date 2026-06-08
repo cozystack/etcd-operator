@@ -15,7 +15,44 @@ For the operator's runtime behaviour see [concepts](concepts.md); for day-2 oper
 
 Workload-side: every etcd Pod runs as UID 65532 with `runAsNonRoot=true`, `allowPrivilegeEscalation=false`, all capabilities dropped, and `seccompProfile=RuntimeDefault`. The Pods comply with the `restricted` PodSecurity profile. If your cluster enforces a stricter policy, see `controllers/etcdmember_controller.go`'s `buildPod` for the exact security context the operator emits and adjust accordingly.
 
-## Quick deploy
+## Install from a release
+
+Tagged releases publish a signed multi-arch operator image to GHCR and attach
+ready-to-apply install manifests to the GitHub release — no checkout, no build,
+no registry of your own. This is the recommended path for consuming a release.
+
+```sh
+# Pick a released version (see https://github.com/cozystack/etcd-operator/releases).
+VERSION=v0.5.0
+
+# Everything (CRDs + namespace + RBAC + controller Deployment + Service):
+kubectl apply -f https://github.com/cozystack/etcd-operator/releases/download/$VERSION/etcd-operator.yaml
+```
+
+The manifest already points the manager (and its `OPERATOR_IMAGE`, used for
+snapshot/restore Pods) at `ghcr.io/cozystack/etcd-operator:$VERSION` — the same
+tag whose image the release published, so there is nothing to substitute.
+
+If you split CRDs from the rest (e.g. CRDs are applied by a separate
+cluster-admin step, or server-side-applied to dodge the annotation size limit):
+
+```sh
+kubectl apply --server-side -f https://github.com/cozystack/etcd-operator/releases/download/$VERSION/etcd-operator.crds.yaml
+kubectl apply             -f https://github.com/cozystack/etcd-operator/releases/download/$VERSION/etcd-operator.non-crds.yaml
+```
+
+The image is cosign-signed (keyless). To verify before deploying:
+
+```sh
+cosign verify ghcr.io/cozystack/etcd-operator:$VERSION \
+  --certificate-identity-regexp 'https://github.com/cozystack/etcd-operator/.github/workflows/.+' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com
+```
+
+To pull a prebuilt image without the release manifests (e.g. to feed your own
+overlay), the image ref is `ghcr.io/cozystack/etcd-operator:<tag>`.
+
+## Quick deploy (build from source)
 
 The repo's Makefile drives a complete install. From a checkout:
 

@@ -1,0 +1,68 @@
+name: Helm publish
+
+# Tag-based Helm chart release. Pushing a semver tag packages
+# charts/etcd-operator and pushes it as an OCI chart to GHCR under the org's
+# charts repo (ghcr.io/<owner>/charts/etcd-operator), versioned from the tag.
+# Same shape as the legacy v1alpha1 helm-publish, retargeted at this org and
+# using the built-in GITHUB_TOKEN.
+on:
+  push:
+    tags: [ 'v*.*.*' ]
+
+env:
+  REGISTRY: ghcr.io
+  CHARTS_REPOSITORY: ${{ github.repository_owner }}/charts
+  CHART_NAME: etcd-operator
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # make helm-sync regenerates the CRDs (controller-gen) and copies them
+      # into the chart, so the published package always carries CRDs matching
+      # the tagged API types — never a stale committed copy.
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Install Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: 'v3.16.4'
+
+      - name: Sync CRDs into the chart
+        run: make helm-sync
+
+      - name: Resolve chart versions from tag
+        run: |
+          TAG=${{ github.ref_name }}
+          echo "RELEASE_TAG=${TAG}" >> $GITHUB_ENV
+          # Chart version is semver without the leading v; appVersion keeps it.
+          echo "RELEASE_TAG_TRIMMED_V=${TAG#v}" >> $GITHUB_ENV
+
+      - name: Helm registry login
+        run: |
+          helm registry login \
+            --username ${{ github.actor }} \
+            --password ${{ secrets.GITHUB_TOKEN }} \
+            ${{ env.REGISTRY }}
+
+      - name: Package chart
+        working-directory: charts
+        run: |
+          helm package ${{ env.CHART_NAME }} \
+            --version "${RELEASE_TAG_TRIMMED_V}" \
+            --app-version "${RELEASE_TAG}"
+
+      - name: Push chart
+        working-directory: charts
+        run: |
+          helm push "${{ env.CHART_NAME }}-${RELEASE_TAG_TRIMMED_V}.tgz" \
+            "oci://${{ env.REGISTRY }}/${{ env.CHARTS_REPOSITORY }}"

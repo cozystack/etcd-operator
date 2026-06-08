@@ -1,0 +1,79 @@
+name: Docker publish
+
+# Tag-based image release. Pushing a semver tag (e.g. v0.5.0) builds the
+# operator image multi-arch, pushes it to GHCR under this repo's name, and
+# signs it with cosign. This is the same shape as the legacy v1alpha1 release
+# process, retargeted at ghcr.io/<owner>/<repo> via the built-in GITHUB_TOKEN
+# (no Docker Hub secrets needed).
+#
+# Release order: push the tag FIRST (this builds ghcr.io/.../etcd-operator:<tag>),
+# then publish the GitHub release for that tag — release-assets.yml renders the
+# install manifests pointing at this image.
+
+on:
+  push:
+    tags: [ 'v*.*.*' ]
+
+env:
+  REGISTRY: ghcr.io
+  # github.repository is <owner>/<repo>, e.g. cozystack/etcd-operator
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: read
+      packages: write
+      # Needed for the keyless cosign identity challenge (sigstore/fulcio).
+      id-token: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3.5.0
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3.3.0
+
+      - name: Log into registry ${{ env.REGISTRY }}
+        uses: docker/login-action@v3.2.0
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5.5.1
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          # Pin the published tag to the exact git ref (e.g. v0.5.0). This is
+          # the SAME source release-assets.yml uses for the IMG it bakes into
+          # the install manifest (its RELEASE_TAG is github.ref_name too), so
+          # the image that ships and the image the manifest references are
+          # provably identical. Don't rely on metadata-action's implicit
+          # default: it also emits a moving `latest` and its default tag set is
+          # easy to misread — explicit keeps the publish/manifest contract clear.
+          tags: |
+            type=raw,value=${{ github.ref_name }}
+
+      - name: Build and push Docker image
+        id: build-and-push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          platforms: linux/amd64,linux/arm64
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Sign the published Docker image
+        env:
+          TAGS: ${{ steps.meta.outputs.tags }}
+          DIGEST: ${{ steps.build-and-push.outputs.digest }}
+        run: echo "${TAGS}" | xargs -I {} cosign sign --yes {}@${DIGEST}

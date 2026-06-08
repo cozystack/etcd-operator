@@ -1,0 +1,64 @@
+name: Release install smoke
+
+# Gates changes to the tag-release machinery by running the full ship-then-
+# install flow on a throwaway kind cluster (hack/release-smoke.sh), for BOTH
+# shipped install paths: the rendered manifest (release-assets.yml) and the
+# Helm chart (helm-publish.yml). Each builds the image, installs it, and
+# asserts the operator comes up and reconciles a 1-node cluster. Catches
+# release-pipeline regressions (image/manifest tag drift, broken OPERATOR_IMAGE
+# wiring, CRDs that don't apply, a chart missing an RBAC rule) on the PR that
+# introduces them, not on the first real tag. The image is loaded into kind,
+# never pushed — no registry credentials.
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/release-smoke.yml'
+      - '.github/workflows/docker-publish.yml'
+      - '.github/workflows/release-assets.yml'
+      - '.github/workflows/helm-publish.yml'
+      - 'hack/release-smoke.sh'
+      - 'charts/**'
+      - 'Makefile'
+      - 'Dockerfile'
+      - 'config/**'
+      - 'api/**'
+  workflow_dispatch:
+
+concurrency:
+  group: release-smoke-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        mode: [ manifest, helm ]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Install Helm
+        if: matrix.mode == 'helm'
+        uses: azure/setup-helm@v4
+        with:
+          version: 'v3.16.4'
+
+      - name: release-install smoke (${{ matrix.mode }}, kind)
+        # Builds the image, installs via the matrix path, and asserts the
+        # operator is Available and a 1-node EtcdCluster reaches READY. On
+        # failure the script's EXIT trap dumps cluster state before teardown.
+        run: |
+          if [ "${{ matrix.mode }}" = helm ]; then
+            make helm-smoke
+          else
+            make release-smoke
+          fi

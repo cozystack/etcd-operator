@@ -1,0 +1,59 @@
+name: Upload release assets
+
+# When a GitHub release is created for a tag, render the install manifests for
+# that tag's image and attach them to the release. `make build-dist-manifests`
+# sets the `controller` image (and, via the kustomize replacement in
+# config/default, the manager's OPERATOR_IMAGE env) to the released ref, so the
+# attached YAML deploys the matching operator and its snapshot/restore agent.
+
+on:
+  release:
+    types: [ created ]
+  workflow_dispatch:
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  release-assets:
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Resolve release tag
+        run: echo "RELEASE_TAG=${{ github.ref_name }}" >> $GITHUB_ENV
+
+      - name: Render install manifests
+        run: make build-dist-manifests IMG=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${RELEASE_TAG}
+
+      - uses: svenstaro/upload-release-action@2.9.0
+        with:
+          repo_token: ${{ secrets.GITHUB_TOKEN }}
+          file: dist/etcd-operator.yaml
+          asset_name: etcd-operator.yaml
+          tag: ${{ github.ref }}
+          overwrite: true
+
+      - uses: svenstaro/upload-release-action@2.9.0
+        with:
+          repo_token: ${{ secrets.GITHUB_TOKEN }}
+          file: dist/etcd-operator.crds.yaml
+          asset_name: etcd-operator.crds.yaml
+          tag: ${{ github.ref }}
+          overwrite: true
+
+      - uses: svenstaro/upload-release-action@2.9.0
+        with:
+          repo_token: ${{ secrets.GITHUB_TOKEN }}
+          file: dist/etcd-operator.non-crds.yaml
+          asset_name: etcd-operator.non-crds.yaml
+          tag: ${{ github.ref }}
+          overwrite: true

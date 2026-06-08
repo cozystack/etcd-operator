@@ -1,0 +1,128 @@
+# RBAC. The manager ClusterRole rules below mirror config/rbac/role.yaml (the
+# generated source of truth from the +kubebuilder:rbac markers). They change
+# rarely; the release-install e2e (helm mode) is the guard — a missing
+# permission means the operator can't reconcile and the smoke's 1-node cluster
+# never reaches READY.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "etcd-operator.fullname" . }}-manager-role
+  labels:
+    {{- include "etcd-operator.labels" . | nindent 4 }}
+rules:
+- apiGroups: [""]
+  resources: [persistentvolumeclaims]
+  verbs: [create, delete, get, list, patch, update, watch]
+- apiGroups: [""]
+  resources: [pods]
+  verbs: [create, delete, get, list, patch, watch]
+- apiGroups: [""]
+  resources: [pods/log]
+  verbs: [get]
+- apiGroups: [""]
+  resources: [secrets]
+  verbs: [get, list, watch]
+- apiGroups: [""]
+  resources: [services]
+  verbs: [create, get, list, patch, update, watch]
+- apiGroups: [batch]
+  resources: [jobs]
+  verbs: [create, delete, get, list, watch]
+- apiGroups: [cert-manager.io]
+  resources: [certificates]
+  verbs: [create, get, list, patch, update, watch]
+- apiGroups: [etcd-operator.cozystack.io]
+  resources: [etcdclusters]
+  verbs: [get, list, watch]
+- apiGroups: [etcd-operator.cozystack.io]
+  resources: [etcdclusters/finalizers, etcdmembers/finalizers, etcdsnapshots/finalizers]
+  verbs: [update]
+- apiGroups: [etcd-operator.cozystack.io]
+  resources: [etcdclusters/status, etcdmembers/status, etcdsnapshots/status]
+  verbs: [get, patch, update]
+- apiGroups: [etcd-operator.cozystack.io]
+  resources: [etcdmembers, etcdsnapshots]
+  verbs: [create, delete, get, list, patch, update, watch]
+- apiGroups: [policy]
+  resources: [poddisruptionbudgets]
+  verbs: [create, delete, get, list, patch, update, watch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "etcd-operator.fullname" . }}-manager-rolebinding
+  labels:
+    {{- include "etcd-operator.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "etcd-operator.fullname" . }}-manager-role
+subjects:
+- kind: ServiceAccount
+  name: {{ include "etcd-operator.serviceAccountName" . }}
+  namespace: {{ .Release.Namespace }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "etcd-operator.fullname" . }}-leader-election-role
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "etcd-operator.labels" . | nindent 4 }}
+rules:
+- apiGroups: [""]
+  resources: [configmaps]
+  verbs: [get, list, watch, create, update, patch, delete]
+- apiGroups: [coordination.k8s.io]
+  resources: [leases]
+  verbs: [get, list, watch, create, update, patch, delete]
+- apiGroups: [""]
+  resources: [events]
+  verbs: [create, patch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "etcd-operator.fullname" . }}-leader-election-rolebinding
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "etcd-operator.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "etcd-operator.fullname" . }}-leader-election-role
+subjects:
+- kind: ServiceAccount
+  name: {{ include "etcd-operator.serviceAccountName" . }}
+  namespace: {{ .Release.Namespace }}
+{{- if .Values.kubeRbacProxy.enabled }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "etcd-operator.fullname" . }}-proxy-role
+  labels:
+    {{- include "etcd-operator.labels" . | nindent 4 }}
+rules:
+- apiGroups: [authentication.k8s.io]
+  resources: [tokenreviews]
+  verbs: [create]
+- apiGroups: [authorization.k8s.io]
+  resources: [subjectaccessreviews]
+  verbs: [create]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "etcd-operator.fullname" . }}-proxy-rolebinding
+  labels:
+    {{- include "etcd-operator.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "etcd-operator.fullname" . }}-proxy-role
+subjects:
+- kind: ServiceAccount
+  name: {{ include "etcd-operator.serviceAccountName" . }}
+  namespace: {{ .Release.Namespace }}
+{{- end }}
