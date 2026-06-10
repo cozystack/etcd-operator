@@ -7,6 +7,20 @@ on:
     branches: [ main ]
 
 jobs:
+  image-multiarch:
+    # Build-only assertion that the operator image builds for every published
+    # platform. Deliberately sets up buildx WITHOUT QEMU: the Dockerfile builder
+    # is pinned to $BUILDPLATFORM and Go cross-compiles via GOARCH, so both legs
+    # must build natively on this amd64 runner with no emulation. If the
+    # --platform=$BUILDPLATFORM pin regresses, the arm64 leg fails here (exec
+    # format error) instead of silently breaking the tag-release publish.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3.3.0
+      - name: Build multi-arch image (no push, no QEMU)
+        run: docker buildx build --platform linux/amd64,linux/arm64 -t etcd-operator:buildtest .
+
   verify:
     runs-on: ubuntu-latest
     steps:
