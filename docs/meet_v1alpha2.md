@@ -1,183 +1,55 @@
-# Meet etcd-operator in Cozystack
+# Cozystack introduces a reworked etcd-operator with a new API
 
-Aenix has donated the etcd operator to the Cozystack project!
+The [etcd-operator](https://github.com/cozystack/etcd-operator) project, which develops an operator for deploying and maintaining [etcd](https://etcd.io) clusters on Kubernetes, has been donated to the [Cozystack](https://cozystack.io) project. Alongside the donation, a from-scratch implementation of the operator has been published under a new API version — `etcd-operator.cozystack.io/v1alpha2`, superseding the previous `etcd.aenix.io/v1alpha1`. Instead of managing members through a StatefulSet, the new implementation directly drives etcd's native Membership API (the MemberAdd, MemberPromote and MemberRemove operations), giving the operator full control over cluster membership. The new implementation was written by [Timofei Larkin](https://github.com/lllamnyp), one of the maintainers of the previous codebase, which is preserved in the [v1alpha1](https://github.com/cozystack/etcd-operator/tree/v1alpha1) branch. The project is written in Go and distributed under the Apache 2.0 license. Cozystack is developed under the umbrella of the CNCF as a Sandbox project.
 
-Not just a formal adoption, but also an improved implementation under new API version:
-`etcd-operator.cozystack.io/v1alpha2`. This
-page is the orientation: what the operator does, what changed if you used the
-older `etcd.aenix.io/v1alpha1` operator, and how the feature set lines up
-against a popular alternative.
+The project was started by Ænix, which assembled an initiative group from the Russian-speaking Kubernetes community to build it. After the base implementation was completed, an attempt was made to donate the project to the CNCF. Prompted by this initiative, the etcd project concluded that an official operator was needed and formed its own working group, which, after evaluating existing implementations, chose to develop a codebase from scratch — this is how [etcd-io/etcd-operator](https://github.com/etcd-io/etcd-operator) came to be. Feature-wise the official operator has not yet caught up with the aenix etcd-operator, which is already used in production by the community and by projects such as Cozystack and [Kamaji](https://github.com/clastix/kamaji), so the project has continued its own independent line of development (a comparison with the official operator is given at the end of this article).
 
-The guiding idea of `v1alpha2` is **make it better while keeping the good**.
-The parts that worked — declarative clusters, in-place storage, the Cozystack
-and Kamaji integration shape — are preserved, often verbatim, so existing
-operational habits carry over. The parts that were fragile — a free-form
-options map, StatefulSet-shaped lifecycle, webhook-dependent validation — are
-rebuilt on stricter, protocol-aware foundations. Nothing good was thrown away
-to get there; where a thing moved, there is a migration path, not a cliff.
+The operator manages etcd clusters through two resources: EtcdCluster describes the desired state of a cluster (replica count, etcd version, storage parameters, TLS, authentication, etcd tuning), while EtcdMember is created by the operator itself for every cluster member and owns its Pod and PVC. Unlike typical solutions, the operator does not use a StatefulSet — each member's Pod and PVC are reconciled independently, and cluster membership changes go through etcd's Membership API: new members join as learners (MemberAdd) and are later promoted to voting members (MemberPromote), removal is performed with a graceful exit from quorum (MemberRemove), and pausing a cluster preserves member identity. The rationale behind this architecture is described in [concepts.md](concepts.md).
 
----
+Key features:
 
-## If you're new to etcd-operator
+- cluster bootstrap and scaling in both directions one member at a time: learner-mode joins, graceful removal with exit from quorum;
+- pausing a cluster without losing data (`spec.replicas: 0`) and resuming it with the same cluster and member identifiers;
+- data storage in PVCs (default) or in tmpfs — for data that can be reconstructed; memory-backed members are automatically recreated when their Pod is lost;
+- independent TLS configuration for client and peer connections: bring your own Secrets or let the operator issue and automatically renew certificates via cert-manager;
+- authentication with a single root user whose credentials are supplied through a Secret;
+- snapshots to S3 or a PVC via the EtcdSnapshot resource and cluster restore from a snapshot at initial bootstrap;
+- an automatically created PodDisruptionBudget that prevents drain operations from breaking quorum;
+- spec validation by the apiserver (CEL expressions in the CRD) without webhooks or a cert-manager dependency;
+- the `/scale` subresource, which makes `kubectl scale` and the VerticalPodAutoscaler work, a metrics port on 2381, pass-through `affinity` and `topologySpreadConstraints`;
+- the kubectl-etcd plugin for day-2 operations performed after the cluster is deployed.
 
-The operator runs [etcd](https://etcd.io/) clusters on Kubernetes through two
-custom resources:
+Compared with the old `etcd.aenix.io/v1alpha1` implementation, the following changes were made:
 
-- **`EtcdCluster`** — what *you* create. Cluster-wide intent: replica count,
-  etcd version, per-member storage, TLS, auth, tuning.
-- **`EtcdMember`** — what the *operator* creates, one per etcd member. Each owns
-  its own Pod and PVC. You don't edit these.
+- the API group changed from `etcd.aenix.io` to `etcd-operator.cozystack.io`;
+- separate per-member EtcdMember resources are used instead of a StatefulSet;
+- the free-form `spec.options` map was replaced with a typed set of parameters (`quota-backend-bytes`, auto-compaction mode and retention, `snapshot-count`) — the free-form map allowed passing flags that conflicted with the operator's logic;
+- the EtcdBackup resource was renamed to EtcdSnapshot with its semantics preserved;
+- validation moved from a webhook to CEL rules in the CRD;
+- the cluster Service was switched to headless mode, which is required for stable per-member DNS names.
 
-There is deliberately **no StatefulSet**. Each member's Pod and PVC are
-reconciled independently, which lets the operator model etcd's real lifecycle —
-learner-mode joins, member-ID assignment, graceful `MemberRemove`,
-scale-to-zero pause/resume — without fighting StatefulSet's "every replica is
-interchangeable" assumption. The full rationale is in
-[concepts.md](concepts.md).
+Migration is performed in place with the etcd-migrate tool: a running cluster of the old operator is adopted without moving data, restarting Pods or losing quorum — only object ownership, labels and annotations are changed, after which the new operator takes over. Clients that reach the cluster by DNS name keep working unchanged. The procedure is described in [migration.md](migration.md).
 
-What you get out of the box today:
+The implementation covers most items of the [roadmap](https://github.com/etcd-io/etcd-operator/blob/main/docs/roadmap.md) of the official [etcd-operator](https://github.com/etcd-io/etcd-operator) developed by the etcd project. Status by roadmap item:
 
-- **Bootstrap, scale up/down** one member at a time (learner-mode adds,
-  promote, graceful removal).
-- **Scale to zero** (`spec.replicas: 0`) to park a cluster without losing its
-  data, and resume it with the same cluster and member IDs.
-- **Storage choices**: PVC-backed by default, or opt-in `Memory` (tmpfs) for
-  reconstructable state; per-cluster `storageClassName`.
-- **TLS** on the client and peer surfaces independently — bring your own
-  Secrets or let the operator drive **cert-manager** issuance (auto-renewing).
-- **Single-user (`root`) authentication** with bring-your-own credentials.
-- **Snapshots & restore**: one-shot `EtcdSnapshot` to S3 or a PVC, and
-  restore-on-bootstrap from a snapshot.
-- **Safety rails**: an auto-emitted `PodDisruptionBudget` that won't let a
-  drain break quorum, apiserver-enforced **CEL validation** (no webhook, no
-  cert dependency), and a locking pattern that keeps mid-flight spec edits from
-  corrupting consensus.
-- **Ops integration**: the `/scale` subresource (so `kubectl scale` and a
-  `VerticalPodAutoscaler` work), an always-on plaintext metrics port at `2381`,
-  pass-through `affinity` / `topologySpreadConstraints`, and merged
-  `additionalMetadata`.
+1. Create a new etcd cluster, e.g 3 or 5 members cluster of a specified etcd version — implemented.
+2. Understand health of a cluster — implemented.
+3. Enabling TLS communication, including cert renewal — implemented.
+4. Upgrade across patches or one minor version — partially implemented: `spec.version` applies only to newly created members.
+5. Scale in and out, e.g 1 -> 3 -> 5 members and vice versa — implemented.
+6. Support customizing etcd options (via flags or env vars) — implemented, as a typed closed set of parameters.
+7. Recover a single failed cluster member (still have quorum) — partially implemented: members with a broken PVC are not replaced automatically yet.
+8. Recover from multiple failed cluster members (quorum loss) — not implemented, work is planned.
+9. Create on-demand backup of a cluster — implemented.
+10. Create periodic backup of a cluster — deliberately out of scope: recurring snapshots are expected to be driven by a standard CronJob.
 
-Start with the [Quick start in the README](../README.md#quick-start), then
-[installation.md](installation.md) and [operations.md](operations.md).
+Beyond that roadmap, `v1alpha2` also ships capabilities the official plan does not enumerate, driven by the Cozystack and Kamaji multi-tenant use case:
 
----
-
-## If you're coming from the old version
-
-If you ran the legacy aenix operator (`etcd.aenix.io/v1alpha1`), here is what
-changed — and, just as importantly, what didn't. The full procedure, including
-the in-place migration tool, lives in [migration.md](migration.md).
-
-| Area | Old (`etcd.aenix.io/v1alpha1`) | New (`etcd-operator.cozystack.io/v1alpha2`) | Why |
-| --- | --- | --- | --- |
-| **API group** | `etcd.aenix.io` | `etcd-operator.cozystack.io` | New home; old identity scrubbed. |
-| **Workload model** | StatefulSet | Per-member `EtcdMember` CRs, no StatefulSet | Protocol-aware lifecycle: learner joins, member-ID assignment, graceful removal, pause/resume. |
-| **etcd tuning** | Free-form `spec.options` map | Typed `spec.options` (closed set) | A string→string map let users inject operator-conflicting flags. The new set types exactly the keys actually used; new flags land as new fields, not an escape hatch. |
-| **Backups** | `EtcdBackup` | `EtcdSnapshot` | Pre-GA naming change; semantics preserved. |
-| **Validation** | webhook | apiserver CEL on the CRD | Removes the webhook + cert-manager dependency from the validation path. |
-| **Services** | ClusterIP | one Service reshaped to headless | Required for stable per-member peer DNS; has consumer prerequisites — read migration.md first. |
-| **Auth** | — | single-user `root`, BYO credentials Secret | New capability (see below). |
-
-**Migration is in-place.** The `etcd-migrate` tool adopts a running legacy
-cluster without moving data, restarting a pod, or touching quorum — it changes
-ownership, labels, member annotations and CRs only, and the new operator takes
-over the live data plane. Clients that connect by DNS name keep working. See
-[migration.md](migration.md) for the `--apply` prerequisites (especially the
-one Service that changes shape and the auth-credentials step).
-
-### What `v1alpha2` fixed from the old implementation
-
-The rebuild lands the work behind a long tail of issues tracked against the
-prior implementation. A selection, grouped by theme:
-
-- **Auth & RBAC**: enable etcd auth ([#160](https://github.com/cozystack/etcd-operator/issues/160)), RBAC switcher design ([#195](https://github.com/cozystack/etcd-operator/issues/195)).
-- **TLS**: single CA for server+client certs as Kamaji requires ([#162](https://github.com/cozystack/etcd-operator/issues/162)); replace the deprecated `gcr.io/kubebuilder/kube-rbac-proxy` image ([#271](https://github.com/cozystack/etcd-operator/issues/271)); fix flaky TLS cluster creation ([#264](https://github.com/cozystack/etcd-operator/issues/264)).
-- **Storage & tuning**: EmptyDir/memory storage ([#214](https://github.com/cozystack/etcd-operator/issues/214)); enable autocompaction ([#222](https://github.com/cozystack/etcd-operator/issues/222)); set `quota-backend-bytes` from requested size ([#211](https://github.com/cozystack/etcd-operator/issues/211)); optimize default CPU/memory quotas ([#199](https://github.com/cozystack/etcd-operator/issues/199)).
-- **Observability & ops**: metrics Service/port ([#273](https://github.com/cozystack/etcd-operator/issues/273)); detailed logs for ConfigMap and Service ([#177](https://github.com/cozystack/etcd-operator/issues/177)); disable the development logger ([#208](https://github.com/cozystack/etcd-operator/issues/208)); fix logging-system issues ([#235](https://github.com/cozystack/etcd-operator/issues/235)); the `kubectl-etcd` plugin ([#212](https://github.com/cozystack/etcd-operator/issues/212)).
-- **API & correctness**: use `corev1.PodSpec`-shaped passthrough ([#172](https://github.com/cozystack/etcd-operator/issues/172)); sorting for extra keys ([#248](https://github.com/cozystack/etcd-operator/issues/248)); breaking Service rename ([#166](https://github.com/cozystack/etcd-operator/issues/166)).
-
----
-
-## How it compares: a popular alternative
-
-[etcd-io/etcd-operator](https://github.com/etcd-io/etcd-operator) is a popular
-alternative etcd operator, and its
-[roadmap](https://github.com/etcd-io/etcd-operator/blob/main/docs/roadmap.md)
-is a useful yardstick because it enumerates what a "complete" etcd operator
-should do. Here is where `v1alpha2` stands against each of its milestones.
-
-Legend: ✅ implemented · 🟡 partial / by-design-different · ⬜ not yet.
-
-### v0.1.0 — Core lifecycle
-
-| Roadmap item | Status | Notes |
-| --- | --- | --- |
-| Create a 3/5-member cluster | ✅ | Single seed first, learner-mode adds afterwards. |
-| Understand cluster health | ✅ | `status` conditions (`Available`/`Progressing`/`Degraded`), `readyMembers`, per-Pod `/health` on `:2381`. |
-| Scale in/out (1→3→5 and back) | ✅ | One member at a time, as learners; scale-down via `MemberRemove` finalizer. |
-| Customize etcd options | ✅ 🟡 | Supported, but as a **typed closed set** (`quota-backend-bytes`, auto-compaction mode/retention, `snapshot-count`) rather than a free-form flag map — on purpose. |
-
-### v0.2.0 — Security & upgrades
-
-| Roadmap item | Status | Notes |
-| --- | --- | --- |
-| Enable TLS, with certificate renewal | ✅ | Client and peer planes independently; BYO Secrets or operator-driven cert-manager Certificates that auto-renew. |
-| Cross-version upgrades (patch/minor) | 🟡 | `spec.version` applies to **newly-created** members (scale-up, replacement); there is no in-place rolling upgrade of existing Pods yet. |
-
-### v0.3.0 — Failure recovery
-
-| Roadmap item | Status | Notes |
-| --- | --- | --- |
-| Recover a single failed member (quorum held) | 🟡 | Pod restart / node failure: PVC is preserved and the member rejoins with the same ID. Memory-backed members **auto-replace** on Pod loss. Automatic replacement for *broken* PVC-backed members is not wired yet (`status.brokenMembers` reads 0). |
-| Recover from multiple failures (quorum loss) | ⬜ | Majority-failure recovery is tracked but not implemented ([#202](https://github.com/cozystack/etcd-operator/issues/202)). |
-
-### v0.4.0 — Backup & restore
-
-| Roadmap item | Status | Notes |
-| --- | --- | --- |
-| On-demand backups | ✅ | `EtcdSnapshot` runs a Job that snapshots to S3 or a PVC; `status.artifact` records URI, size, checksum. |
-| Periodic automated backups | 🟡 | Intentionally **out of scope** as a CRD — drive recurring snapshots with a `CronJob`/`kubectl apply`. Schedule-from-etcd-druid is under research ([#257](https://github.com/cozystack/etcd-operator/issues/257)). |
-| Create a cluster from a backup | ✅ | `spec.bootstrap.restore.source` (S3 or PVC); the seed Pod restores before etcd starts. TLS and auth are honored. |
-
-### v1.0.0
-
-| Roadmap item | Status | Notes |
-| --- | --- | --- |
-| Helm chart distribution | 🟡 | Install today is kustomize-based (`make install` / `make deploy`); Helm packaging already implemented in Cozystack. |
-
-### Issues there that `v1alpha2` already addresses
-
-Beyond the roadmap milestones, the [etcd-io/etcd-operator issue
-tracker](https://github.com/etcd-io/etcd-operator/issues) lists open feature
-requests and gaps that this operator already solves. A selection (their issue
-numbers), with how `v1alpha2` stands on each:
-
-| etcd-io/etcd-operator issue | Status here | How |
-| --- | --- | --- |
-| [#302](https://github.com/etcd-io/etcd-operator/issues/302) Support enabling etcd authentication | ✅ | `spec.auth.enabled` provisions the `root` user from a BYO credentials Secret and runs `auth enable` once quorum converges. |
-| [#333](https://github.com/etcd-io/etcd-operator/issues/333) Recover a single failed member (quorum held) | 🟡 | PVC is preserved and the member rejoins with the same ID after Pod/node loss; memory-backed members auto-replace. No automatic replacement for *broken* PVC-backed members yet. |
-| [#135](https://github.com/etcd-io/etcd-operator/issues/135) / [#357](https://github.com/etcd-io/etcd-operator/issues/357) Status reporting on `EtcdCluster` | ✅ | `status` conditions (`Available`/`Progressing`/`Degraded`), `readyMembers`, `clusterID`, `authEnabled`, and a populated `/scale` selector. |
-| [#217](https://github.com/etcd-io/etcd-operator/issues/217) Make labels consistent with Kubernetes | ✅ | Owned objects carry the `app.kubernetes.io/*` set plus cluster/role labels; `spec.additionalMetadata` merges user labels/annotations, operator keys winning on collision. |
-| [#321](https://github.com/etcd-io/etcd-operator/issues/321) Flexible pod template | 🟡 | Addressed by design with typed pass-through fields (`affinity`, `topologySpreadConstraints`, `resources`, `additionalMetadata`) rather than a free-form strategic-merge `podTemplate`. |
-
-Some of their open issues remain open here too, by design or by scope — notably
-in-place upgrades ([#327](https://github.com/etcd-io/etcd-operator/issues/327))
-and recovery from multiple failed members / quorum loss
-([#359](https://github.com/etcd-io/etcd-operator/issues/359)). See
-[What's intentionally not here](#whats-intentionally-not-here-yet).
-
-### Beyond that roadmap
-
-`v1alpha2` also ships capabilities that roadmap doesn't enumerate,
-driven by the Cozystack/Kamaji multi-tenant use case:
-
-- **Scale to zero** (pause/resume) preserving cluster and member identity.
-- **Memory-backed (tmpfs) storage** with operator-driven member replacement.
-- **Apiserver-side CEL validation** — no webhook, no cert dependency.
-- **Auto-emitted PodDisruptionBudget** scoped to voting members.
-- **`/scale` subresource + populated `status.selector`** so `kubectl scale` and
-  a `VerticalPodAutoscaler.targetRef` work directly.
-- **Pass-through scheduling** (`affinity`, `topologySpreadConstraints`) and
-  **merged `additionalMetadata`** across every owned object.
-- **In-place migration tool** from the legacy operator.
-- **`kubectl-etcd` plugin** for day-2 operations.
+- scale to zero (pause/resume) preserving cluster and member identity;
+- memory-backed (tmpfs) storage with operator-driven member replacement;
+- apiserver-side CEL validation — no webhook, no certificate dependency;
+- an auto-emitted PodDisruptionBudget scoped to voting members;
+- the `/scale` subresource with a populated `status.selector`, so `kubectl scale` and a `VerticalPodAutoscaler.targetRef` work directly;
+- pass-through scheduling (`affinity`, `topologySpreadConstraints`) and merged `additionalMetadata` across every owned object;
+- an in-place migration tool from the legacy operator;
+- the kubectl-etcd plugin for day-2 operations.
