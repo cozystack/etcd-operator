@@ -20,7 +20,6 @@ on:
       - 'charts/**'
       - 'Makefile'
       - 'Dockerfile'
-      - 'config/**'
       - 'api/**'
   workflow_dispatch:
 

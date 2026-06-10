@@ -48,16 +48,18 @@ import (
 
 const defaultClusterDomain = "cluster.local"
 
-// placeholderOperatorImage is the image:/OPERATOR_IMAGE value baked into
-// config/manager as the kustomize-replacement target. Running with it
-// un-rewritten means snapshot/restore Pods would ImagePullBackOff forever.
+// placeholderOperatorImage is the un-set sentinel image ref. The Helm chart
+// always renders a real repository:tag (and keeps image == OPERATOR_IMAGE), so
+// this only trips when the operator is run with OPERATOR_IMAGE explicitly left
+// at the placeholder — running on it means snapshot/restore Pods would
+// ImagePullBackOff forever.
 const placeholderOperatorImage = "controller:latest"
 
 // operatorImageError rejects the un-substituted image placeholder so the
 // operator fails fast at startup rather than silently at the first snapshot.
 func operatorImageError(img string) error {
 	if img == placeholderOperatorImage {
-		return fmt.Errorf("operator image is the un-substituted placeholder %q; set OPERATOR_IMAGE / --operator-image to the real operator image (deploy via the config/default overlay or `make deploy IMG=...`), otherwise snapshot/restore Pods will ImagePullBackOff", img)
+		return fmt.Errorf("operator image is the un-substituted placeholder %q; set OPERATOR_IMAGE / --operator-image to the real operator image (deploy with `make deploy IMG=...`, or `helm install --set image.repository=<repo> --set image.tag=<tag>`), otherwise snapshot/restore Pods will ImagePullBackOff", img)
 	}
 	return nil
 }

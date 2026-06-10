@@ -1,0 +1,15 @@
+{{- /*
+Only rendered for `helm template`-based manifest rendering (build-dist-manifests
+sets namespace.create=true) so a bare `kubectl apply -f etcd-operator.yaml` is
+self-contained. Real `helm install` uses --create-namespace instead, so this
+stays off by default.
+*/ -}}
+{{- if .Values.namespace.create }}
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ .Release.Namespace }}
+  labels:
+    {{- include "etcd-operator.labels" . | nindent 4 }}
+    control-plane: controller-manager
+{{- end }}

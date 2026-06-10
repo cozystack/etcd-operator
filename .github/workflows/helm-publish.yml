@@ -24,9 +24,11 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # make helm-sync regenerates the CRDs (controller-gen) and copies them
-      # into the chart, so the published package always carries CRDs matching
-      # the tagged API types — never a stale committed copy.
+      # make manifests regenerates the CRDs and manager RBAC rules (controller-gen)
+      # straight into the chart, so the published package always matches the
+      # tagged API types and +kubebuilder:rbac markers — never a stale committed
+      # copy. (ci.yml's drift gate already enforces this on PRs; this is belt-and-
+      # suspenders at publish time.)
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
@@ -37,8 +39,8 @@ jobs:
         with:
           version: 'v3.16.4'
 
-      - name: Sync CRDs into the chart
-        run: make helm-sync
+      - name: Regenerate CRDs and RBAC into the chart
+        run: make manifests
 
       - name: Resolve chart versions from tag
         run: |

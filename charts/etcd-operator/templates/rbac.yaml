@@ -1,8 +1,8 @@
-# RBAC. The manager ClusterRole rules below mirror config/rbac/role.yaml (the
-# generated source of truth from the +kubebuilder:rbac markers). They change
-# rarely; the release-install e2e (helm mode) is the guard — a missing
-# permission means the operator can't reconcile and the smoke's 1-node cluster
-# never reaches READY.
+# RBAC for the operator. The manager ClusterRole's rules are generated from the
+# +kubebuilder:rbac markers into files/manager-role-rules.yaml (by `make
+# manifests`) and pulled in below — a single source of truth, guarded by
+# ci.yml's codegen-drift gate. The release-scoped name, labels, binding, and the
+# leader-election / proxy roles stay templated here.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
@@ -10,42 +10,7 @@ metadata:
   labels:
     {{- include "etcd-operator.labels" . | nindent 4 }}
 rules:
-- apiGroups: [""]
-  resources: [persistentvolumeclaims]
-  verbs: [create, delete, get, list, patch, update, watch]
-- apiGroups: [""]
-  resources: [pods]
-  verbs: [create, delete, get, list, patch, watch]
-- apiGroups: [""]
-  resources: [pods/log]
-  verbs: [get]
-- apiGroups: [""]
-  resources: [secrets]
-  verbs: [get, list, watch]
-- apiGroups: [""]
-  resources: [services]
-  verbs: [create, get, list, patch, update, watch]
-- apiGroups: [batch]
-  resources: [jobs]
-  verbs: [create, delete, get, list, watch]
-- apiGroups: [cert-manager.io]
-  resources: [certificates]
-  verbs: [create, get, list, patch, update, watch]
-- apiGroups: [etcd-operator.cozystack.io]
-  resources: [etcdclusters]
-  verbs: [get, list, watch]
-- apiGroups: [etcd-operator.cozystack.io]
-  resources: [etcdclusters/finalizers, etcdmembers/finalizers, etcdsnapshots/finalizers]
-  verbs: [update]
-- apiGroups: [etcd-operator.cozystack.io]
-  resources: [etcdclusters/status, etcdmembers/status, etcdsnapshots/status]
-  verbs: [get, patch, update]
-- apiGroups: [etcd-operator.cozystack.io]
-  resources: [etcdmembers, etcdsnapshots]
-  verbs: [create, delete, get, list, patch, update, watch]
-- apiGroups: [policy]
-  resources: [poddisruptionbudgets]
-  verbs: [create, delete, get, list, patch, update, watch]
+  {{- .Files.Get "files/manager-role-rules.yaml" | nindent 2 }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
@@ -125,4 +90,17 @@ subjects:
 - kind: ServiceAccount
   name: {{ include "etcd-operator.serviceAccountName" . }}
   namespace: {{ .Release.Namespace }}
+---
+# Convenience role granting GET on /metrics through the proxy (e.g. for a
+# Prometheus scrape identity). Folded in from config/rbac's metrics-reader;
+# the chart defines it but does not bind it.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "etcd-operator.fullname" . }}-metrics-reader
+  labels:
+    {{- include "etcd-operator.labels" . | nindent 4 }}
+rules:
+- nonResourceURLs: ["/metrics"]
+  verbs: [get]
 {{- end }}

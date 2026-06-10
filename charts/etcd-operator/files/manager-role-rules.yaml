@@ -1,0 +1,120 @@
+- apiGroups:
+    - ""
+  resources:
+    - persistentvolumeclaims
+  verbs:
+    - create
+    - delete
+    - get
+    - list
+    - patch
+    - update
+    - watch
+- apiGroups:
+    - ""
+  resources:
+    - pods
+  verbs:
+    - create
+    - delete
+    - get
+    - list
+    - patch
+    - watch
+- apiGroups:
+    - ""
+  resources:
+    - pods/log
+  verbs:
+    - get
+- apiGroups:
+    - ""
+  resources:
+    - secrets
+  verbs:
+    - get
+    - list
+    - watch
+- apiGroups:
+    - ""
+  resources:
+    - services
+  verbs:
+    - create
+    - get
+    - list
+    - patch
+    - update
+    - watch
+- apiGroups:
+    - batch
+  resources:
+    - jobs
+  verbs:
+    - create
+    - delete
+    - get
+    - list
+    - watch
+- apiGroups:
+    - cert-manager.io
+  resources:
+    - certificates
+  verbs:
+    - create
+    - get
+    - list
+    - patch
+    - update
+    - watch
+- apiGroups:
+    - etcd-operator.cozystack.io
+  resources:
+    - etcdclusters
+  verbs:
+    - get
+    - list
+    - watch
+- apiGroups:
+    - etcd-operator.cozystack.io
+  resources:
+    - etcdclusters/finalizers
+    - etcdmembers/finalizers
+    - etcdsnapshots/finalizers
+  verbs:
+    - update
+- apiGroups:
+    - etcd-operator.cozystack.io
+  resources:
+    - etcdclusters/status
+    - etcdmembers/status
+    - etcdsnapshots/status
+  verbs:
+    - get
+    - patch
+    - update
+- apiGroups:
+    - etcd-operator.cozystack.io
+  resources:
+    - etcdmembers
+    - etcdsnapshots
+  verbs:
+    - create
+    - delete
+    - get
+    - list
+    - patch
+    - update
+    - watch
+- apiGroups:
+    - policy
+  resources:
+    - poddisruptionbudgets
+  verbs:
+    - create
+    - delete
+    - get
+    - list
+    - patch
+    - update
+    - watch

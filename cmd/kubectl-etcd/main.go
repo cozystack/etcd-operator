@@ -27,11 +27,16 @@ import (
 	"github.com/cozystack/etcd-operator/internal/portforward"
 )
 
+// version is stamped at build time via -ldflags "-X main.version=<tag>"
+// (see the Makefile's CLI_LDFLAGS); "dev" for un-stamped local builds.
+var version = "dev"
+
 func main() {
 	var rootCmd = &cobra.Command{
-		Use:   "kubectl-etcd",
-		Short: "Kubectl etcd plugin",
-		Long:  `Manage etcd pods spawned by etcd-operator`,
+		Use:     "kubectl-etcd",
+		Version: version,
+		Short:   "Kubectl etcd plugin",
+		Long:    `Manage etcd pods spawned by etcd-operator`,
 		// Subcommands report failures by returning an error (RunE); a runtime
 		// failure is not a usage error, so don't dump the help text for it.
 		SilenceUsage: true,

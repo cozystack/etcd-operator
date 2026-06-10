@@ -52,56 +52,108 @@ cosign verify ghcr.io/cozystack/etcd-operator:$VERSION \
 To pull a prebuilt image without the release manifests (e.g. to feed your own
 overlay), the image ref is `ghcr.io/cozystack/etcd-operator:<tag>`.
 
-## Quick deploy (build from source)
+## Install with Helm
 
-The repo's Makefile drives a complete install. From a checkout:
+Helm is the primary install path: the chart is the single source of truth for
+the CRDs, RBAC, and the manager Deployment (the release manifests below are just
+`helm template` of this same chart). Tagged releases publish it as an OCI Helm
+chart to GHCR (`ghcr.io/cozystack/charts/etcd-operator`), versioned from the
+same tag — the chart version is the tag without the leading `v`, and
+`appVersion` keeps the `v`. The CRDs are generated straight into the chart and
+templated into the release.
 
 ```sh
-# 1. Install the CRDs cluster-wide.
-make install
+# Chart version == release tag without the leading 'v'
+# (see https://github.com/cozystack/etcd-operator/releases).
+VERSION=0.5.0
 
-# 2. Build the operator image (or skip to a prebuilt registry tag).
+helm install etcd-operator oci://ghcr.io/cozystack/charts/etcd-operator \
+  --version "$VERSION" \
+  --namespace etcd-operator-system --create-namespace
+```
+
+By default the chart pulls `ghcr.io/cozystack/etcd-operator:<appVersion>` — the
+image that same release published — so a stock install has nothing to
+substitute. The chart wires that ref into **both** the manager's `image:` and
+its `OPERATOR_IMAGE` env var (the image launched for snapshot/restore Pods); the
+two must be identical, and the chart keeps them equal for you. Override the
+image via `image.repository` / `image.tag` and both follow.
+
+The CRDs are **templated** into the release (not in Helm's install-only `crds/`
+directory), so `helm upgrade` keeps them current with the chart — no separate
+CRD-apply step on upgrade. They carry `helm.sh/resource-policy: keep`, so `helm
+uninstall` leaves the CRDs (and therefore your `EtcdCluster`s and their data) in
+place; deleting the CRDs is a deliberate, manual step. Set `crds.enabled=false`
+to manage CRDs out-of-band, or `crds.keep=false` to let uninstall remove them.
+
+Common values (`--set key=value`, or a `-f my-values.yaml`):
+
+| Value | Default | Purpose |
+|---|---|---|
+| `image.repository` | `ghcr.io/cozystack/etcd-operator` | Operator image repo. Override to mirror or fork. |
+| `image.tag` | chart `appVersion` | Operator image tag; also becomes `OPERATOR_IMAGE` (see above). |
+| `replicaCount` | `1` | Operator replicas (leader election picks the active one). |
+| `kubeRbacProxy.enabled` | `true` | Front `/metrics` with the kube-rbac-proxy SubjectAccessReview sidecar. Set `false` to bind metrics on `:8080` directly with no proxy. |
+| `metrics.serviceMonitor.enabled` | `false` | Create a prometheus-operator `ServiceMonitor` for the metrics endpoint (needs the `monitoring.coreos.com` CRDs and `kubeRbacProxy.enabled`). |
+| `crds.enabled` / `crds.keep` | `true` / `true` | Render the CRDs with the release / annotate them so uninstall keeps them. |
+| `manager.resources` | 10m/64Mi → 500m/128Mi | Manager container requests/limits. |
+| `imagePullSecrets` | `[]` | Pull secrets for a private registry mirror. |
+
+See `charts/etcd-operator/values.yaml` for the complete, annotated list. Verify
+the install:
+
+```sh
+kubectl -n etcd-operator-system get deploy
+```
+
+With release name `etcd-operator` the Deployment is named `etcd-operator`. The
+release manifests (the kubectl-apply path above) render from this same chart, so
+they produce the same name. The Deployment carries the label
+`control-plane=controller-manager`, a name-agnostic handle for scripts.
+
+## Build from source
+
+The repo's Makefile drives a complete install via Helm. From a checkout (needs
+`helm` v3.16+ on PATH):
+
+```sh
+# 1. Build the operator image (or skip to a prebuilt registry tag).
 make docker-build docker-push IMG=<your-registry>/etcd-operator:<tag>
 
-# 3. Deploy the operator (creates the etcd-operator-system namespace,
-#    ClusterRole/Binding, controller Deployment, metrics service).
+# 2. Install/upgrade the operator (CRDs + RBAC + manager) with Helm.
+#    `make deploy` runs `helm upgrade --install` and wires image == OPERATOR_IMAGE.
 make deploy IMG=<your-registry>/etcd-operator:<tag>
 ```
 
 The cluster must be able to pull from `<your-registry>`. For local clusters (`kind` / `minikube` / `k3d`), either sideload the image (`kind load docker-image ...`) or push to an ephemeral registry the cluster can reach (e.g. `ttl.sh/<random>:1h`); otherwise the operator Deployment goes `ImagePullBackOff` with no clear hint from the operator side.
 
-By default this lands in the `etcd-operator-system` namespace. The deployment name is `etcd-operator-controller-manager`. Verify:
+`make deploy` installs the release `etcd-operator` into the `etcd-operator-system`
+namespace (override with `HELM_RELEASE=` / `NAMESPACE=`). The Deployment is named
+after the release. Verify:
 
 ```sh
 kubectl get pod -n etcd-operator-system
-kubectl logs -n etcd-operator-system deploy/etcd-operator-controller-manager \
-  -c manager --tail=20
+kubectl -n etcd-operator-system logs deploy/etcd-operator -c manager --tail=20
 ```
 
-You should see the manager start lines and an empty work-queue (no `EtcdCluster` resources yet).
+You should see the manager start lines and an empty work-queue (no `EtcdCluster` resources yet). Tear down with `make undeploy` (see [Teardown](#teardown)).
 
-## Manual install (no Make)
+## Rendering manifests (GitOps / no in-cluster Helm)
 
-If you don't want to invoke the Makefile (e.g. GitOps environments where `kustomize` is run by a controller in-cluster):
+For GitOps flows that apply plain YAML, render the chart with `helm template`
+instead of installing it — this is exactly what `make build-dist-manifests` (and
+the release pipeline) does to produce the release's `etcd-operator.yaml`:
 
 ```sh
-# CRDs
-kubectl apply -f config/crd/bases/
-
-# Operator + RBAC + Service, rendered by kustomize:
-bin/kustomize-v5.6.0 build config/default | kubectl apply -f -
+helm template etcd-operator charts/etcd-operator \
+  --namespace etcd-operator-system \
+  --set image.repository=<your-image-repo> --set image.tag=<tag> \
+  --set namespace.create=true | kubectl apply --server-side -f -
 ```
 
-Override the image inline:
+`--server-side` avoids the client-side last-applied-config annotation size limit (the consolidated manifest embeds the full CRD schemas). `namespace.create=true` emits the Namespace so the output is self-contained.
 
-```sh
-cd config/manager && bin/kustomize-v5.6.0 edit set image controller=<your-image>
-cd ../.. && bin/kustomize-v5.6.0 build config/default | kubectl apply -f -
-```
-
-The `bin/kustomize-v*` binary is auto-downloaded by `make kustomize` (version pinned to `v5.6.0` in the Makefile); a system-installed `kustomize` works equally if you have one.
-
-> **Set the operator image, or snapshots/restores won't run.** The `config/default` overlay rewrites both the manager's `image:` *and* its `OPERATOR_IMAGE` env var to the same ref via a kustomize replacement — `OPERATOR_IMAGE` is the image the operator launches for snapshot Jobs and restore init containers. If you bypass that overlay (e.g. `kubectl apply -f config/manager/` directly, or a base that drops the replacement), `OPERATOR_IMAGE` stays the placeholder `controller:latest`. The operator **refuses to start** on that placeholder and exits with a clear error (rather than letting snapshot/restore Pods `ImagePullBackOff` later). Always render through `config/default` (which the commands above do) or set `OPERATOR_IMAGE` to the real ref by hand.
+> **The chart keeps `image:` and `OPERATOR_IMAGE` equal for you.** `OPERATOR_IMAGE` is the image the operator launches for snapshot Jobs and restore init containers; it must match the manager image. The chart renders both from `image.repository`/`image.tag` (the `etcd-operator.image` helper in `_helpers.tpl`), so setting the image once covers both. If you hand-craft manifests and leave `OPERATOR_IMAGE` at the placeholder `controller:latest`, the operator **refuses to start** and exits with a clear error (rather than letting snapshot/restore Pods `ImagePullBackOff` later).
 
 ## Create your first cluster
 
@@ -203,7 +255,7 @@ Operator's own toolchain (relevant when building from source):
 | controller-runtime | v0.21 |
 | k8s.io/api, k8s.io/client-go | v0.33 |
 | controller-gen | v0.18.0 |
-| kustomize | v5.6.0 |
+| Helm (install/render the chart) | v3.16+ |
 | etcd client (`go.etcd.io/etcd/client/v3`) | v3.6.11 |
 | Kubebuilder layout | v4 |
 
@@ -211,7 +263,7 @@ All pinned in `go.mod`, `Dockerfile`, and `Makefile`.
 
 ## RBAC
 
-The operator runs as a ClusterRole — it needs to watch `EtcdCluster` and `EtcdMember` across all namespaces, plus create/delete the per-member Pods, PVCs, and Services in each user namespace. The full role lives in `config/rbac/role.yaml` (regenerated from `+kubebuilder:rbac` markers — don't hand-edit).
+The operator runs as a ClusterRole — it needs to watch `EtcdCluster` and `EtcdMember` across all namespaces, plus create/delete the per-member Pods, PVCs, and Services in each user namespace. The rules are generated from the `+kubebuilder:rbac` markers (by `make manifests`) into `charts/etcd-operator/files/manager-role-rules.yaml` and pulled into the chart's templated ClusterRole — don't hand-edit; edit the markers and regenerate.
 
 Single-namespace scoping is not currently exposed: `main.go` does not wire a namespace flag into the manager's `Cache.DefaultNamespaces`, so the manager always watches all namespaces. Limiting RBAC alone (ClusterRole → Role) is not sufficient — the manager will still attempt list/watch across the cluster and the API server will deny it. Scoped deployment is a follow-up.
 
@@ -238,12 +290,16 @@ This is outside the operator's scope but documented because operators ask.
 # Remove individual clusters first — their finalizers will clean up etcd state.
 kubectl delete etcdcluster.etcd-operator.cozystack.io --all -A
 
-# Remove the operator.
+# Remove the operator (helm uninstall). The CRDs carry
+# helm.sh/resource-policy: keep, so they (and any surviving EtcdClusters) are
+# intentionally left in place.
 make undeploy
 
-# Remove the CRDs (only after all EtcdClusters are gone; the CRDs have
-# protected finalizers via the operator).
-make uninstall
+# Remove the CRDs too (only after all EtcdClusters are gone) — deleting them
+# cascade-deletes every remaining EtcdCluster:
+kubectl delete crd etcdclusters.etcd-operator.cozystack.io \
+  etcdmembers.etcd-operator.cozystack.io \
+  etcdsnapshots.etcd-operator.cozystack.io
 ```
 
 Deleting an `EtcdCluster` while it's running cascades through every owned resource: the operator's finalizer on each `EtcdMember` calls `MemberRemove` (when the cluster itself is also being deleted, the operator detects this and skips `MemberRemove` to avoid a deadlock — see `handleDeletion` in `controllers/etcdmember_controller.go`). Pods and PVCs are then GC'd via owner-refs.
@@ -260,6 +316,23 @@ For now, in-place operator upgrades work via `kubectl set image` on the operator
 4. Once all members are on the new version, edit `spec.version` so future scale-ups use it directly.
 
 This is manual and slow. A native rolling upgrade is a tracked follow-up.
+
+## kubectl-etcd plugin
+
+`kubectl-etcd` is an optional client-side [kubectl plugin](https://kubernetes.io/docs/tasks/extend-kubectl/kubectl-plugins/) for day-2 operations on operator-managed clusters (member list, status, defrag, compact, alarms, snapshot, member add/remove). It runs on your workstation against your kubeconfig — it is **not** part of the operator image.
+
+Each release attaches `kubectl-etcd-<os>-<arch>` binaries (with `cli-SHA256SUMS.txt`). Install it onto your `PATH` named `kubectl-etcd`, and kubectl picks it up as `kubectl etcd`:
+
+```sh
+VERSION=v0.5.0; OS=$(uname -s | tr A-Z a-z); ARCH=$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')
+curl -sSLo kubectl-etcd "https://github.com/cozystack/etcd-operator/releases/download/$VERSION/kubectl-etcd-$OS-$ARCH"
+chmod +x kubectl-etcd && sudo mv kubectl-etcd /usr/local/bin/   # any dir on $PATH works
+
+kubectl etcd --version
+kubectl etcd members --help
+```
+
+Or build from a checkout with `make kubectl-etcd` (lands in `bin/kubectl-etcd`). There is no krew package yet.
 
 ## Development
 

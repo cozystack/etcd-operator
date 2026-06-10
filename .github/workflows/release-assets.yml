@@ -2,9 +2,10 @@ name: Upload release assets
 
 # When a GitHub release is created for a tag, render the install manifests for
 # that tag's image and attach them to the release. `make build-dist-manifests`
-# sets the `controller` image (and, via the kustomize replacement in
-# config/default, the manager's OPERATOR_IMAGE env) to the released ref, so the
-# attached YAML deploys the matching operator and its snapshot/restore agent.
+# is `helm template` of the chart with image.repository/tag set to the released
+# ref; the chart renders image == OPERATOR_IMAGE, so the attached YAML deploys
+# the matching operator and its snapshot/restore agent. For consumers who
+# kubectl-apply rather than helm-install.
 
 on:
   release:
@@ -27,6 +28,12 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
+
+      # build-dist-manifests renders the chart via `helm template`.
+      - name: Install Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: 'v3.16.4'
 
       - name: Resolve release tag
         run: echo "RELEASE_TAG=${{ github.ref_name }}" >> $GITHUB_ENV
@@ -55,5 +62,54 @@ jobs:
           repo_token: ${{ secrets.GITHUB_TOKEN }}
           file: dist/etcd-operator.non-crds.yaml
           asset_name: etcd-operator.non-crds.yaml
+          tag: ${{ github.ref }}
+          overwrite: true
+
+  # Standalone client CLIs (kubectl-etcd plugin + etcd-migrate). They are not in
+  # the operator image (client-side / admin tools), so they ship as
+  # cross-compiled release binaries. Separate job: no Helm needed, and a failure
+  # here doesn't block the manifest assets above.
+  cli-binaries:
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Resolve release tag
+        run: echo "RELEASE_TAG=${{ github.ref_name }}" >> $GITHUB_ENV
+
+      - name: Cross-compile CLIs
+        run: make dist-cli VERSION=${RELEASE_TAG}
+
+      - name: Upload etcd-migrate binaries
+        uses: svenstaro/upload-release-action@2.9.0
+        with:
+          repo_token: ${{ secrets.GITHUB_TOKEN }}
+          file: dist/etcd-migrate-*
+          file_glob: true
+          tag: ${{ github.ref }}
+          overwrite: true
+
+      - name: Upload kubectl-etcd binaries
+        uses: svenstaro/upload-release-action@2.9.0
+        with:
+          repo_token: ${{ secrets.GITHUB_TOKEN }}
+          file: dist/kubectl-etcd-*
+          file_glob: true
+          tag: ${{ github.ref }}
+          overwrite: true
+
+      - name: Upload CLI checksums
+        uses: svenstaro/upload-release-action@2.9.0
+        with:
+          repo_token: ${{ secrets.GITHUB_TOKEN }}
+          file: dist/cli-SHA256SUMS.txt
+          asset_name: cli-SHA256SUMS.txt
           tag: ${{ github.ref }}
           overwrite: true

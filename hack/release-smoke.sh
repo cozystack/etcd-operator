@@ -102,15 +102,27 @@ kind load docker-image "$IMG" --name "$KIND_CLUSTER_NAME"
 if [ "$INSTALL_MODE" = manifest ]; then
     echo "--- [manifest] rendering release install manifests (IMG=$IMG)"
     make build-dist-manifests IMG="$IMG"
+    # build-dist-manifests must render purely (it is `helm template` piped through
+    # yq): it writes only dist/ (gitignored) and must not mutate any tracked file.
+    # A dirty tree here means a regression reintroduced an in-place edit, which
+    # would also spuriously trip ci.yml's codegen-drift gate. Assert cleanliness
+    # (skipped if this isn't a git checkout, e.g. a release tarball).
+    if command -v git >/dev/null 2>&1 && git rev-parse --git-dir >/dev/null 2>&1 \
+        && [ -n "$(git status --porcelain --untracked-files=no)" ]; then
+        echo "ERROR: 'make build-dist-manifests' modified tracked files (it must render purely):"
+        git --no-pager status --porcelain --untracked-files=no
+        git --no-pager diff
+        exit 1
+    fi
     echo "--- [manifest] installing from the rendered release manifest"
     # Server-side apply: the consolidated manifest embeds the full CRD schemas,
     # whose size can exceed the client-side last-applied-config annotation
     # limit. This is also the documented release-install path.
     kubectl apply --server-side -f dist/etcd-operator.yaml
 else
-    echo "--- [helm] vendoring CRDs and installing the chart (image=$IMG)"
-    make helm-sync
-    # Split $IMG into repo:tag for the chart's image.repository / image.tag.
+    echo "--- [helm] installing the chart (image=$IMG)"
+    # CRDs are templated into the chart and committed (drift-gated), so no sync
+    # step is needed. Split $IMG into repo:tag for image.repository / image.tag.
     helm upgrade --install etcd-operator charts/etcd-operator \
         --namespace "$NAMESPACE" --create-namespace \
         --set image.repository="${IMG%:*}" \

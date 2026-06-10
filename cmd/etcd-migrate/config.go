@@ -21,10 +21,15 @@ import (
 	"k8s.io/client-go/util/homedir"
 )
 
-// defaultControllerRef is where both this repo's kustomize config and the
-// legacy repo's deploy the controller; the two generations share the name,
-// so a single Deployment commonly answers both checks.
-const defaultControllerRef = "etcd-operator-system/etcd-operator-controller-manager"
+// defaultLegacyControllerRef is where the legacy v1alpha1 repo's kustomize
+// install deploys its controller.
+const defaultLegacyControllerRef = "etcd-operator-system/etcd-operator-controller-manager"
+
+// defaultNewControllerRef is where this repo's Helm chart deploys the operator —
+// release name "etcd-operator" in the etcd-operator-system namespace. (The
+// generations no longer share a name: kustomize named it
+// etcd-operator-controller-manager; the chart names it after the release.)
+const defaultNewControllerRef = "etcd-operator-system/etcd-operator"
 
 // Config holds every flag of the migrate CLI.
 type Config struct {
@@ -72,8 +77,8 @@ func bindFlags(cmd *cobra.Command, cfg *Config) {
 	f.BoolVar(&cfg.Apply, "apply", false, "Execute the adoption. Without it the tool only prints the plan (dry-run).")
 	f.BoolVarP(&cfg.Yes, "yes", "y", false, "Skip the interactive confirmation before --apply mutates the cluster")
 	f.BoolVar(&cfg.SkipControllerCheck, "skip-controller-check", false, "Skip verifying that both operator Deployments are scaled down")
-	f.StringVar(&cfg.LegacyController, "legacy-controller", defaultControllerRef, "Legacy operator Deployment as namespace/name")
-	f.StringVar(&cfg.NewController, "new-controller", defaultControllerRef, "New operator Deployment as namespace/name")
+	f.StringVar(&cfg.LegacyController, "legacy-controller", defaultLegacyControllerRef, "Legacy operator Deployment as namespace/name")
+	f.StringVar(&cfg.NewController, "new-controller", defaultNewControllerRef, "New operator Deployment as namespace/name")
 	f.StringVar(&cfg.Version, "version", "", "etcd version (X.Y.Z) to set on every migrated cluster, overriding image-tag extraction")
 	f.StringVar(&cfg.AuthSecret, "auth-secret", "", "Existing kubernetes.io/basic-auth Secret (in each cluster's namespace) to reference for clusters with enableAuth; default generates one per cluster")
 

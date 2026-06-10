@@ -18,10 +18,12 @@ jobs:
           cache: true
 
       - name: codegen drift
-        # If a contributor edits an API type without re-running codegen,
-        # this gate catches it before CRDs and deepcopy ship out of sync
-        # with the Go types. Runs before `make test` so the as-committed
-        # state of generated files is what we check.
+        # If a contributor edits an API type or +kubebuilder:rbac markers
+        # without re-running codegen, this gate catches it before the chart's
+        # CRDs (charts/etcd-operator/crd-bases), manager RBAC rules
+        # (charts/etcd-operator/files/manager-role-rules.yaml), or deepcopy ship
+        # out of sync. Runs before `make test` so the as-committed state of
+        # generated files is what we check.
         run: |
           make generate manifests
           if ! git diff --quiet --exit-code; then
