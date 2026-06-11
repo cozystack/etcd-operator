@@ -43,23 +43,28 @@ jobs:
         run: make manifests
 
       - name: Resolve chart versions from tag
+        env:
+          REF_NAME: ${{ github.ref_name }}
         run: |
-          TAG=${{ github.ref_name }}
-          echo "RELEASE_TAG=${TAG}" >> $GITHUB_ENV
+          TAG="$REF_NAME"
+          echo "RELEASE_TAG=${TAG}" >> "$GITHUB_ENV"
           # Chart version is semver without the leading v; appVersion keeps it.
-          echo "RELEASE_TAG_TRIMMED_V=${TAG#v}" >> $GITHUB_ENV
+          echo "RELEASE_TAG_TRIMMED_V=${TAG#v}" >> "$GITHUB_ENV"
 
       - name: Helm registry login
+        env:
+          ACTOR: ${{ github.actor }}
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           helm registry login \
-            --username ${{ github.actor }} \
-            --password ${{ secrets.GITHUB_TOKEN }} \
-            ${{ env.REGISTRY }}
+            --username "$ACTOR" \
+            --password "$TOKEN" \
+            "${{ env.REGISTRY }}"
 
       - name: Package chart
         working-directory: charts
         run: |
-          helm package ${{ env.CHART_NAME }} \
+          helm package "${{ env.CHART_NAME }}" \
             --version "${RELEASE_TAG_TRIMMED_V}" \
             --app-version "${RELEASE_TAG}"
 

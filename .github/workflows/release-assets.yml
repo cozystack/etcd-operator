@@ -36,10 +36,12 @@ jobs:
           version: 'v3.16.4'
 
       - name: Resolve release tag
-        run: echo "RELEASE_TAG=${{ github.ref_name }}" >> $GITHUB_ENV
+        env:
+          REF_NAME: ${{ github.ref_name }}
+        run: echo "RELEASE_TAG=$REF_NAME" >> "$GITHUB_ENV"
 
       - name: Render install manifests
-        run: make build-dist-manifests IMG=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${RELEASE_TAG}
+        run: make build-dist-manifests IMG="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${RELEASE_TAG}"
 
       - uses: svenstaro/upload-release-action@2.9.0
         with:
@@ -82,10 +84,12 @@ jobs:
           cache: true
 
       - name: Resolve release tag
-        run: echo "RELEASE_TAG=${{ github.ref_name }}" >> $GITHUB_ENV
+        env:
+          REF_NAME: ${{ github.ref_name }}
+        run: echo "RELEASE_TAG=$REF_NAME" >> "$GITHUB_ENV"
 
       - name: Cross-compile CLIs
-        run: make dist-cli VERSION=${RELEASE_TAG}
+        run: make dist-cli VERSION="${RELEASE_TAG}"
 
       - name: Upload etcd-migrate binaries
         uses: svenstaro/upload-release-action@2.9.0

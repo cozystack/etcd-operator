@@ -6,6 +6,10 @@ on:
   push:
     branches: [ main ]
 
+# CI only builds and tests — no writes to the repo, releases, or packages.
+permissions:
+  contents: read
+
 jobs:
   image-multiarch:
     # Build-only assertion that the operator image builds for every published

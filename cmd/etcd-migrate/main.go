@@ -77,7 +77,7 @@ explicit --skip-backup.`,
 		Short: "Print the etcd-migrate binary version",
 		Args:  cobra.NoArgs,
 		Run: func(cmd *cobra.Command, _ []string) {
-			fmt.Fprintln(cmd.OutOrStdout(), version)
+			_, _ = fmt.Fprintln(cmd.OutOrStdout(), version)
 		},
 	})
 	if err := rootCmd.Execute(); err != nil {

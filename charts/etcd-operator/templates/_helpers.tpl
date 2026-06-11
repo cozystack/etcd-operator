@@ -42,7 +42,10 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- if .Values.serviceAccount.create -}}
 {{- include "etcd-operator.fullname" . -}}
 {{- else -}}
-default
+{{- /* Don't silently fall back to the namespace "default" SA: rbac.yaml binds
+the operator's broad ClusterRole to this name, and binding it to "default"
+would hand those permissions to every workload using the default SA. */ -}}
+{{- required "serviceAccount.name is required when serviceAccount.create is false" .Values.serviceAccount.name -}}
 {{- end -}}
 {{- end -}}
 

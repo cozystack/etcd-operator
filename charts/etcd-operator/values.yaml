@@ -43,6 +43,9 @@ fullnameOverride: ""
 serviceAccount:
   # -- Create the operator ServiceAccount.
   create: true
+  # -- Name of an existing ServiceAccount to use when create is false. Required
+  # in that case — the operator's ClusterRole is bound to this name.
+  name: ""
   # -- Extra annotations for the ServiceAccount.
   annotations: {}
 
