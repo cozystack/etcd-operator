@@ -10,6 +10,9 @@ bin
 /kubectl-etcd
 # etcd-migrate tool: same rule — build to bin/, never commit the root-level artifact
 /etcd-migrate
+# release install manifests rendered by `make build-dist-manifests`; the
+# release-assets workflow regenerates and attaches these per tag
+/dist
 
 # Test binary, build with `go test -c`
 *.test

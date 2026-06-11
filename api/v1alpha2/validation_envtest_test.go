@@ -77,11 +77,12 @@ func TestMain(m *testing.M) {
 	os.Exit(code)
 }
 
-// crdBasesDir resolves config/crd/bases relative to this test file —
-// go test's CWD is the package directory and the CRDs live two levels up.
+// crdBasesDir resolves the chart's raw generated CRDs relative to this test
+// file — go test's CWD is the package directory and the CRDs (written by
+// `make manifests`) live under charts/etcd-operator/crd-bases two levels up.
 func crdBasesDir() string {
 	_, here, _, _ := runtime.Caller(0)
-	return filepath.Join(filepath.Dir(here), "..", "..", "config", "crd", "bases")
+	return filepath.Join(filepath.Dir(here), "..", "..", "charts", "etcd-operator", "crd-bases")
 }
 
 func ptr32(v int32) *int32 { return &v }

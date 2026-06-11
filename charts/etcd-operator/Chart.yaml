@@ -1,0 +1,11 @@
+apiVersion: v2
+name: etcd-operator
+description: Kubernetes operator for running etcd clusters (etcd-operator.cozystack.io/v1alpha2)
+type: application
+# Placeholders. The release pipeline (helm-publish.yml) sets the real values
+# from the git tag: --version <tag without v>, --app-version <tag>.
+version: 0.0.0
+appVersion: "v0.0.0"
+home: https://github.com/cozystack/etcd-operator
+sources:
+  - https://github.com/cozystack/etcd-operator

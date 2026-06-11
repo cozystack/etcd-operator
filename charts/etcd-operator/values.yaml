@@ -1,0 +1,97 @@
+# Default values for etcd-operator.
+
+crds:
+  # -- Render the CRDs as part of the release. Templated (not Helm's install-only
+  # crds/ dir) so `helm upgrade` keeps them current with the API types.
+  enabled: true
+  # -- Annotate CRDs with helm.sh/resource-policy: keep so `helm uninstall` leaves
+  # them in place. Strongly recommended: deleting the CRDs cascade-deletes every
+  # EtcdCluster and its data.
+  keep: true
+
+# -- Render a Namespace object. Off by default (real `helm install` uses
+# --create-namespace); build-dist-manifests turns it on so the rendered
+# kubectl-apply manifest is self-contained.
+namespace:
+  create: false
+
+metrics:
+  serviceMonitor:
+    # -- Create a prometheus-operator ServiceMonitor for the metrics endpoint.
+    # Requires the monitoring.coreos.com CRDs and kubeRbacProxy.enabled.
+    enabled: false
+
+image:
+  # -- Operator image repository. The published image is ghcr.io/cozystack/etcd-operator.
+  repository: ghcr.io/cozystack/etcd-operator
+  # -- Image tag. Defaults to the chart's appVersion (set to the release tag by the pipeline).
+  tag: ""
+  # -- Image pull policy.
+  pullPolicy: IfNotPresent
+
+# -- Number of operator replicas (leader election picks the active one).
+replicaCount: 1
+
+# -- Image pull secrets for private registries.
+imagePullSecrets: []
+
+# -- Override the chart name portion of resource names.
+nameOverride: ""
+# -- Override the full resource-name prefix.
+fullnameOverride: ""
+
+serviceAccount:
+  # -- Create the operator ServiceAccount.
+  create: true
+  # -- Name of an existing ServiceAccount to use when create is false. Required
+  # in that case — the operator's ClusterRole is bound to this name.
+  name: ""
+  # -- Extra annotations for the ServiceAccount.
+  annotations: {}
+
+# -- Extra annotations for the operator Pod.
+podAnnotations: {}
+# -- Extra labels for the operator Pod.
+podLabels: {}
+# -- Node selector for the operator Pod.
+nodeSelector: {}
+# -- Tolerations for the operator Pod.
+tolerations: []
+# -- Affinity for the operator Pod.
+affinity: {}
+
+manager:
+  # -- Resource requests/limits for the manager container.
+  resources:
+    limits:
+      cpu: 500m
+      memory: 128Mi
+    requests:
+      cpu: 10m
+      memory: 64Mi
+
+# kube-rbac-proxy fronts the manager's /metrics endpoint with SubjectAccessReview
+# authz. Disable to expose metrics without the proxy (the manager then binds
+# metrics on :8080 directly).
+kubeRbacProxy:
+  # -- Run the kube-rbac-proxy metrics sidecar.
+  enabled: true
+  image:
+    # -- kube-rbac-proxy image repository (upstream's GitHub org; the old gcr.io/kubebuilder one is gone).
+    repository: ghcr.io/kube-rbac-proxy/kube-rbac-proxy
+    # -- kube-rbac-proxy image tag.
+    tag: v0.22.0
+    # -- kube-rbac-proxy image pull policy.
+    pullPolicy: IfNotPresent
+  # -- Resource requests/limits for the proxy container.
+  resources:
+    limits:
+      cpu: 500m
+      memory: 128Mi
+    requests:
+      cpu: 5m
+      memory: 64Mi
+
+metricsService:
+  # -- Port the metrics Service exposes (proxy https port).
+  port: 8443

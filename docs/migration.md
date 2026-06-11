@@ -19,7 +19,16 @@ Clients that connect by DNS name keep working; one Service changes shape
 (ClusterIP → headless) and has consumer prerequisites — see
 [Endpoint compatibility](#endpoint-compatibility) before you `--apply`.
 
-Build it with `make etcd-migrate` (lands in `bin/etcd-migrate`).
+Get it from the GitHub release — each release attaches
+`etcd-migrate-<os>-<arch>` binaries (with a `cli-SHA256SUMS.txt`):
+
+```sh
+VERSION=v0.5.0; OS=$(uname -s | tr A-Z a-z); ARCH=$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')
+curl -sSLo etcd-migrate "https://github.com/cozystack/etcd-operator/releases/download/$VERSION/etcd-migrate-$OS-$ARCH"
+chmod +x etcd-migrate && ./etcd-migrate version
+```
+
+Or build from a checkout with `make etcd-migrate` (lands in `bin/etcd-migrate`).
 
 ### How adoption works
 
@@ -92,17 +101,21 @@ adoption.
 ### Prerequisites
 
 1. **Scale both operators to zero.** The legacy etcd Pods keep running — only
-   the controllers must be quiet:
+   the controllers must be quiet. The legacy (v1alpha1) controller is
+   `etcd-operator-controller-manager`; this operator's Helm release is named
+   `etcd-operator`:
 
    ```sh
-   kubectl -n etcd-operator-system scale deploy etcd-operator-controller-manager --replicas=0
+   kubectl -n etcd-operator-system scale deploy etcd-operator-controller-manager --replicas=0  # legacy
+   kubectl -n etcd-operator-system scale deploy etcd-operator --replicas=0                     # new
    ```
 
    The tool verifies this for both Deployments before doing anything
    (`--legacy-controller` / `--new-controller` override the coordinates,
    `--skip-controller-check` bypasses the gate).
-2. The new CRDs (`etcd-operator.cozystack.io/v1alpha2`) must be installed
-   (`make install`).
+2. The new CRDs (`etcd-operator.cozystack.io/v1alpha2`) must be installed —
+   they ship with the operator chart (`make deploy IMG=...`, or `helm install`;
+   see [installation](installation.md)).
 3. A kubeconfig that can list/delete the legacy CRs cluster-wide, create the
    new ones, and patch pods/PVCs/Services.
 4. **All etcd pods Ready.** Adoption refuses clusters with missing members,
@@ -230,7 +243,7 @@ After `--apply` succeeds, **scale the new operator up** — it takes over the
 adopted clusters without touching the pods:
 
 ```sh
-kubectl -n etcd-operator-system scale deploy etcd-operator-controller-manager --replicas=1
+kubectl -n etcd-operator-system scale deploy etcd-operator --replicas=1
 ```
 
 The tool deletes the migrated legacy **CRs** but never the **CRDs**. Once no

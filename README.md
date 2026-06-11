@@ -37,12 +37,12 @@ No multi-user / per-tenant RBAC inside etcd — single-user `root` auth is avail
 ## Quick start
 
 ```sh
-# 1. Install CRDs and the operator. Builds an image and pushes it to your
-#    registry; substitute IMG= for a prebuilt tag if you have one. The cluster
-#    must be able to pull from <your-registry> — for local clusters (kind /
-#    minikube / k3d) sideload the image or use an ephemeral registry such as
-#    ttl.sh, otherwise the operator Deployment will sit in ImagePullBackOff.
-make install
+# 1. Install the operator (CRDs + RBAC + manager) with Helm. Builds an image and
+#    pushes it to your registry; substitute IMG= for a prebuilt tag if you have
+#    one. The cluster must be able to pull from <your-registry> — for local
+#    clusters (kind / minikube / k3d) sideload the image or use an ephemeral
+#    registry such as ttl.sh, otherwise the Deployment sits in ImagePullBackOff.
+#    `make deploy` runs `helm upgrade --install` (needs helm v3.16+ on PATH).
 make docker-build docker-push deploy IMG=<your-registry>/etcd-operator:<tag>
 
 # 2. Create a cluster.

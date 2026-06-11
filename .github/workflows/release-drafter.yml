@@ -1,0 +1,36 @@
+name: Release Drafter
+
+# Maintains a draft GitHub release on main, accumulating merged-PR titles into
+# categorised notes. Publishing that draft for a tag is what triggers
+# release-assets.yml; pushing the tag is what triggers docker-publish.yml.
+
+on:
+  push:
+    branches: [ main ]
+  # pull_request_target runs in the context of the BASE branch (main) with a
+  # read/write token, which is what lets the autolabeler label PRs from forks.
+  # It is used ONLY to read PR metadata (title, labels, changed-file globs).
+  pull_request_target:
+    types: [ opened, reopened, synchronize ]
+  workflow_dispatch:
+
+jobs:
+  release-drafter:
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      # SECURITY: never add `actions/checkout` of the PR head (or run any code
+      # from the PR) in this job. pull_request_target grants a write token and
+      # secrets while running base-branch config; checking out + executing fork
+      # code under it is the canonical fork-to-RCE pattern. release-drafter
+      # touches no repo code, so this job stays safe as long as nothing here
+      # checks out untrusted refs.
+      - uses: release-drafter/release-drafter@3f0f87098bd6b5c5b9a36d49c41d998ea58f9348 # v6.0.0
+        with:
+          disable-releaser: ${{ github.ref != 'refs/heads/main' }}
+          config-name: release-drafter.yml
+          commitish: main
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

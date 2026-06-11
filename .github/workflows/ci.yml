@@ -2,11 +2,29 @@ name: CI
 
 on:
   pull_request:
-    branches: [ master ]
+    branches: [ main ]
   push:
-    branches: [ master ]
+    branches: [ main ]
+
+# CI only builds and tests — no writes to the repo, releases, or packages.
+permissions:
+  contents: read
 
 jobs:
+  image-multiarch:
+    # Build-only assertion that the operator image builds for every published
+    # platform. Deliberately sets up buildx WITHOUT QEMU: the Dockerfile builder
+    # is pinned to $BUILDPLATFORM and Go cross-compiles via GOARCH, so both legs
+    # must build natively on this amd64 runner with no emulation. If the
+    # --platform=$BUILDPLATFORM pin regresses, the arm64 leg fails here (exec
+    # format error) instead of silently breaking the tag-release publish.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3.3.0
+      - name: Build multi-arch image (no push, no QEMU)
+        run: docker buildx build --platform linux/amd64,linux/arm64 -t etcd-operator:buildtest .
+
   verify:
     runs-on: ubuntu-latest
     steps:
@@ -18,10 +36,12 @@ jobs:
           cache: true
 
       - name: codegen drift
-        # If a contributor edits an API type without re-running codegen,
-        # this gate catches it before CRDs and deepcopy ship out of sync
-        # with the Go types. Runs before `make test` so the as-committed
-        # state of generated files is what we check.
+        # If a contributor edits an API type or +kubebuilder:rbac markers
+        # without re-running codegen, this gate catches it before the chart's
+        # CRDs (charts/etcd-operator/crd-bases), manager RBAC rules
+        # (charts/etcd-operator/files/manager-role-rules.yaml), or deepcopy ship
+        # out of sync. Runs before `make test` so the as-committed state of
+        # generated files is what we check.
         run: |
           make generate manifests
           if ! git diff --quiet --exit-code; then

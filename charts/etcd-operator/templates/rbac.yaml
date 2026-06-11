@@ -1,0 +1,106 @@
+# RBAC for the operator. The manager ClusterRole's rules are generated from the
+# +kubebuilder:rbac markers into files/manager-role-rules.yaml (by `make
+# manifests`) and pulled in below — a single source of truth, guarded by
+# ci.yml's codegen-drift gate. The release-scoped name, labels, binding, and the
+# leader-election / proxy roles stay templated here.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "etcd-operator.fullname" . }}-manager-role
+  labels:
+    {{- include "etcd-operator.labels" . | nindent 4 }}
+rules:
+  {{- .Files.Get "files/manager-role-rules.yaml" | nindent 2 }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "etcd-operator.fullname" . }}-manager-rolebinding
+  labels:
+    {{- include "etcd-operator.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "etcd-operator.fullname" . }}-manager-role
+subjects:
+- kind: ServiceAccount
+  name: {{ include "etcd-operator.serviceAccountName" . }}
+  namespace: {{ .Release.Namespace }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "etcd-operator.fullname" . }}-leader-election-role
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "etcd-operator.labels" . | nindent 4 }}
+rules:
+- apiGroups: [""]
+  resources: [configmaps]
+  verbs: [get, list, watch, create, update, patch, delete]
+- apiGroups: [coordination.k8s.io]
+  resources: [leases]
+  verbs: [get, list, watch, create, update, patch, delete]
+- apiGroups: [""]
+  resources: [events]
+  verbs: [create, patch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "etcd-operator.fullname" . }}-leader-election-rolebinding
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "etcd-operator.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "etcd-operator.fullname" . }}-leader-election-role
+subjects:
+- kind: ServiceAccount
+  name: {{ include "etcd-operator.serviceAccountName" . }}
+  namespace: {{ .Release.Namespace }}
+{{- if .Values.kubeRbacProxy.enabled }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "etcd-operator.fullname" . }}-proxy-role
+  labels:
+    {{- include "etcd-operator.labels" . | nindent 4 }}
+rules:
+- apiGroups: [authentication.k8s.io]
+  resources: [tokenreviews]
+  verbs: [create]
+- apiGroups: [authorization.k8s.io]
+  resources: [subjectaccessreviews]
+  verbs: [create]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "etcd-operator.fullname" . }}-proxy-rolebinding
+  labels:
+    {{- include "etcd-operator.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "etcd-operator.fullname" . }}-proxy-role
+subjects:
+- kind: ServiceAccount
+  name: {{ include "etcd-operator.serviceAccountName" . }}
+  namespace: {{ .Release.Namespace }}
+---
+# Convenience role granting GET on /metrics through the proxy (e.g. for a
+# Prometheus scrape identity). Folded in from config/rbac's metrics-reader;
+# the chart defines it but does not bind it.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "etcd-operator.fullname" . }}-metrics-reader
+  labels:
+    {{- include "etcd-operator.labels" . | nindent 4 }}
+rules:
+- nonResourceURLs: ["/metrics"]
+  verbs: [get]
+{{- end }}

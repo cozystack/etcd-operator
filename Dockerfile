@@ -1,5 +1,10 @@
-# Build the manager binary
-FROM golang:1.25.10 AS builder
+# Build the manager binary.
+# Pin the builder to the BUILD platform so a multi-arch `buildx --platform`
+# build runs the builder natively (no QEMU) and Go cross-compiles via the
+# GOARCH=${TARGETARCH} below. Without this, buildx instantiates the builder as
+# the target arch and `go build` runs under emulation — which fails the arm64
+# leg on an amd64 runner that has no binfmt registered.
+FROM --platform=$BUILDPLATFORM golang:1.25.10 AS builder
 ARG TARGETOS
 ARG TARGETARCH
 

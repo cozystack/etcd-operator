@@ -1,0 +1,6 @@
+# Patterns to ignore when building packages.
+*.tmpl
+.git
+.gitignore
+*.tgz
+README.md.gotmpl

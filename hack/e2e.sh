@@ -47,7 +47,7 @@ dump_diagnostics() {
     echo "--- e2e failed; dumping cluster state before teardown"
     kubectl get etcdclusters,etcdmembers,pods,certificates,secrets -A || true
     kubectl get datastores,tenantcontrolplanes -A || true
-    kubectl -n etcd-operator-system logs deploy/etcd-operator-controller-manager --tail=200 || true
+    kubectl -n etcd-operator-system logs -l control-plane=controller-manager --all-containers --tail=200 || true
     kubectl -n kamaji-system logs deploy/kamaji --tail=200 || true
     # The tenant namespace is where the longest wait (TenantControlPlane
     # Ready) fails — dump every pod's logs there, or the one failure mode
@@ -109,8 +109,12 @@ helm upgrade --install kamaji clastix/kamaji \
 echo "--- building and deploying the operator ($IMG)"
 docker build -t "$IMG" .
 kind load docker-image "$IMG" --name "$KIND_CLUSTER_NAME"
-make install deploy IMG="$IMG"
-kubectl -n etcd-operator-system wait deploy/etcd-operator-controller-manager \
+# Helm install: CRDs are templated into the release and image == OPERATOR_IMAGE
+# is wired by the chart, so this one command lands CRDs + RBAC + manager.
+make deploy IMG="$IMG"
+# Select by the chart's control-plane label rather than a fixed Deployment name.
+kubectl -n etcd-operator-system wait deploy \
+    -l control-plane=controller-manager \
     --for=condition=Available --timeout=5m
 
 echo "--- running e2e suite"

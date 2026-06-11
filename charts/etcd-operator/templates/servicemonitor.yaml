@@ -1,0 +1,31 @@
+{{- /*
+prometheus-operator ServiceMonitor for the metrics endpoint (folded in from the
+old config/prometheus). Off by default: it needs the monitoring.coreos.com CRDs
+installed, and it scrapes the kube-rbac-proxy https port, so it only makes sense
+when kubeRbacProxy is enabled.
+*/ -}}
+{{- if .Values.metrics.serviceMonitor.enabled }}
+{{- if not .Values.kubeRbacProxy.enabled }}
+{{- fail "metrics.serviceMonitor.enabled requires kubeRbacProxy.enabled (the ServiceMonitor scrapes the proxy's https metrics port)" }}
+{{- end }}
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "etcd-operator.fullname" . }}-metrics
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "etcd-operator.labels" . | nindent 4 }}
+    control-plane: controller-manager
+spec:
+  endpoints:
+  - path: /metrics
+    port: https
+    scheme: https
+    bearerTokenFile: /var/run/secrets/kubernetes.io/serviceaccount/token
+    tlsConfig:
+      insecureSkipVerify: true
+  selector:
+    matchLabels:
+      {{- include "etcd-operator.selectorLabels" . | nindent 6 }}
+      control-plane: controller-manager
+{{- end }}

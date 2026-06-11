@@ -38,6 +38,10 @@ import (
 	"github.com/cozystack/etcd-operator/internal/migrate"
 )
 
+// version is stamped at build time via -ldflags "-X main.version=<tag>"
+// (see the Makefile's CLI_LDFLAGS); "dev" for un-stamped local builds.
+var version = "dev"
+
 func main() {
 	cfg := &Config{}
 	rootCmd := &cobra.Command{
@@ -66,6 +70,16 @@ explicit --skip-backup.`,
 		},
 	}
 	bindFlags(rootCmd, cfg)
+	// A `version` subcommand rather than a --version flag: --version is already
+	// taken by the etcd-version override (see bindFlags).
+	rootCmd.AddCommand(&cobra.Command{
+		Use:   "version",
+		Short: "Print the etcd-migrate binary version",
+		Args:  cobra.NoArgs,
+		Run: func(cmd *cobra.Command, _ []string) {
+			_, _ = fmt.Fprintln(cmd.OutOrStdout(), version)
+		},
+	})
 	if err := rootCmd.Execute(); err != nil {
 		os.Exit(1)
 	}

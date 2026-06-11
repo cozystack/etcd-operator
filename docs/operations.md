@@ -355,7 +355,7 @@ kubectl exec -n <ns> "$POD" -- etcdctl --endpoints=http://localhost:2379 \
 The operator runs in `etcd-operator-system` by default. Log lines you'll see most often:
 
 ```sh
-kubectl logs -n etcd-operator-system deploy/etcd-operator-controller-manager \
+kubectl logs -n etcd-operator-system deploy/etcd-operator \
   -c manager --tail=200
 ```
 
