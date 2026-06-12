@@ -1,15 +1,23 @@
 name: Upload release assets
 
-# When a GitHub release is created for a tag, render the install manifests for
-# that tag's image and attach them to the release. `make build-dist-manifests`
-# is `helm template` of the chart with image.repository/tag set to the released
+# When a GitHub release is published, render the install manifests for that
+# tag's image and attach them to the release. `make build-dist-manifests` is
+# `helm template` of the chart with image.repository/tag set to the released
 # ref; the chart renders image == OPERATOR_IMAGE, so the attached YAML deploys
 # the matching operator and its snapshot/restore agent. For consumers who
 # kubectl-apply rather than helm-install.
+#
+# Trigger is `published`, NOT `created`: the intended flow is release-drafter
+# maintaining a draft that a maintainer then publishes, and the `created`
+# activity type does NOT fire when a draft is published (only `published`
+# does). With `created` the assets silently never attach for any draft-based
+# release. `published` also covers a release created already-public. The
+# manual `workflow_dispatch` (run against the tag ref) is the backfill path
+# for a release that was published before this fix.
 
 on:
   release:
-    types: [ created ]
+    types: [ published ]
   workflow_dispatch:
 
 env:

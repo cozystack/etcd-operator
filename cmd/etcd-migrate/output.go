@@ -30,6 +30,9 @@ func render(w io.Writer, plans []migrate.ResourcePlan) {
 		for _, e := range p.Errors {
 			fmt.Fprintf(w, "  ERROR: %s\n", e)
 		}
+		for _, sw := range p.SecurityWarnings {
+			fmt.Fprintf(w, "  ⚠️  SECURITY: %s\n", sw)
+		}
 		for _, warn := range p.Warnings {
 			fmt.Fprintf(w, "  warning: %s\n", warn)
 		}
@@ -83,6 +86,29 @@ func renderManifest(w io.Writer, obj client.Object) {
 	}
 	fmt.Fprintln(w, "---")
 	_, _ = w.Write(data)
+}
+
+// renderSecuritySummary re-surfaces every SecurityWarning from the plans that
+// were actually adopted, AFTER --apply has run. The pre-apply plan already
+// shows them, but for a security-posture downgrade (e.g. an unauthenticated
+// --peer-auto-tls peer plane) that is not enough: the plan scrolls past, so the
+// operator must see the downgrade again in the closing summary, once it is a
+// fait accompli. No-op when nothing was downgraded.
+func renderSecuritySummary(w io.Writer, plans []migrate.ResourcePlan) {
+	var any bool
+	for i := range plans {
+		p := &plans[i]
+		if p.Action != migrate.ActionAdopt || len(p.SecurityWarnings) == 0 {
+			continue
+		}
+		if !any {
+			fmt.Fprintln(w, "\n⚠️  SECURITY — review before relying on the adopted clusters:")
+			any = true
+		}
+		for _, sw := range p.SecurityWarnings {
+			fmt.Fprintf(w, "  • %s/%s: %s\n", p.Namespace, p.SourceName, sw)
+		}
+	}
 }
 
 // printCRDNotice reminds about the one cleanup step the tool never performs.

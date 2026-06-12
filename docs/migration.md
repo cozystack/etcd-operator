@@ -157,6 +157,47 @@ TLS needs preparation that the dry-run only partly catches — the CA location,
 and (the one that bites *after* a clean-looking migration) the cert SAN coverage
 for replacement members. Read [TLS](#tls) below before `--apply`.
 
+### Peer auto-TLS (legacy `--peer-auto-tls`)
+
+The legacy operator ran etcd with `--peer-auto-tls` **unconditionally** unless
+you supplied a BYO peer Secret. Under that flag each member generates its own
+self-signed peer certificate and there is **no shared CA**: peer traffic is
+encrypted but **not authenticated** — any TLS-capable workload that can reach a
+member's `:2380` can peer with the cluster or impersonate a member. This is a
+weaker posture than the real mutual-TLS the native operator offers via
+`spec.tls.peer.secretRef` / `spec.tls.peer.certManager`, and it is **not** the
+same thing as the [SAN-coverage caveat](#endpoint-compatibility) above (that is
+about explicit mTLS certs needing both DNS domains during rollover — a different
+scenario; don't conflate them).
+
+The tool **detects this and carries it forward**, because it has to: with no CA
+in existence there is nothing to mint real mTLS certs from, so a replacement or
+scaled-up member running strict mTLS (or plaintext peer) could never rejoin the
+still-auto-tls members. Carry-forward keeps replacement/scale working.
+
+It is **not** exposed as a typed spec field — an unauthenticated peer plane must
+not be a discoverable, first-class option for new clusters. Instead the tool
+stamps a reserved cluster annotation:
+
+```yaml
+metadata:
+  annotations:
+    etcd-operator.cozystack.io/peer-auto-tls: "true"
+```
+
+The operator reads it and propagates `--peer-auto-tls` to every member it builds
+for that cluster. It is superseded by an explicit `spec.tls.peer.secretRef` /
+`certManager` (real mTLS always wins). The dry-run plan flags the adoption with a
+loud `⚠️  SECURITY:` line, and the post-`--apply` summary re-surfaces it — you
+cannot complete a migration without being told you adopted an unauthenticated
+peer plane.
+
+**The only off-ramp to real mTLS is delete-and-recreate** (`spec.tls` is
+immutable), or a careful manual rolling restart onto BYO/cert-manager peer
+certs. Because strict-mTLS and auto-tls members **cannot peer with each other**,
+either route has a brief no-quorum window at the cutover — plan it like any
+peer-cert rotation.
+
 ### The safety backup
 
 Adoption rewires ownership of live storage, so the tool snapshots every

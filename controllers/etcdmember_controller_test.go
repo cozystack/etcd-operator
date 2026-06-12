@@ -2150,6 +2150,39 @@ func TestBuildPod_PeerTLSAlwaysMTLS(t *testing.T) {
 	}
 }
 
+// TestBuildPod_PeerAutoTLS: the legacy-compat insecure peer mode emits
+// --peer-auto-tls on an https peer listener and mounts NO peer secret (etcd
+// self-signs; there is no shared CA and no client-cert-auth).
+func TestBuildPod_PeerAutoTLS(t *testing.T) {
+	r := &EtcdMemberReconciler{}
+	pod := r.buildPod(&lll.EtcdMember{
+		ObjectMeta: metav1.ObjectMeta{Name: "m", Namespace: "ns"},
+		Spec: lll.EtcdMemberSpec{
+			ClusterName: "test", Version: "3.5.17", Storage: lll.StorageSpec{Size: quickQty(t, "1Gi")},
+			TLS: &lll.EtcdMemberTLS{PeerAutoTLS: true},
+		},
+	})
+	cmd := pod.Spec.Containers[0].Command
+	if !cmdContains(cmd, "--listen-peer-urls=https://0.0.0.0:2380") {
+		t.Fatalf("peer listen URL not https: %v", cmd)
+	}
+	if !cmdContains(cmd, "--peer-auto-tls") {
+		t.Fatalf("expected --peer-auto-tls; got %v", cmd)
+	}
+	for _, unwanted := range []string{
+		"--peer-cert-file=/etc/etcd/tls/peer/tls.crt",
+		"--peer-trusted-ca-file=/etc/etcd/tls/peer/ca.crt",
+		"--peer-client-cert-auth=true",
+	} {
+		if cmdContains(cmd, unwanted) {
+			t.Fatalf("auto-tls must not set BYO peer flag %q: %v", unwanted, cmd)
+		}
+	}
+	if v := volumeFor(pod, "tls-peer"); v != nil {
+		t.Fatalf("auto-tls must mount no peer secret; got volume %+v", v)
+	}
+}
+
 // TestBuildPod_AlwaysExposesMetricsPort guards the cozystack-shaped
 // monitoring contract: VMPodScrape (and equivalent Prometheus scrapers)
 // target the named "metrics" container port unconditionally, and the
@@ -2460,6 +2493,7 @@ func TestDeriveMemberTLS(t *testing.T) {
 		hasClient    bool
 		hasPeer      bool
 		clientMTLS   bool
+		peerAutoTLS  bool
 		serverSecret string
 		opSecret     string
 		peerSecret   string
@@ -2536,6 +2570,29 @@ func TestDeriveMemberTLS(t *testing.T) {
 			}}}),
 			want: want{hasPeer: true, peerSecret: "etcd-peer-tls"},
 		},
+		{
+			// Legacy-compat --peer-auto-tls carried on the reserved cluster
+			// annotation (no typed spec.tls.peer) projects to PeerAutoTLS.
+			name: "peer-auto-tls annotation only",
+			in: func() *lll.EtcdCluster {
+				c := withName(&lll.EtcdCluster{})
+				c.Annotations = map[string]string{AnnPeerAutoTLS: "true"}
+				return c
+			}(),
+			want: want{peerAutoTLS: true},
+		},
+		{
+			// An explicit peer secretRef supersedes the annotation.
+			name: "peer secretRef beats peer-auto-tls annotation",
+			in: func() *lll.EtcdCluster {
+				c := withName(&lll.EtcdCluster{Spec: lll.EtcdClusterSpec{TLS: &lll.EtcdClusterTLS{
+					Peer: &lll.PeerTLS{SecretRef: &corev1.LocalObjectReference{Name: "p"}},
+				}}})
+				c.Annotations = map[string]string{AnnPeerAutoTLS: "true"}
+				return c
+			}(),
+			want: want{hasPeer: true, peerSecret: "p"},
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -2554,6 +2611,9 @@ func TestDeriveMemberTLS(t *testing.T) {
 			}
 			if (got.PeerSecretRef != nil) != tc.want.hasPeer {
 				t.Fatalf("hasPeer = %v; want %v", got.PeerSecretRef != nil, tc.want.hasPeer)
+			}
+			if got.PeerAutoTLS != tc.want.peerAutoTLS {
+				t.Fatalf("PeerAutoTLS = %v; want %v", got.PeerAutoTLS, tc.want.peerAutoTLS)
 			}
 			if got.ClientMTLS != tc.want.clientMTLS {
 				t.Fatalf("ClientMTLS = %v; want %v", got.ClientMTLS, tc.want.clientMTLS)
