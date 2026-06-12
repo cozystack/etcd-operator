@@ -898,9 +898,66 @@ func restoreInitContainer(member *lll.EtcdMember, peerAddr, operatorImage string
 	}, vols
 }
 
+// dataLossRestartThreshold is how many times the etcd container must have
+// restarted before we treat a non-bootstrap PVC member as unrecoverable and
+// replace it. High enough to ride out transient join churn and slow restores;
+// CrashLoopBackOff caps its backoff at 5m, so this many restarts means a
+// member that has been unable to start for several minutes.
+const dataLossRestartThreshold = 5
+
+// etcdContainerStuck reports whether the pod's etcd container is persistently
+// failing to start: not ready and restarted at least dataLossRestartThreshold
+// times, excluding OOMKilled (a resource problem that re-creating the member
+// would not fix). This is the signature of an unrecoverable member — most
+// commonly a data dir lost while the cluster membership moved on, so the
+// member's frozen --initial-cluster no longer matches the live cluster and
+// etcd refuses to boot ("error validating peerURLs ... member count is
+// unequal"). etcd ignores --initial-cluster for an initialised data dir, so a
+// healthy member that merely restarts is unaffected.
+func etcdContainerStuck(pod *corev1.Pod) bool {
+	for _, cs := range pod.Status.ContainerStatuses {
+		if cs.Name != "etcd" {
+			continue
+		}
+		if cs.Ready || cs.RestartCount < dataLossRestartThreshold {
+			return false
+		}
+		if t := cs.LastTerminationState.Terminated; t != nil && t.Reason == "OOMKilled" {
+			return false
+		}
+		return true
+	}
+	return false
+}
+
+// clusterHasQuorumWithout reports whether the member's cluster still has quorum
+// among its OTHER members — i.e. losing this one is a minority failure, so
+// replacing it cannot break the cluster. ReadyMembers already excludes this
+// (not-ready) member, so it is the live healthy count. Used to gate self-heal:
+// we never delete a member during a cluster-wide outage (where many members
+// crash at once), only an isolated stuck member backed by a healthy majority.
+func (r *EtcdMemberReconciler) clusterHasQuorumWithout(ctx context.Context, member *lll.EtcdMember) bool {
+	cluster, err := r.clusterFor(ctx, member)
+	if err != nil {
+		return false
+	}
+	desired := 0
+	if cluster.Status.Observed != nil {
+		desired = int(cluster.Status.Observed.Replicas)
+	}
+	if desired == 0 && cluster.Spec.Replicas != nil {
+		desired = int(*cluster.Spec.Replicas)
+	}
+	if desired == 0 {
+		return false
+	}
+	return int(cluster.Status.ReadyMembers) >= desired/2+1
+}
+
 // ── Status ───────────────────────────────────────────────────────────────
 
 func (r *EtcdMemberReconciler) updateStatus(ctx context.Context, member *lll.EtcdMember) (ctrl.Result, error) {
+	log := log.FromContext(ctx)
 	pod := &corev1.Pod{}
 	if err := r.Get(ctx, types.NamespacedName{Namespace: member.Namespace, Name: member.Name}, pod); err != nil {
 		if errors.IsNotFound(err) {
@@ -950,6 +1007,26 @@ func (r *EtcdMemberReconciler) updateStatus(ctx context.Context, member *lll.Etc
 
 	switch {
 	case !podReady:
+		// Self-heal an unrecoverable member. A non-bootstrap PVC member whose
+		// etcd cannot start — classically because its data dir was lost while
+		// the cluster membership moved on, leaving its frozen --initial-cluster
+		// stale (etcd: "member count is unequal") — crash-loops forever on its
+		// own. Replace it: delete the CR so the finalizer does a clean
+		// MemberRemove and the cluster controller gap-fills a fresh member with
+		// a current --initial-cluster. Gate on the rest of the cluster having
+		// quorum so a cluster-wide outage never cascades into mass deletion
+		// (the finalizer's MemberRemove is quorum-gated too — belt and braces).
+		if !member.Spec.Bootstrap &&
+			member.Spec.Storage.Medium != lll.StorageMediumMemory &&
+			etcdContainerStuck(pod) &&
+			r.clusterHasQuorumWithout(ctx, member) {
+			log.Info("etcd member is persistently crash-looping while the rest of the cluster is healthy; deleting it for replacement",
+				"restartThreshold", dataLossRestartThreshold)
+			if err := r.Delete(ctx, member); err != nil {
+				return ctrl.Result{}, err
+			}
+			return ctrl.Result{}, nil
+		}
 		if setMemberCondition(member, lll.MemberReady, metav1.ConditionFalse, "PodNotReady",
 			fmt.Sprintf("pod phase: %s", pod.Status.Phase)) {
 			changed = true
