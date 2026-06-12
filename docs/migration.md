@@ -153,11 +153,9 @@ without `--version`, `enableAuth` without server TLS, a non-integer
 `quota-backend-bytes`/`snapshot-count`, a failed inspection) skip that
 cluster and exit non-zero.
 
-TLS caveat: the legacy API kept CAs in separate Secrets
-(`serverTrustedCASecret`, `peerTrustedCASecret`); the new operator reads
-`ca.crt` from the server/peer Secret itself. The tool warns per cluster —
-merge the CA into the referenced Secret **before** starting the new operator
-(with cert-manager-issued secrets, `ca.crt` is typically already in place).
+TLS needs preparation that the dry-run only partly catches — the CA location,
+and (the one that bites *after* a clean-looking migration) the cert SAN coverage
+for replacement members. Read [TLS](#tls) below before `--apply`.
 
 ### Peer auto-TLS (legacy `--peer-auto-tls`)
 
@@ -267,16 +265,70 @@ pods remain reachable under it for their whole lifetime (their immutable
 `spec.subdomain` points at it); rolled/replacement members come up under the
 native `<cluster>` headless Service instead.
 
-> **Prerequisite — externally-issued certs must carry both DNS domains during
-> the mixed window.** Server/peer certs here are external (e.g. Cozystack
-> cert-manager); the operator does not synthesize them. The operator's SAN
-> contract is a wildcard pinned to the Service name (`*.<svc>.<ns>.svc`).
-> During rollover, adopted members resolve under `<cluster>-headless` and
-> rolled members under `<cluster>`, so the cert the pods mount must carry
-> **both** `*.<cluster>-headless.<ns>.svc` and `*.<cluster>.<ns>.svc` (plus the
-> `.<cluster-domain>` FQDN forms) for the duration. Drop the legacy SAN once
-> rollover completes. Coordinate this with whoever issues the certs before
-> starting the new operator.
+### TLS
+
+TLS is the sharpest edge of a migration, because the certificates are
+**externally issued** (the operator never mints server/peer certs — it only
+references them) and the new operator names members differently from the legacy
+one. Two things must be right *before* `--apply`, and the second is the one that
+silently bites later.
+
+**CA location.** The legacy API kept CAs in separate Secrets
+(`serverTrustedCASecret`, `peerTrustedCASecret`); the new operator reads `ca.crt`
+from the server/peer Secret itself. Merge the CA into the referenced Secret
+before starting the new operator — the dry-run warns per cluster (with
+cert-manager-issued Secrets `ca.crt` is usually already there).
+
+**SAN coverage — check this before you migrate.** The server and peer certs must
+cover every DNS name a member is reached at. There are two domains in play, and
+they are needed for different lifetimes:
+
+- `*.<cluster>-headless.<ns>.svc` (+ the `.<cluster-domain>` FQDN form) — the
+  **adopted** members keep this legacy domain (their immutable Pod `subdomain`
+  points at it). **Transient**: needed only until every adopted member has been
+  rolled/replaced; drop it afterwards.
+- `*.<cluster>.<ns>.svc` (+ FQDN) — every member the new operator **creates**
+  (scale-up, and crucially *replacement*) comes up under the native domain.
+  **Permanent**: keep it for the life of the cluster.
+
+Both the server cert and the peer cert need both domains during the mixed
+window. The operator cannot synthesize any of this — coordinate it with whoever
+issues the certs.
+
+> **The wildcard is not optional — and many issuers don't use one.** Some setups
+> (including some Cozystack clusters) issue the etcd cert with **explicit,
+> enumerated per-pod SANs** — `etcd-0`, `etcd-1`, `etcd-2` under
+> `<cluster>-headless` — and **no wildcard**. That is enough to *adopt* (the
+> existing pod names match), so the migration appears to succeed — but the
+> operator replaces a lost member with a fresh one named by `generateName`
+> (a random suffix, e.g. `etcd-9q4xz`). That name is in no SAN and can never be
+> pre-listed, so its endpoint fails certificate verification **forever**.
+> Re-issue the certs with the `*.<cluster>.<ns>.svc` **wildcard** before the
+> first replacement (ideally before migrating at all).
+
+**The failure mode is silent — the CR status will not show it.** An uncovered
+member still joins raft membership and its Pod reports Ready (the readiness probe
+dials `localhost`, which every cert covers). The operator only checks Pod
+readiness plus the member list, not per-member TLS reachability, so it reports
+`Available=True` / `Degraded=False` while the cluster is in fact running one
+member short — no fault tolerance, one failure from losing quorum. **Validate a
+TLS migration at the etcd level, not from the CR conditions.** From a pod that
+mounts the client cert + CA:
+
+```
+etcdctl endpoint health --cluster
+etcdctl endpoint status --cluster -w table
+```
+
+A member whose name isn't covered fails with, verbatim:
+
+```
+… transport: authentication handshake failed: tls: failed to verify certificate:
+x509: certificate is valid for <enumerated names…>, not <member>.<cluster>.<ns>.svc
+```
+
+That `not <member>.<cluster>.<ns>.svc` is the tell: the cert is missing the
+native-domain wildcard. Reissue the server **and** peer certs to include it.
 
 ### Final cleanup
 
