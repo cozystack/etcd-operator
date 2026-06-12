@@ -58,6 +58,22 @@ const (
 	// (validDataDirSubPath) — an annotation has no apiserver schema, so the
 	// controller fails closed against a mount-escaping value.
 	AnnDataDirSubPath = ReservedAnnotationPrefix + "data-dir-subpath"
+
+	// AnnPeerAutoTLS, set to "true" on an EtcdCluster, runs the peer plane
+	// with etcd's --peer-auto-tls: per-member self-signed certs, NO shared
+	// CA, so peer traffic is encrypted but NOT authenticated. This is a
+	// migration-only knob etcd-migrate stamps when adopting a legacy cluster
+	// that ran the previous operator's unconditional --peer-auto-tls default
+	// (no CA exists to do real mTLS, so a strict-mTLS replacement could never
+	// rejoin the still-auto-tls members). Unlike AnnHeadlessServiceName /
+	// AnnDataDirSubPath it is cluster-level and does NOT self-wipe: the
+	// controller propagates it to every member it builds so replacement/
+	// scaled members keep interoperating. Deliberately NOT a typed spec field
+	// — an unauthenticated peer plane must not be a discoverable, CEL-blessed
+	// option for new clusters; an undocumented reserved key is the lesser
+	// footgun. Superseded by an explicit spec.tls.peer.secretRef/certManager
+	// (real mTLS wins; precedence lives in clusterPeerAutoTLS).
+	AnnPeerAutoTLS = ReservedAnnotationPrefix + "peer-auto-tls"
 )
 
 // etcdDataDirRoot is the mount path of every member's data volume; --data-dir
@@ -136,12 +152,31 @@ func clusterClientScheme(cluster *lll.EtcdCluster) string {
 }
 
 // clusterPeerScheme returns "https" when the cluster has peer TLS configured,
-// "http" otherwise.
+// "http" otherwise. The legacy-compat --peer-auto-tls mode (carried on the
+// AnnPeerAutoTLS annotation, no typed spec.tls.peer) also serves peer over
+// https, so it counts too.
 func clusterPeerScheme(cluster *lll.EtcdCluster) string {
 	if cluster != nil && cluster.Spec.TLS != nil && cluster.Spec.TLS.Peer != nil {
 		return "https"
 	}
+	if clusterPeerAutoTLS(cluster) {
+		return "https"
+	}
 	return "http"
+}
+
+// clusterPeerAutoTLS reports whether the cluster runs the legacy-compat
+// --peer-auto-tls peer mode, carried on the reserved AnnPeerAutoTLS annotation
+// (see its doc). An explicit typed peer TLS mode (secretRef/certManager) always
+// wins, so the annotation is honoured only when spec.tls.peer is unset.
+func clusterPeerAutoTLS(cluster *lll.EtcdCluster) bool {
+	if cluster == nil {
+		return false
+	}
+	if cluster.Spec.TLS != nil && cluster.Spec.TLS.Peer != nil {
+		return false
+	}
+	return cluster.Annotations[AnnPeerAutoTLS] == "true"
 }
 
 // memberClientScheme is the per-member counterpart to clusterClientScheme,
@@ -155,7 +190,8 @@ func memberClientScheme(member *lll.EtcdMember) string {
 
 // memberPeerScheme is the per-member counterpart to clusterPeerScheme.
 func memberPeerScheme(member *lll.EtcdMember) string {
-	if member != nil && member.Spec.TLS != nil && member.Spec.TLS.PeerSecretRef != nil {
+	if member != nil && member.Spec.TLS != nil &&
+		(member.Spec.TLS.PeerSecretRef != nil || member.Spec.TLS.PeerAutoTLS) {
 		return "https"
 	}
 	return "http"
@@ -179,19 +215,27 @@ func buildInitialCluster(peerScheme string, names []string, service, namespace s
 // Secret names regardless of source, so buildPod / ensurePod /
 // buildOperatorTLSConfig stay source-agnostic.
 func deriveMemberTLS(cluster *lll.EtcdCluster) *lll.EtcdMemberTLS {
-	if cluster == nil || cluster.Spec.TLS == nil {
-		return nil
-	}
-	if cluster.Spec.TLS.Client == nil && cluster.Spec.TLS.Peer == nil {
+	if cluster == nil {
 		return nil
 	}
 	out := &lll.EtcdMemberTLS{}
-	if name := serverSecretName(cluster); name != "" {
-		out.ClientServerSecretRef = &corev1.LocalObjectReference{Name: name}
-		out.ClientMTLS = operatorClientSecretName(cluster) != ""
+	if cluster.Spec.TLS != nil {
+		if name := serverSecretName(cluster); name != "" {
+			out.ClientServerSecretRef = &corev1.LocalObjectReference{Name: name}
+			out.ClientMTLS = operatorClientSecretName(cluster) != ""
+		}
+		if name := peerSecretName(cluster); name != "" {
+			out.PeerSecretRef = &corev1.LocalObjectReference{Name: name}
+		}
 	}
-	if name := peerSecretName(cluster); name != "" {
-		out.PeerSecretRef = &corev1.LocalObjectReference{Name: name}
+	// Carry the legacy-compat --peer-auto-tls posture (a cluster-level
+	// reserved annotation, not typed spec) down to the member. clusterPeerAutoTLS
+	// already yields false when an explicit peer mode is set, so real mTLS wins.
+	if out.PeerSecretRef == nil && clusterPeerAutoTLS(cluster) {
+		out.PeerAutoTLS = true
+	}
+	if out.ClientServerSecretRef == nil && out.PeerSecretRef == nil && !out.PeerAutoTLS {
+		return nil
 	}
 	return out
 }

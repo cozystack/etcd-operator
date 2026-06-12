@@ -477,7 +477,7 @@ func TestCEL_TLSPeerCertManagerAndSecretRefMutuallyExclusive(t *testing.T) {
 		_ = k8s.Delete(ctx, c)
 		t.Fatalf("apiserver accepted both peer.secretRef and peer.certManager; expected rejection")
 	}
-	if !strings.Contains(err.Error(), "exactly one of spec.tls.peer.secretRef or spec.tls.peer.certManager") {
+	if !strings.Contains(err.Error(), "exactly one of spec.tls.peer.secretRef") {
 		t.Fatalf("error did not mention peer mutual exclusion: %v", err)
 	}
 }

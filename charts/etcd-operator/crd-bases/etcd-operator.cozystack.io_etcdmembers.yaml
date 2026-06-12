@@ -1336,6 +1336,17 @@ spec:
                         type: string
                     type: object
                     x-kubernetes-map-type: atomic
+                  peerAutoTLS:
+                    description: |-
+                      PeerAutoTLS is operator-managed plumbing: it carries the cluster's
+                      reserved "etcd-operator.cozystack.io/peer-auto-tls" annotation down to
+                      the member so buildPod renders etcd's --peer-auto-tls (self-signed, no
+                      shared CA) instead of mounting a peer secret. INSECURE — peer is
+                      encrypted but NOT authenticated. Set only on clusters adopted from a
+                      legacy --peer-auto-tls cluster, and never together with PeerSecretRef
+                      (an explicit peer secret supersedes the annotation). Users do not set
+                      this directly; the cluster controller derives it.
+                    type: boolean
                   peerSecretRef:
                     description: |-
                       PeerSecretRef mirrors EtcdClusterTLS.Peer.SecretRef. When nil, the
