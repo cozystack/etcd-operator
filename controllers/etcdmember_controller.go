@@ -712,7 +712,16 @@ func (r *EtcdMemberReconciler) buildPod(member *lll.EtcdMember) *corev1.Pod {
 			Name: "tls-client", MountPath: "/etc/etcd/tls/client", ReadOnly: true,
 		})
 	}
-	if peerTLS {
+	switch {
+	case member.Spec.TLS != nil && member.Spec.TLS.PeerAutoTLS:
+		// INSECURE legacy-compat peer mode: etcd generates a self-signed peer
+		// cert per member with no shared CA, so peer is encrypted but NOT
+		// authenticated and there is nothing to mount. Only reached for
+		// clusters adopted from a --peer-auto-tls legacy cluster: the cluster
+		// controller derives this from the reserved AnnPeerAutoTLS annotation
+		// etcd-migrate stamps (see AnnPeerAutoTLS).
+		cmd = append(cmd, "--peer-auto-tls")
+	case peerTLS:
 		cmd = append(cmd,
 			"--peer-cert-file=/etc/etcd/tls/peer/tls.crt",
 			"--peer-key-file=/etc/etcd/tls/peer/tls.key",

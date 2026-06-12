@@ -185,6 +185,35 @@ func BuildAdoption(name, namespace string, spec legacy.EtcdClusterSpec, facts Cl
 		}
 	}
 
+	// Detect the legacy operator's default --peer-auto-tls. It enables peer TLS
+	// with self-signed, no-shared-CA certs UNCONDITIONALLY unless a BYO
+	// peerSecret is set, so a default cluster advertises https:// peer URLs that
+	// translateTLS — which sees only the spec — cannot represent (it leaves
+	// spec.tls.peer nil). Carry it forward as the reserved cluster annotation
+	// AnnPeerAutoTLS (NOT a typed spec field — an unauthenticated peer plane
+	// must not be a discoverable option) so the new operator runs replacement/
+	// scaled members with --peer-auto-tls too and they interoperate with the
+	// still-auto-tls adopted members (no shared CA exists to do real mTLS, and a
+	// plaintext-peer replacement could never join). This preserves the legacy
+	// peer security posture — encrypted but NOT authenticated — so flag it as a
+	// SecurityWarning; moving to real mTLS later is a delete-and-recreate.
+	peerTLSDeclared := cluster.Spec.TLS != nil && cluster.Spec.TLS.Peer != nil
+	if !peerTLSDeclared {
+		for _, m := range members {
+			if strings.HasPrefix(m.PeerURL, "https://") {
+				if cluster.Annotations == nil {
+					cluster.Annotations = map[string]string{}
+				}
+				cluster.Annotations[controllers.AnnPeerAutoTLS] = "true"
+				plan.SecurityWarnings = append(plan.SecurityWarnings, fmt.Sprintf(
+					"cluster runs etcd --peer-auto-tls (member %q advertises %s; no peerSecret in the legacy spec): carried forward via the reserved %s annotation so members keep interoperating across replacement/scale. "+
+						"The peer plane is encrypted but NOT authenticated (no shared CA) — any TLS-capable workload that reaches :2380 can peer. Move to real mTLS (spec.tls.peer.secretRef or certManager) when you can; that is a delete-and-recreate since spec.tls is immutable.",
+					m.Name, m.PeerURL, controllers.AnnPeerAutoTLS))
+				break
+			}
+		}
+	}
+
 	// Replicas follow the LIVE member count. A legacy spec disagreeing with
 	// reality (mid-scale crash, manual edits) is surfaced, not silently
 	// trusted — adopting with spec.replicas != len(members) would make the
@@ -300,21 +329,25 @@ func BuildAdoption(name, namespace string, spec legacy.EtcdClusterSpec, facts Cl
 }
 
 // deriveAdoptedMemberTLS mirrors the controller's cluster→member TLS
-// projection for the BYO-secret mode (the only mode a legacy translation
-// produces): server secret ref + the "operator presents a client cert" bit,
-// peer secret ref.
+// projection for the modes a legacy translation produces: client server
+// secret ref + the "operator presents a client cert" bit, and peer either as
+// a secret ref (BYO) or auto-tls (legacy --peer-auto-tls, carried forward via
+// the reserved AnnPeerAutoTLS cluster annotation rather than the typed spec).
 func deriveAdoptedMemberTLS(cluster *lll.EtcdCluster) *lll.EtcdMemberTLS {
 	tls := cluster.Spec.TLS
-	if tls == nil || (tls.Client == nil && tls.Peer == nil) {
+	peerAutoTLS := cluster.Annotations[controllers.AnnPeerAutoTLS] == "true"
+	if (tls == nil || (tls.Client == nil && tls.Peer == nil)) && !peerAutoTLS {
 		return nil
 	}
 	out := &lll.EtcdMemberTLS{}
-	if tls.Client != nil && tls.Client.ServerSecretRef != nil {
+	if tls != nil && tls.Client != nil && tls.Client.ServerSecretRef != nil {
 		out.ClientServerSecretRef = &corev1.LocalObjectReference{Name: tls.Client.ServerSecretRef.Name}
 		out.ClientMTLS = tls.Client.OperatorClientSecretRef != nil
 	}
-	if tls.Peer != nil && tls.Peer.SecretRef != nil {
+	if tls != nil && tls.Peer != nil && tls.Peer.SecretRef != nil {
 		out.PeerSecretRef = &corev1.LocalObjectReference{Name: tls.Peer.SecretRef.Name}
+	} else if peerAutoTLS {
+		out.PeerAutoTLS = true
 	}
 	return out
 }

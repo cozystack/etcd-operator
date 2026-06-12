@@ -138,6 +138,64 @@ func TestBuildAdoption_MirrorsTLSOntoMembers(t *testing.T) {
 	}
 }
 
+// TestBuildAdoption_PeerAutoTLS: a cluster on the legacy default --peer-auto-tls
+// (https peer URLs, no peerSecret in the spec) is carried forward via the
+// reserved AnnPeerAutoTLS cluster annotation (NOT a typed spec field) AND raised
+// as a SecurityWarning; the adopted members mirror PeerAutoTLS. With BYO peer
+// TLS, the annotation is NOT set and the secret is carried into
+// spec.tls.peer.secretRef instead.
+func TestBuildAdoption_PeerAutoTLS(t *testing.T) {
+	hasAutoTLSWarn := func(p ResourcePlan) bool {
+		for _, w := range p.SecurityWarnings {
+			if strings.Contains(w, "peer-auto-tls") {
+				return true
+			}
+		}
+		return false
+	}
+
+	// auto-tls: facts advertise https peer URLs, spec sets no peerSecret →
+	// AnnPeerAutoTLS annotation set + security warning + members mirror it.
+	autoPlan := BuildAdoption("etcd", "ns", adoptSpecFixture(t), adoptFactsFixture(3), TranslateOptions{})
+	if autoPlan.Action != ActionAdopt {
+		t.Fatalf("auto-tls Action = %s (errors %v)", autoPlan.Action, autoPlan.Errors)
+	}
+	if !hasAutoTLSWarn(autoPlan) {
+		t.Errorf("expected a --peer-auto-tls security warning; SecurityWarnings: %v", autoPlan.SecurityWarnings)
+	}
+	ac := autoPlan.Target.(*lll.EtcdCluster)
+	if ac.Annotations[controllers.AnnPeerAutoTLS] != "true" {
+		t.Fatalf("auto-tls cluster must carry %s=true; got annotations %+v", controllers.AnnPeerAutoTLS, ac.Annotations)
+	}
+	if ac.Spec.TLS != nil && ac.Spec.TLS.Peer != nil {
+		t.Errorf("auto-tls must NOT set a typed spec.tls.peer; got %+v", ac.Spec.TLS.Peer)
+	}
+	for _, ma := range autoPlan.Adoption.Members {
+		if ma.Member.Spec.TLS == nil || !ma.Member.Spec.TLS.PeerAutoTLS {
+			t.Errorf("member %q must mirror PeerAutoTLS; got %+v", ma.Member.Name, ma.Member.Spec.TLS)
+		}
+	}
+
+	// BYO peer TLS: peerSecret set → translateTLS carries spec.tls.peer, no annotation/warning.
+	spec := adoptSpecFixture(t)
+	spec.Security = &legacy.SecuritySpec{TLS: legacy.TLSSpec{PeerSecret: "peer", PeerTrustedCASecret: "peer"}}
+	byoPlan := BuildAdoption("etcd", "ns", spec, adoptFactsFixture(3), TranslateOptions{})
+	if byoPlan.Action != ActionAdopt {
+		t.Fatalf("BYO Action = %s (errors %v)", byoPlan.Action, byoPlan.Errors)
+	}
+	if hasAutoTLSWarn(byoPlan) {
+		t.Errorf("BYO peer TLS must not trigger the auto-tls warning; SecurityWarnings: %v", byoPlan.SecurityWarnings)
+	}
+	cluster := byoPlan.Target.(*lll.EtcdCluster)
+	if cluster.Spec.TLS == nil || cluster.Spec.TLS.Peer == nil ||
+		cluster.Spec.TLS.Peer.SecretRef == nil || cluster.Spec.TLS.Peer.SecretRef.Name != "peer" {
+		t.Errorf("BYO peer TLS must be carried into spec.tls.peer.secretRef; got %+v", cluster.Spec.TLS)
+	}
+	if cluster.Annotations[controllers.AnnPeerAutoTLS] != "" {
+		t.Errorf("BYO peer TLS must not set the peer-auto-tls annotation; got %+v", cluster.Annotations)
+	}
+}
+
 // TestBuildAdoption_Refusals pins the states the tool must not touch.
 func TestBuildAdoption_Refusals(t *testing.T) {
 	t.Run("learner member", func(t *testing.T) {

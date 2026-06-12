@@ -221,6 +221,7 @@ func runMigration(ctx context.Context, cfg *Config, stdin io.Reader, stdout io.W
 		fmt.Fprintln(stdout, "\nNEXT: scale the new operator up — it will take over the adopted clusters without touching the pods:\n  kubectl -n "+
 			mustNamespace(cfg.NewController)+" scale deploy "+mustName(cfg.NewController)+" --replicas=1")
 	}
+	renderSecuritySummary(stdout, plans)
 	printCRDNotice(stdout)
 	return errorIfPlanFailed(plans)
 }

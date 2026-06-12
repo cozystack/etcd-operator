@@ -82,6 +82,12 @@ type ResourcePlan struct {
 	// Warnings list legacy settings that do not carry over (dropped fields,
 	// manual follow-ups like merging CA bundles into secrets).
 	Warnings []string
+	// SecurityWarnings call out security-posture downgrades the adoption
+	// carries forward (e.g. an unauthenticated --peer-auto-tls peer plane).
+	// Rendered with a loud marker in the plan AND re-surfaced in the
+	// post-apply summary, so a migration cannot complete without the operator
+	// seeing them — distinct from routine Warnings, which scroll past easily.
+	SecurityWarnings []string
 	// Errors explain why Action == ActionError.
 	Errors []string
 	// Notes are informational (endpoint compatibility, auth follow-ups).

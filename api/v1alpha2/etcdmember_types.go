@@ -44,6 +44,17 @@ type EtcdMemberTLS struct {
 	// mTLS (--peer-client-cert-auth=true).
 	// +optional
 	PeerSecretRef *corev1.LocalObjectReference `json:"peerSecretRef,omitempty"`
+
+	// PeerAutoTLS is operator-managed plumbing: it carries the cluster's
+	// reserved "etcd-operator.cozystack.io/peer-auto-tls" annotation down to
+	// the member so buildPod renders etcd's --peer-auto-tls (self-signed, no
+	// shared CA) instead of mounting a peer secret. INSECURE — peer is
+	// encrypted but NOT authenticated. Set only on clusters adopted from a
+	// legacy --peer-auto-tls cluster, and never together with PeerSecretRef
+	// (an explicit peer secret supersedes the annotation). Users do not set
+	// this directly; the cluster controller derives it.
+	// +optional
+	PeerAutoTLS bool `json:"peerAutoTLS,omitempty"`
 }
 
 // Condition types for EtcdMember.
