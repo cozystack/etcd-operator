@@ -6,14 +6,13 @@ on:
   # a branch PRs never target (this said `master`, which does not exist) means
   # the workflow never runs at all.
   #
-  # paths-ignore: a kind+cert-manager+Kamaji provisioning run costs ~30-45
-  # minutes; skip it for PRs that touch nothing the suite exercises
-  # (docs-only changes). Everything else — Go code, manifests, the harness,
-  # the workflows themselves — still gates.
+  # No paths filter on the trigger either: `kamaji-datastore` is a *required*
+  # status check, and a workflow skipped at the trigger never reports its
+  # check, leaving the required context stuck in "Expected" — which blocks the
+  # PR forever (e.g. docs-only PRs). Path filtering instead lives in the
+  # `changes` job below; a job skipped via `if:` still reports its check as
+  # "skipped", which branch protection treats as passing.
   pull_request:
-    paths-ignore:
-      - '**.md'
-      - 'docs/**'
   push:
     tags: [ "v*" ]
   workflow_dispatch:
@@ -23,7 +22,34 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  changes:
+    # Cheap (~seconds, no checkout — dorny uses the PR API) gate that decides
+    # whether the expensive job below needs to run. PR-only: tag pushes and
+    # manual dispatch always run the suite unconditionally (see the `if` on
+    # kamaji-datastore).
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    outputs:
+      code: ${{ steps.filter.outputs.code }}
+    steps:
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          # `code` is true when the PR touches anything the e2e suite
+          # exercises. Only-negated patterns get an implicit `**`, so this
+          # reads as "all files except Markdown and docs/**" — i.e. docs-only
+          # PRs leave `code` false and the ~30-45 min run below is skipped.
+          filters: |
+            code:
+              - '!**/*.md'
+              - '!docs/**'
+
   kamaji-datastore:
+    needs: changes
+    # Always run for tag pushes / manual dispatch; for PRs, run only when
+    # non-docs files changed. When skipped on a docs-only PR the check still
+    # reports (as "skipped" = passing), so the PR is not blocked.
+    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.code == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
