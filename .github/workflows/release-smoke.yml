@@ -10,17 +10,13 @@ name: Release install smoke
 # introduces them, not on the first real tag. The image is loaded into kind,
 # never pushed — no registry credentials.
 on:
+  # No paths filter on the trigger: `smoke (helm)` and `smoke (manifest)` are
+  # *required* status checks, and a workflow skipped at the trigger never
+  # reports them, leaving the required contexts stuck in "Expected" and
+  # blocking the PR forever (e.g. docs-only PRs). Path filtering lives in the
+  # `changes` job below instead; the matrix job is skipped via `if:` when
+  # nothing release-relevant changed, and a skipped check counts as passing.
   pull_request:
-    paths:
-      - '.github/workflows/release-smoke.yml'
-      - '.github/workflows/docker-publish.yml'
-      - '.github/workflows/release-assets.yml'
-      - '.github/workflows/helm-publish.yml'
-      - 'hack/release-smoke.sh'
-      - 'charts/**'
-      - 'Makefile'
-      - 'Dockerfile'
-      - 'api/**'
   workflow_dispatch:
 
 concurrency:
@@ -28,7 +24,38 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  changes:
+    # Cheap (~seconds, no checkout) gate. PR-only: manual dispatch always runs
+    # the smoke matrix unconditionally (see the `if` on smoke).
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    outputs:
+      release: ${{ steps.filter.outputs.release }}
+    steps:
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          # True when the PR touches the tag-release machinery or anything it
+          # ships. Matches the paths this workflow used to filter on at the
+          # trigger; PRs that touch none of these skip the two kind smokes.
+          filters: |
+            release:
+              - '.github/workflows/release-smoke.yml'
+              - '.github/workflows/docker-publish.yml'
+              - '.github/workflows/release-assets.yml'
+              - '.github/workflows/helm-publish.yml'
+              - 'hack/release-smoke.sh'
+              - 'charts/**'
+              - 'Makefile'
+              - 'Dockerfile'
+              - 'api/**'
+
   smoke:
+    needs: changes
+    # Always run on manual dispatch; for PRs, run only when release-relevant
+    # files changed. When skipped, each matrix leg's required check still
+    # reports as "skipped" (= passing), so the PR is not blocked.
+    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.release == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
