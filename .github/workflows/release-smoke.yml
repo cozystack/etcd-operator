@@ -14,8 +14,9 @@ on:
   # *required* status checks, and a workflow skipped at the trigger never
   # reports them, leaving the required contexts stuck in "Expected" and
   # blocking the PR forever (e.g. docs-only PRs). Path filtering lives in the
-  # `changes` job below instead; the matrix job is skipped via `if:` when
-  # nothing release-relevant changed, and a skipped check counts as passing.
+  # `changes` job below instead; the two smoke jobs are skipped via `if:` when
+  # nothing release-relevant changed, and a skipped job still reports its check
+  # as "skipped", which branch protection treats as passing.
   pull_request:
   workflow_dispatch:
 
@@ -26,7 +27,7 @@ concurrency:
 jobs:
   changes:
     # Cheap (~seconds, no checkout) gate. PR-only: manual dispatch always runs
-    # the smoke matrix unconditionally (see the `if` on smoke).
+    # both smokes unconditionally (see the `if` on the smoke jobs).
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     outputs:
@@ -50,20 +51,55 @@ jobs:
               - 'Dockerfile'
               - 'api/**'
 
-  smoke:
+  # The manifest and helm smokes are two separate jobs, NOT a `strategy.matrix`,
+  # on purpose. The required status contexts are `smoke (manifest)` and
+  # `smoke (helm)` — the per-leg names a matrix produces *when it runs*. But a
+  # matrix job skipped via `if:` collapses to a SINGLE check named just `smoke`,
+  # so the per-leg names are never reported and the required contexts stay stuck
+  # in "Expected", blocking docs-only PRs forever. A plain job, by contrast,
+  # reports its check under its own `name:` even when skipped — so naming each
+  # job exactly after its required context makes the skip satisfy the gate.
+  smoke-manifest:
+    # `name` is what becomes the check-run context, so it must equal the
+    # required status check string exactly — including the parentheses. The
+    # job *id* (`smoke-manifest`) can't contain spaces, hence the split.
+    name: smoke (manifest)
     needs: changes
     # Always run on manual dispatch; for PRs, run only when release-relevant
-    # files changed. When skipped, each matrix leg's required check still
-    # reports as "skipped" (= passing), so the PR is not blocked.
+    # files changed. When skipped, the `smoke (manifest)` check still reports
+    # as "skipped" (= passing), so the PR is not blocked.
     if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.release == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
       contents: read
-    strategy:
-      fail-fast: false
-      matrix:
-        mode: [ manifest, helm ]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: release-install smoke (manifest, kind)
+        # Builds the image, installs via the rendered manifest, and asserts the
+        # operator is Available and a 1-node EtcdCluster reaches READY. On
+        # failure the script's EXIT trap dumps cluster state before teardown.
+        run: make release-smoke
+
+  smoke-helm:
+    # `name` must equal the required status check string exactly (see
+    # smoke-manifest above for why the job id and name differ).
+    name: smoke (helm)
+    needs: changes
+    # Always run on manual dispatch; for PRs, run only when release-relevant
+    # files changed. When skipped, the `smoke (helm)` check still reports as
+    # "skipped" (= passing), so the PR is not blocked.
+    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.release == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v4
 
@@ -73,18 +109,12 @@ jobs:
           cache: true
 
       - name: Install Helm
-        if: matrix.mode == 'helm'
         uses: azure/setup-helm@v4
         with:
           version: 'v3.16.4'
 
-      - name: release-install smoke (${{ matrix.mode }}, kind)
-        # Builds the image, installs via the matrix path, and asserts the
+      - name: release-install smoke (helm, kind)
+        # Builds the image, installs via the Helm chart, and asserts the
         # operator is Available and a 1-node EtcdCluster reaches READY. On
         # failure the script's EXIT trap dumps cluster state before teardown.
-        run: |
-          if [ "${{ matrix.mode }}" = helm ]; then
-            make helm-smoke
-          else
-            make release-smoke
-          fi
+        run: make helm-smoke
