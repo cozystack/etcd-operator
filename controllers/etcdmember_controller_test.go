@@ -1016,6 +1016,49 @@ func TestBuildPod_LivenessIsNotQuorumAware(t *testing.T) {
 	}
 }
 
+// TestBuildPod_ImageOverrideAndPullSecrets covers the air-gap path: buildPod
+// must honour the operator-wide default repository, the per-member spec.image
+// override, and stamp imagePullSecrets onto the Pod.
+func TestBuildPod_ImageOverrideAndPullSecrets(t *testing.T) {
+	t.Run("operator default repo, version-derived tag", func(t *testing.T) {
+		r := &EtcdMemberReconciler{EtcdImageRepository: "registry.internal/mirror/etcd"}
+		pod := r.buildPod(&lll.EtcdMember{
+			ObjectMeta: metav1.ObjectMeta{Name: "test-0", Namespace: "ns"},
+			Spec:       lll.EtcdMemberSpec{ClusterName: "test", Version: "3.6.11"},
+		})
+		if got := pod.Spec.Containers[0].Image; got != "registry.internal/mirror/etcd:v3.6.11" {
+			t.Errorf("image = %q, want operator-default mirror", got)
+		}
+	})
+
+	t.Run("per-member override and pull secrets win", func(t *testing.T) {
+		r := &EtcdMemberReconciler{EtcdImageRepository: "registry.internal/mirror/etcd"}
+		pod := r.buildPod(&lll.EtcdMember{
+			ObjectMeta: metav1.ObjectMeta{Name: "test-0", Namespace: "ns"},
+			Spec: lll.EtcdMemberSpec{
+				ClusterName: "test",
+				Version:     "3.6.11",
+				Image: &lll.EtcdImageSpec{
+					Repository: "private.example/etcd",
+					Tag:        "3.6.11-custom",
+					PullPolicy: corev1.PullAlways,
+				},
+				ImagePullSecrets: []corev1.LocalObjectReference{{Name: "regcreds"}},
+			},
+		})
+		c := pod.Spec.Containers[0]
+		if c.Image != "private.example/etcd:3.6.11-custom" {
+			t.Errorf("image = %q, want per-member override", c.Image)
+		}
+		if c.ImagePullPolicy != corev1.PullAlways {
+			t.Errorf("pullPolicy = %q, want Always", c.ImagePullPolicy)
+		}
+		if len(pod.Spec.ImagePullSecrets) != 1 || pod.Spec.ImagePullSecrets[0].Name != "regcreds" {
+			t.Errorf("pod.imagePullSecrets = %+v, want [regcreds]", pod.Spec.ImagePullSecrets)
+		}
+	})
+}
+
 // TestBuildPod_AppliesSchedulingAndMetadata covers the additionalMetadata,
 // affinity, and topologySpreadConstraints passthrough: buildPod must stamp
 // the Pod with the member's scheduling fields and merge the extra

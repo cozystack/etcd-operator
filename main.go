@@ -114,6 +114,7 @@ func main() {
 	var probeAddr string
 	var clusterDomain string
 	var operatorImage string
+	var etcdImageRepository string
 	flag.StringVar(&metricsAddr, "metrics-bind-address", ":8080", "The address the metric endpoint binds to.")
 	flag.StringVar(&probeAddr, "health-probe-bind-address", ":8081", "The address the probe endpoint binds to.")
 	flag.BoolVar(&enableLeaderElection, "leader-elect", false,
@@ -132,6 +133,12 @@ func main() {
 		"Operator image reference. The snapshot/restore agents run from this same "+
 			"image (Job / initContainer). Defaults to $OPERATOR_IMAGE; required for "+
 			"EtcdSnapshot and spec.bootstrap.restore to function.")
+	flag.StringVar(&etcdImageRepository, "etcd-image-repository", os.Getenv("ETCD_IMAGE_REPOSITORY"),
+		"Operator-wide default etcd image repository (registry host + path, no tag), "+
+			"e.g. 'registry.internal/mirror/etcd'. Used for every member Pod whose "+
+			"EtcdCluster does not set spec.image.repository — point air-gapped "+
+			"deployments at a mirror once instead of per cluster. Defaults to "+
+			"$ETCD_IMAGE_REPOSITORY; when empty the built-in quay.io/coreos/etcd is used.")
 	opts := zap.Options{
 		Development: true,
 	}
@@ -204,9 +211,10 @@ func main() {
 		os.Exit(1)
 	}
 	if err = (&controllers.EtcdMemberReconciler{
-		Client:        mgr.GetClient(),
-		Scheme:        mgr.GetScheme(),
-		OperatorImage: operatorImage,
+		Client:              mgr.GetClient(),
+		Scheme:              mgr.GetScheme(),
+		OperatorImage:       operatorImage,
+		EtcdImageRepository: etcdImageRepository,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "EtcdMember")
 		os.Exit(1)

@@ -558,6 +558,66 @@ type EtcdClusterSpec struct {
 	// tuning change in place.
 	// +optional
 	Options *EtcdOptions `json:"options,omitempty"`
+
+	// Image overrides the etcd container image for this cluster's member
+	// Pods. The primary use is air-gapped environments that mirror the
+	// upstream image to a private registry. Each unset field falls back to
+	// an operator-wide default: the repository to the operator's
+	// --etcd-image-repository / ETCD_IMAGE_REPOSITORY (itself defaulting to
+	// quay.io/coreos/etcd), the tag to "v"+spec.version. The pull policy is
+	// apiserver-defaulted to IfNotPresent as soon as this image block is
+	// present at all (even with only repository set); it falls back to the
+	// kubelet default only when no image block is given. See EtcdImageSpec
+	// for the per-field rules.
+	//
+	// Updates take effect on newly-created members (scale-up, replacement);
+	// the operator does not roll existing Pods to apply an image change in
+	// place. Latched through status.observed with the rest of the target
+	// spec, so a mid-flight edit only applies once the current target is
+	// reached.
+	// +optional
+	Image *EtcdImageSpec `json:"image,omitempty"`
+
+	// ImagePullSecrets is a list of Secret references in the cluster's
+	// namespace used to pull the etcd (and restore initContainer) image.
+	// Passed straight through to each member Pod's spec.imagePullSecrets.
+	// Required when spec.image points at a private registry that needs
+	// credentials.
+	//
+	// Like spec.image, changes take effect on newly-created members; the
+	// operator does not roll existing Pods. Latched through status.observed.
+	// +optional
+	ImagePullSecrets []corev1.LocalObjectReference `json:"imagePullSecrets,omitempty"`
+}
+
+// EtcdImageSpec overrides the etcd container image. Every field is optional;
+// an unset field falls back to its operator-wide default so a cluster can
+// override just the registry (the common air-gap case) without restating the
+// version-derived tag.
+type EtcdImageSpec struct {
+	// Repository is the image repository (registry host + path, no tag),
+	// e.g. "registry.internal/mirror/etcd". When empty the operator falls
+	// back to its --etcd-image-repository / ETCD_IMAGE_REPOSITORY default,
+	// which itself defaults to "quay.io/coreos/etcd".
+	// +optional
+	Repository string `json:"repository,omitempty"`
+
+	// Tag overrides the image tag. When empty the operator derives it from
+	// spec.version as "v"+version (e.g. "v3.6.11"). Set this only when the
+	// mirror uses a tag scheme that differs from the upstream "vX.Y.Z" — the
+	// operator still keys all of its version-dependent behaviour off
+	// spec.version, not off this tag.
+	// +optional
+	Tag string `json:"tag,omitempty"`
+
+	// PullPolicy is the etcd container's imagePullPolicy. Defaults to
+	// IfNotPresent — the right policy for the fixed "v<version>" tags this
+	// operator runs (it also matches the kubelet's own default for a fixed
+	// tag). Set Always only when a mutable tag is used via Tag.
+	// +kubebuilder:default=IfNotPresent
+	// +kubebuilder:validation:Enum=Always;IfNotPresent;Never
+	// +optional
+	PullPolicy corev1.PullPolicy `json:"pullPolicy,omitempty"`
 }
 
 // AdditionalMetadata is a set of labels and annotations the operator merges
@@ -624,6 +684,17 @@ type ObservedClusterSpec struct {
 	// reached.
 	// +optional
 	Options *EtcdOptions `json:"options,omitempty"`
+
+	// Image is the locked target etcd image override for member Pods.
+	// Latched with the rest of the target spec so a mid-flight image edit
+	// only applies to members created once the current target is reached.
+	// +optional
+	Image *EtcdImageSpec `json:"image,omitempty"`
+
+	// ImagePullSecrets is the locked target pull-secret list for member
+	// Pods. Latched with the rest of the target spec.
+	// +optional
+	ImagePullSecrets []corev1.LocalObjectReference `json:"imagePullSecrets,omitempty"`
 }
 
 // EtcdClusterStatus defines the observed state of an etcd cluster.

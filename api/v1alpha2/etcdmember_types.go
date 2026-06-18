@@ -116,6 +116,19 @@ type EtcdMemberSpec struct {
 	// +optional
 	Options *EtcdOptions `json:"options,omitempty"`
 
+	// Image mirrors EtcdCluster.spec.image at the time this member was
+	// created. The member controller resolves it (against the operator-wide
+	// repository default and spec.version) into the etcd container's image
+	// and imagePullPolicy at Pod-build time.
+	// +optional
+	Image *EtcdImageSpec `json:"image,omitempty"`
+
+	// ImagePullSecrets mirrors EtcdCluster.spec.imagePullSecrets at the time
+	// this member was created. Passed straight to the Pod's
+	// spec.imagePullSecrets at build time.
+	// +optional
+	ImagePullSecrets []corev1.LocalObjectReference `json:"imagePullSecrets,omitempty"`
+
 	// Bootstrap indicates this member is part of the initial cluster formation.
 	// When true the member starts with --initial-cluster-state=new.
 	// +optional
