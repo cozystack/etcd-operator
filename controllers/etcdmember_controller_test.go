@@ -694,7 +694,7 @@ func TestUpdateStatus_PopulatesMemberIDAndFlipsReady(t *testing.T) {
 
 // TestEtcdContainerStuck pins the self-heal detection: an etcd container is
 // "stuck" only when it is not ready, has restarted at least the threshold, and
-// was not OOMKilled.
+// was not OOMKilled — and never while the Pod is itself being deleted.
 func TestEtcdContainerStuck(t *testing.T) {
 	mk := func(name string, ready bool, restarts int32, lastReason string) *corev1.Pod {
 		cs := corev1.ContainerStatus{Name: name, Ready: ready, RestartCount: restarts}
@@ -703,6 +703,20 @@ func TestEtcdContainerStuck(t *testing.T) {
 		}
 		return &corev1.Pod{Status: corev1.PodStatus{ContainerStatuses: []corev1.ContainerStatus{cs}}}
 	}
+	// currentlyOOMKilled: the etcd container is over the restart threshold and
+	// sits in State.Terminated=OOMKilled right now (not yet backed off into
+	// Waiting/CrashLoopBackOff), so LastTerminationState is empty.
+	currentlyOOMKilled := &corev1.Pod{Status: corev1.PodStatus{ContainerStatuses: []corev1.ContainerStatus{{
+		Name: "etcd", Ready: false, RestartCount: dataLossRestartThreshold + 4,
+		State: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{Reason: "OOMKilled", ExitCode: 137}},
+	}}}}
+	// deletingPod: a stuck-looking container, but the Pod is terminating
+	// (DeletionTimestamp set) — a drain/eviction/restart, not an unrecoverable
+	// member.
+	now := metav1.Now()
+	deletingPod := mk("etcd", false, dataLossRestartThreshold+4, "Error")
+	deletingPod.DeletionTimestamp = &now
+
 	cases := []struct {
 		name string
 		pod  *corev1.Pod
@@ -712,7 +726,9 @@ func TestEtcdContainerStuck(t *testing.T) {
 		{"stuck: no last-termination recorded yet", mk("etcd", false, dataLossRestartThreshold+1, ""), true},
 		{"ready", mk("etcd", true, dataLossRestartThreshold+4, "Error"), false},
 		{"below restart threshold", mk("etcd", false, dataLossRestartThreshold-1, "Error"), false},
-		{"OOMKilled is excluded", mk("etcd", false, dataLossRestartThreshold+4, "OOMKilled"), false},
+		{"OOMKilled (last termination) is excluded", mk("etcd", false, dataLossRestartThreshold+4, "OOMKilled"), false},
+		{"OOMKilled (current state) is excluded", currentlyOOMKilled, false},
+		{"pod being deleted is never stuck", deletingPod, false},
 		{"no etcd container", mk("other", false, dataLossRestartThreshold+4, "Error"), false},
 	}
 	for _, tc := range cases {
@@ -831,6 +847,40 @@ func TestUpdateStatus_KeepsStuckBootstrapMember(t *testing.T) {
 
 	if err := c.Get(ctx, types.NamespacedName{Name: "test-0", Namespace: "ns"}, &lll.EtcdMember{}); err != nil {
 		t.Fatalf("bootstrap member must NOT be self-deleted; Get err = %v", err)
+	}
+}
+
+// TestUpdateStatus_KeepsStuckMemberWhenStaleReadyCountIncludesIt: a member that
+// just started crash-looping can still be counted in the cluster controller's
+// lagging ReadyMembers and still record MemberReady=True in its own status. The
+// quorum gate must subtract this member, so a stale-high count can't green-light
+// a deletion that would actually drop the cluster below quorum.
+func TestUpdateStatus_KeepsStuckMemberWhenStaleReadyCountIncludesIt(t *testing.T) {
+	ctx := context.Background()
+	cluster := &lll.EtcdCluster{
+		ObjectMeta: metav1.ObjectMeta{Name: "test", Namespace: "ns"},
+		Spec:       lll.EtcdClusterSpec{Replicas: ptrInt32(3)},
+	}
+	member := &lll.EtcdMember{
+		ObjectMeta: metav1.ObjectMeta{Name: "test-1", Namespace: "ns", Labels: memberLabels("test", "test-1")},
+		Spec:       lll.EtcdMemberSpec{ClusterName: "test", Version: "3.5.17", Storage: lll.StorageSpec{Size: quickQty(t, "1Gi")}, InitialCluster: "x", ClusterToken: "test"},
+	}
+	// Stale: this member is still listed ready in its own status, mirroring a
+	// ReadyMembers count that has not yet been decremented for it.
+	member.Status.Conditions = []metav1.Condition{{
+		Type: lll.MemberReady, Status: metav1.ConditionTrue, Reason: "Ready", LastTransitionTime: metav1.Now(),
+	}}
+	c, _ := newTestClient(t, cluster, member, crashLoopPod("test-1", "ns"))
+	clusterWithReady(t, c, "test", "ns", 2) // stale-high: still counts test-1
+
+	r := &EtcdMemberReconciler{Client: c, Scheme: testScheme(t)}
+	if _, err := r.updateStatus(ctx, member); err != nil {
+		t.Fatalf("updateStatus: %v", err)
+	}
+
+	// 2 ready minus this still-counted member = 1 < quorum(2) → must be kept.
+	if err := c.Get(ctx, types.NamespacedName{Name: "test-1", Namespace: "ns"}, &lll.EtcdMember{}); err != nil {
+		t.Fatalf("member must NOT be deleted while it is still double-counted in ReadyMembers; Get err = %v", err)
 	}
 }
 

@@ -478,6 +478,18 @@ kubectl get etcdmember.etcd-operator.cozystack.io -n default -w
 # appear, and READY=3 restore within a minute or so.
 ```
 
+### PVC member crash-loop replacement
+
+The `Status.PodUID` mechanism above keys on the Pod disappearing — the right signal for a memory-backed member, where Pod loss *is* data loss. A PVC-backed member is different: the PVC survives Pod restarts, so a lost Pod re-attaches the same data dir and etcd rejoins with the same member ID. There is a separate, second trigger for the case where the data dir itself is gone or corrupt.
+
+If a non-bootstrap PVC member's etcd cannot start — classically because its data dir was lost (e.g. a volume lost on node failure) while the cluster membership moved on, leaving its frozen `--initial-cluster` stale (`error validating peerURLs ... member count is unequal`) — it crash-loops forever with no recovery path of its own. The operator detects this and replaces it:
+
+- **Detection**: the etcd container is not ready and has restarted at least 5 times (`dataLossRestartThreshold`), excluding `OOMKilled` (a resource problem, not a lost data dir — raising `spec.resources.limits.memory` is the fix there, not replacement). A Pod that is being deleted (drain, eviction, manual restart) is never treated as stuck.
+- **Quorum gate**: the operator deletes the member only when the *rest* of the cluster still has quorum, so a cluster-wide outage never cascades into mass deletion. The gate reads `Status.ReadyMembers` (maintained by the cluster controller, and possibly lagging) and subtracts the stuck member if it is still counted; the finalizer's `MemberRemove` is independently quorum-gated as a backstop.
+- **Replacement**: the `EtcdMember` CR is deleted → finalizer `MemberRemove` → the member-owned `data-<member>` PVC is GC'd (discarding the corrupt data dir) → the cluster controller gap-fills a fresh `GenerateName` member with a current `--initial-cluster` and a **new** etcd member ID.
+
+**Detection latency is much longer than the Pod-loss path.** `CrashLoopBackOff` caps backoff at 5 minutes, so reaching 5 restarts takes **tens of minutes**, not ~5 s. Budget for that before concluding the operator is misbehaving — a member that vanishes and is replaced by a fresh-named one after a long crash-loop is the operator working as designed, not flapping. Note also that a replacement which is itself slow to come up (slow restore, slow learner join) can trip the same threshold and be replaced again; this is quorum-gated and harmless to the cluster, but expect repeated replacement on a genuinely unhealthy member.
+
 ### Pause is not supported
 
 Setting `spec.replicas: 0` on a memory cluster is **rejected by the apiserver** (CEL validation rule on `EtcdClusterSpec`):

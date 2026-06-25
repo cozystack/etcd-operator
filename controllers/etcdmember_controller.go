@@ -914,12 +914,25 @@ const dataLossRestartThreshold = 5
 // etcd refuses to boot ("error validating peerURLs ... member count is
 // unequal"). etcd ignores --initial-cluster for an initialised data dir, so a
 // healthy member that merely restarts is unaffected.
+//
+// A Pod already being deleted (DeletionTimestamp set — manual restart, node
+// drain, eviction) is never "stuck": its containers are terminating on the way
+// to a clean reschedule, and treating that window as unrecoverable would
+// trigger a needless member replacement. OOMKilled is excluded whether it is
+// the last termination or the current one — a just-OOMKilled container sits in
+// State.Terminated before it transitions to Waiting/CrashLoopBackOff.
 func etcdContainerStuck(pod *corev1.Pod) bool {
+	if pod.DeletionTimestamp != nil {
+		return false
+	}
 	for _, cs := range pod.Status.ContainerStatuses {
 		if cs.Name != "etcd" {
 			continue
 		}
 		if cs.Ready || cs.RestartCount < dataLossRestartThreshold {
+			return false
+		}
+		if t := cs.State.Terminated; t != nil && t.Reason == "OOMKilled" {
 			return false
 		}
 		if t := cs.LastTerminationState.Terminated; t != nil && t.Reason == "OOMKilled" {
@@ -932,10 +945,15 @@ func etcdContainerStuck(pod *corev1.Pod) bool {
 
 // clusterHasQuorumWithout reports whether the member's cluster still has quorum
 // among its OTHER members — i.e. losing this one is a minority failure, so
-// replacing it cannot break the cluster. ReadyMembers already excludes this
-// (not-ready) member, so it is the live healthy count. Used to gate self-heal:
-// we never delete a member during a cluster-wide outage (where many members
-// crash at once), only an isolated stuck member backed by a healthy majority.
+// replacing it cannot break the cluster. Used to gate self-heal: we never
+// delete a member during a cluster-wide outage (where many members crash at
+// once), only an isolated stuck member backed by a healthy majority.
+//
+// ReadyMembers is the cluster controller's count and can lag: a member that has
+// just started crash-looping may still be counted ready until that controller
+// reconciles. So if THIS member's own status still records it as ready, subtract
+// it — otherwise a second concurrent failure could read a stale-high count, pass
+// the gate, and let one member be deleted when quorum is in fact already gone.
 func (r *EtcdMemberReconciler) clusterHasQuorumWithout(ctx context.Context, member *lll.EtcdMember) bool {
 	cluster, err := r.clusterFor(ctx, member)
 	if err != nil {
@@ -951,7 +969,14 @@ func (r *EtcdMemberReconciler) clusterHasQuorumWithout(ctx context.Context, memb
 	if desired == 0 {
 		return false
 	}
-	return int(cluster.Status.ReadyMembers) >= desired/2+1
+	readyOthers := int(cluster.Status.ReadyMembers)
+	for _, cond := range member.Status.Conditions {
+		if cond.Type == lll.MemberReady && cond.Status == metav1.ConditionTrue {
+			readyOthers--
+			break
+		}
+	}
+	return readyOthers >= desired/2+1
 }
 
 // ── Status ───────────────────────────────────────────────────────────────

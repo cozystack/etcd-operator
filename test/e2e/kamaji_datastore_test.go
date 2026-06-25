@@ -178,7 +178,11 @@ func TestKamajiDataStore(t *testing.T) {
 				if !apierrors.IsNotFound(err) {
 					return err
 				}
-				if names := memberNames(ctx, t); len(names) != 3 {
+				names, err := listMemberNames(ctx)
+				if err != nil {
+					return err
+				}
+				if len(names) != 3 {
 					return fmt.Errorf("have %d members, want 3: %v", len(names), names)
 				}
 				ec := &etcdv1alpha2.EtcdCluster{}
@@ -400,17 +404,28 @@ func etcdKeys(ctx context.Context, t *testing.T) string {
 // by the cluster label (member pods/CRs carry GenerateName-hashed names).
 func memberNames(ctx context.Context, t *testing.T) []string {
 	t.Helper()
+	names, err := listMemberNames(ctx)
+	if err != nil {
+		t.Fatalf("list etcd members: %v", err)
+	}
+	return names
+}
+
+// listMemberNames is the error-returning form of memberNames, safe to call
+// inside a waitFor retry callback (where t.Fatalf would abort the test on a
+// transient API error instead of letting the poll retry).
+func listMemberNames(ctx context.Context) ([]string, error) {
 	list := &etcdv1alpha2.EtcdMemberList{}
 	if err := kube.List(ctx, list, client.InNamespace(e2eNamespace),
 		client.MatchingLabels{"etcd-operator.cozystack.io/cluster": clusterName}); err != nil {
-		t.Fatalf("list etcd members: %v", err)
+		return nil, err
 	}
 	names := make([]string, 0, len(list.Items))
 	for i := range list.Items {
 		names = append(names, list.Items[i].Name)
 	}
 	sort.Strings(names)
-	return names
+	return names, nil
 }
 
 func podExec(ctx context.Context, namespace, pod, container string, command []string) (string, string, error) {
