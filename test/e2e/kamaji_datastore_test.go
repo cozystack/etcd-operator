@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -133,6 +134,98 @@ func TestKamajiDataStore(t *testing.T) {
 		t.Fatalf("etcd key dump does not contain %q;\nfirst 2000 bytes:\n%s", proofName, truncate(keys, 2000))
 	}
 	t.Logf("found %q among etcd keys", proofName)
+
+	// ── Member churn: replace EVERY original member one at a time and prove
+	// Kamaji keeps working through the new, GenerateName-hashed members.
+	// Native members are named via GenerateName ("<cluster>-<hash>"), so the
+	// DataStore can only address the cluster through the stable
+	// <cluster>-client Service (its sole endpoint) and the operator's server
+	// cert SAN is a wildcard (*.<cluster>.<ns>.svc). Member names therefore
+	// never reach Kamaji — this churns the entire member set out from under a
+	// live tenant control plane and guards that contract end to end.
+	//
+	// Gate on a fully-formed cluster first: Available latches on quorum, not on
+	// the full replica count, so without this wait we might delete a member
+	// while the third is still a freshly-promoted/learner member — collapsing
+	// the cluster into the fragile 2-node window mid-bootstrap.
+	waitFor(ctx, t, 5*time.Minute, "all 3 members Ready before churn", func(ctx context.Context) error {
+		ec := &etcdv1alpha2.EtcdCluster{}
+		if err := kube.Get(ctx, client.ObjectKey{Namespace: e2eNamespace, Name: clusterName}, ec); err != nil {
+			return err
+		}
+		if ec.Status.ReadyMembers != 3 {
+			return fmt.Errorf("readyMembers=%d, want 3", ec.Status.ReadyMembers)
+		}
+		return nil
+	})
+	original := memberNames(ctx, t)
+	if len(original) != 3 {
+		t.Fatalf("expected 3 members before churn, got %d: %v", len(original), original)
+	}
+	t.Logf("original members: %v", original)
+	for _, victim := range original {
+		t.Logf("deleting EtcdMember %q (operator does MemberRemove + a GenerateName replacement)", victim)
+		m := &etcdv1alpha2.EtcdMember{ObjectMeta: metav1.ObjectMeta{Namespace: e2eNamespace, Name: victim}}
+		if err := kube.Delete(ctx, m); err != nil && !apierrors.IsNotFound(err) {
+			t.Fatalf("delete member %s: %v", victim, err)
+		}
+		waitFor(ctx, t, 5*time.Minute, fmt.Sprintf("%q removed and the cluster back to 3 ready members", victim),
+			func(ctx context.Context) error {
+				err := kube.Get(ctx, client.ObjectKey{Namespace: e2eNamespace, Name: victim}, &etcdv1alpha2.EtcdMember{})
+				if err == nil {
+					return fmt.Errorf("victim %s still present (MemberRemove in flight)", victim)
+				}
+				if !apierrors.IsNotFound(err) {
+					return err
+				}
+				names, err := listMemberNames(ctx)
+				if err != nil {
+					return err
+				}
+				if len(names) != 3 {
+					return fmt.Errorf("have %d members, want 3: %v", len(names), names)
+				}
+				ec := &etcdv1alpha2.EtcdCluster{}
+				if err := kube.Get(ctx, client.ObjectKey{Namespace: e2eNamespace, Name: clusterName}, ec); err != nil {
+					return err
+				}
+				if ec.Status.ReadyMembers != 3 {
+					return fmt.Errorf("readyMembers=%d, want 3", ec.Status.ReadyMembers)
+				}
+				return nil
+			})
+	}
+
+	// The cluster is now a wholly fresh member set — no original name remains.
+	final := memberNames(ctx, t)
+	for _, o := range original {
+		for _, f := range final {
+			if o == f {
+				t.Fatalf("original member %q still present after full churn: %v", o, final)
+			}
+		}
+	}
+	t.Logf("fully churned member set: %v -> %v", original, final)
+
+	// Kamaji must still work through the new members: the original proof key
+	// survived all three replacements, and a fresh write still lands in etcd —
+	// all without any change to the DataStore (it still points at the same
+	// <cluster>-client Service).
+	if keys := etcdKeys(ctx, t); !strings.Contains(keys, proofName) {
+		t.Fatalf("proof key %q lost after member churn", proofName)
+	}
+	const churnProof = "e2e-proof-postchurn"
+	cm2 := &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{Name: churnProof, Namespace: "default"},
+		Data:       map[string]string{"written-by": "etcd-operator-e2e-postchurn"},
+	}
+	if _, err := tenantSet.CoreV1().ConfigMaps("default").Create(ctx, cm2, metav1.CreateOptions{}); err != nil && !apierrors.IsAlreadyExists(err) {
+		t.Fatalf("create post-churn ConfigMap via tenant API: %v", err)
+	}
+	if keys := etcdKeys(ctx, t); !strings.Contains(keys, churnProof) {
+		t.Fatalf("post-churn write %q did not reach etcd through the fresh members", churnProof)
+	}
+	t.Log("Kamaji tenant API still roundtrips through the fully churned (hash-named) member set")
 
 	// Teardown — reverse order, waiting where deletion is asynchronous.
 	deleteAndWait(ctx, t, "kamaji.clastix.io/v1alpha1", "TenantControlPlane", e2eNamespace, tcpName, 5*time.Minute)
@@ -305,6 +398,34 @@ func etcdKeys(ctx context.Context, t *testing.T) string {
 		t.Fatalf("etcdctl key dump: %v (stderr: %s)", err, stderr)
 	}
 	return stdout
+}
+
+// memberNames returns the sorted names of the cluster's EtcdMembers, selected
+// by the cluster label (member pods/CRs carry GenerateName-hashed names).
+func memberNames(ctx context.Context, t *testing.T) []string {
+	t.Helper()
+	names, err := listMemberNames(ctx)
+	if err != nil {
+		t.Fatalf("list etcd members: %v", err)
+	}
+	return names
+}
+
+// listMemberNames is the error-returning form of memberNames, safe to call
+// inside a waitFor retry callback (where t.Fatalf would abort the test on a
+// transient API error instead of letting the poll retry).
+func listMemberNames(ctx context.Context) ([]string, error) {
+	list := &etcdv1alpha2.EtcdMemberList{}
+	if err := kube.List(ctx, list, client.InNamespace(e2eNamespace),
+		client.MatchingLabels{"etcd-operator.cozystack.io/cluster": clusterName}); err != nil {
+		return nil, err
+	}
+	names := make([]string, 0, len(list.Items))
+	for i := range list.Items {
+		names = append(names, list.Items[i].Name)
+	}
+	sort.Strings(names)
+	return names, nil
 }
 
 func podExec(ctx context.Context, namespace, pod, container string, command []string) (string, string, error) {
