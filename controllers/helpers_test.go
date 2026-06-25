@@ -13,6 +13,7 @@ package controllers
 import (
 	"testing"
 
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	lll "github.com/cozystack/etcd-operator/api/v1alpha2"
@@ -139,5 +140,59 @@ func TestMemberEndpoints_PerMemberServiceName(t *testing.T) {
 		if got[i] != want[i] {
 			t.Errorf("endpoint[%d] = %q, want %q", i, got[i], want[i])
 		}
+	}
+}
+
+func TestResolveEtcdImage(t *testing.T) {
+	member := func(version string, img *lll.EtcdImageSpec) *lll.EtcdMember {
+		return &lll.EtcdMember{Spec: lll.EtcdMemberSpec{Version: version, Image: img}}
+	}
+
+	cases := []struct {
+		name        string
+		member      *lll.EtcdMember
+		defaultRepo string
+		wantImage   string
+		wantPolicy  corev1.PullPolicy
+	}{
+		{
+			name:      "no override, no operator default → built-in repo + v<version>",
+			member:    member("3.6.11", nil),
+			wantImage: EtcdImage + ":v3.6.11",
+		},
+		{
+			name:        "operator default repo, version-derived tag",
+			member:      member("3.6.11", nil),
+			defaultRepo: "registry.internal/mirror/etcd",
+			wantImage:   "registry.internal/mirror/etcd:v3.6.11",
+		},
+		{
+			name:        "per-cluster repository overrides the operator default",
+			member:      member("3.6.11", &lll.EtcdImageSpec{Repository: "private.example/etcd"}),
+			defaultRepo: "registry.internal/mirror/etcd",
+			wantImage:   "private.example/etcd:v3.6.11",
+		},
+		{
+			name:      "explicit tag overrides the version-derived default",
+			member:    member("3.6.11", &lll.EtcdImageSpec{Tag: "3.6.11-mirror"}),
+			wantImage: EtcdImage + ":3.6.11-mirror",
+		},
+		{
+			name:       "pull policy is propagated",
+			member:     member("3.6.11", &lll.EtcdImageSpec{PullPolicy: corev1.PullAlways}),
+			wantImage:  EtcdImage + ":v3.6.11",
+			wantPolicy: corev1.PullAlways,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			img, policy := resolveEtcdImage(tc.member, tc.defaultRepo)
+			if img != tc.wantImage {
+				t.Errorf("image = %q, want %q", img, tc.wantImage)
+			}
+			if policy != tc.wantPolicy {
+				t.Errorf("pullPolicy = %q, want %q", policy, tc.wantPolicy)
+			}
+		})
 	}
 }

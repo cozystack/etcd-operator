@@ -23,7 +23,12 @@ const (
 	LabelRole = "etcd-operator.cozystack.io/role"
 	RoleVoter = "voter"
 
-	// EtcdImage is the container image repository for etcd.
+	// EtcdImage is the built-in fallback etcd image repository (registry
+	// host + path, no tag). It is the last resort in the resolution chain:
+	// an EtcdCluster's spec.image.repository wins first, then the
+	// operator-wide --etcd-image-repository / ETCD_IMAGE_REPOSITORY default,
+	// then this constant. See resolveEtcdImage. Keep in sync with the chart's
+	// etcdImage.repository default in charts/etcd-operator/values.yaml.
 	EtcdImage = "quay.io/coreos/etcd"
 
 	// MemberFinalizer is placed on EtcdMember resources to ensure
@@ -106,6 +111,34 @@ func memberDataDir(member *lll.EtcdMember) string {
 		return etcdDataDirRoot
 	}
 	return path.Join(etcdDataDirRoot, sub)
+}
+
+// resolveEtcdImage resolves a member's etcd container image and pull policy
+// from (in precedence order) the member's mirrored spec.image override, the
+// operator-wide repository default (defaultRepo, from the operator's
+// --etcd-image-repository flag), and the EtcdImage built-in. The tag defaults
+// to "v"+spec.version — the operator keys every version-dependent behaviour
+// off spec.version, so an explicit spec.image.tag changes only the pulled
+// reference, never that behaviour. The pull policy comes from spec.image
+// (apiserver-defaulted to IfNotPresent whenever the image block is present);
+// when no image block is set at all it stays empty and the container field is
+// left unset, so the kubelet default applies.
+func resolveEtcdImage(member *lll.EtcdMember, defaultRepo string) (image string, pullPolicy corev1.PullPolicy) {
+	repo := defaultRepo
+	if repo == "" {
+		repo = EtcdImage
+	}
+	tag := "v" + member.Spec.Version
+	if img := member.Spec.Image; img != nil {
+		if img.Repository != "" {
+			repo = img.Repository
+		}
+		if img.Tag != "" {
+			tag = img.Tag
+		}
+		pullPolicy = img.PullPolicy
+	}
+	return repo + ":" + tag, pullPolicy
 }
 
 // peerURL returns the etcd peer URL for a member, using the headless Service

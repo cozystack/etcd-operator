@@ -97,7 +97,8 @@ Common values (`--set key=value`, or a `-f my-values.yaml`):
 | `metrics.serviceMonitor.enabled` | `false` | Create a prometheus-operator `ServiceMonitor` for the metrics endpoint (needs the `monitoring.coreos.com` CRDs and `kubeRbacProxy.enabled`). |
 | `crds.enabled` / `crds.keep` | `true` / `true` | Render the CRDs with the release / annotate them so uninstall keeps them. |
 | `manager.resources` | 10m/64Mi → 500m/128Mi | Manager container requests/limits. |
-| `imagePullSecrets` | `[]` | Pull secrets for a private registry mirror. |
+| `imagePullSecrets` | `[]` | Pull secrets for the **operator's own** image (private registry mirror). |
+| `etcdImage.repository` | `quay.io/coreos/etcd` | Operator-wide default **etcd** image repo for member Pods (always wired into `ETCD_IMAGE_REPOSITORY`). Repoint at an air-gapped mirror once; an `EtcdCluster`'s `spec.image` overrides it per cluster. |
 
 See `charts/etcd-operator/values.yaml` for the complete, annotated list. Verify
 the install:
@@ -243,7 +244,28 @@ The `spec.tls` subtree is immutable post-create — flipping TLS on or off on an
 
 ## Image versions
 
-`spec.version` in an `EtcdCluster` becomes `quay.io/coreos/etcd:v<version>`. The image repository is hard-coded in `controllers/helpers.go:EtcdImage`. Override it by patching the operator image with your own registry/repo if you mirror etcd internally.
+By default `spec.version` in an `EtcdCluster` becomes `quay.io/coreos/etcd:v<version>`. For air-gapped environments that mirror the image to a private registry there are two override surfaces, lowest-precedence first:
+
+- **Operator-wide default** — set `etcdImage.repository` in the chart (env `ETCD_IMAGE_REPOSITORY` / flag `--etcd-image-repository`) to a registry/path, e.g. `registry.internal/mirror/etcd`. Every cluster that doesn't override picks it up; the tag stays `v<version>`.
+- **Per-cluster** — `spec.image` on an `EtcdCluster` overrides the repository, the tag, and the pull policy for that cluster's member Pods:
+
+  ```yaml
+  spec:
+    version: "3.6.11"
+    image:
+      repository: registry.internal/mirror/etcd  # optional; falls back to the operator default
+      tag: ""                                     # optional; defaults to v3.6.11
+      pullPolicy: IfNotPresent                    # optional; this is the default
+    imagePullSecrets:
+      - name: regcreds                            # Secret in the cluster's namespace
+  ```
+
+  `spec.imagePullSecrets` references pull-credential Secrets in the cluster's own namespace and is passed straight through to each member Pod. Note the operator still keys every version-dependent behaviour off `spec.version`, not off `spec.image.tag` — set the tag only when the mirror's tag scheme differs from the upstream `vX.Y.Z`. Like `spec.resources`, an image change applies to **newly-created** members (scale-up, replacement), not existing Pods in place.
+
+  These two surfaces cover the **etcd member image** only. Two caveats in a fully air-gapped install where the operator image is mirrored too:
+
+  - `spec.imagePullSecrets` is set Pod-wide, so it **does** cover the member Pod's restore initContainer (which runs the operator image at bootstrap-from-snapshot) — a `spec.bootstrap.restore` can pull the mirrored operator image via these secrets.
+  - Standalone `EtcdSnapshot` backup/restore **Jobs** also run the operator image but are **not** covered by `spec.imagePullSecrets`. Repoint the operator image (chart `image.repository`) and make sure the snapshot's namespace can already pull it, or those Jobs `ImagePullBackOff`. The operator Pod itself uses the chart-level `imagePullSecrets`.
 
 The `spec.version` examples throughout these docs use **3.6.x**, to match the `etcdutl` bundled in the operator image: `spec.bootstrap.restore` requires `spec.version` and that `etcdutl` to share a minor (see the [restore runbook](operations.md#restoring-a-cluster-from-a-snapshot)). The operator's etcd client is v3.6.x and is wire-compatible with 3.5.x servers, so a cluster you never restore into can still run 3.5.x — but to back up and restore on the same version, run 3.6.x.
 

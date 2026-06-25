@@ -430,6 +430,8 @@ func (r *EtcdClusterReconciler) bootstrap(
 				Affinity:                  cluster.Status.Observed.Affinity,
 				TopologySpreadConstraints: cluster.Status.Observed.TopologySpreadConstraints,
 				Options:                   cluster.Status.Observed.Options,
+				Image:                     cluster.Status.Observed.Image,
+				ImagePullSecrets:          cluster.Status.Observed.ImagePullSecrets,
 				Bootstrap:                 true,
 				ClusterToken:              cluster.Status.ClusterToken,
 				TLS:                       deriveMemberTLS(cluster),
@@ -834,6 +836,8 @@ func (r *EtcdClusterReconciler) scaleUp(
 			Affinity:                  cluster.Status.Observed.Affinity,
 			TopologySpreadConstraints: cluster.Status.Observed.TopologySpreadConstraints,
 			Options:                   cluster.Status.Observed.Options,
+			Image:                     cluster.Status.Observed.Image,
+			ImagePullSecrets:          cluster.Status.Observed.ImagePullSecrets,
 			Bootstrap:                 false,
 			ClusterToken:              cluster.Status.ClusterToken,
 			TLS:                       deriveMemberTLS(cluster),
@@ -2028,6 +2032,8 @@ func snapshotSpecIntoObserved(cluster *lll.EtcdCluster) {
 		TopologySpreadConstraints: cluster.Spec.TopologySpreadConstraints,
 		AdditionalMetadata:        cluster.Spec.AdditionalMetadata,
 		Options:                   cluster.Spec.Options,
+		Image:                     cluster.Spec.Image,
+		ImagePullSecrets:          cluster.Spec.ImagePullSecrets,
 	}
 }
 
@@ -2048,7 +2054,9 @@ func specEqualsObserved(cluster *lll.EtcdCluster) bool {
 		equality.Semantic.DeepEqual(o.Affinity, cluster.Spec.Affinity) &&
 		equality.Semantic.DeepEqual(o.TopologySpreadConstraints, cluster.Spec.TopologySpreadConstraints) &&
 		equality.Semantic.DeepEqual(o.AdditionalMetadata, cluster.Spec.AdditionalMetadata) &&
-		equality.Semantic.DeepEqual(o.Options, cluster.Spec.Options)
+		equality.Semantic.DeepEqual(o.Options, cluster.Spec.Options) &&
+		equality.Semantic.DeepEqual(o.Image, cluster.Spec.Image) &&
+		equality.Semantic.DeepEqual(o.ImagePullSecrets, cluster.Spec.ImagePullSecrets)
 }
 
 // observedAdditionalMetadata returns the latched additionalMetadata target

@@ -53,6 +53,12 @@ spec:
         # is left at a placeholder.
         - name: OPERATOR_IMAGE
           value: {{ include "etcd-operator.image" . }}
+        # Operator-wide default etcd image repository for member Pods. Always
+        # set, so the operator's built-in fallback is only reached when the
+        # binary runs outside this chart. An EtcdCluster's spec.image.repository
+        # overrides it per cluster; repoint here for an air-gapped mirror.
+        - name: ETCD_IMAGE_REPOSITORY
+          value: {{ .Values.etcdImage.repository | quote }}
         livenessProbe:
           httpGet:
             path: /healthz
