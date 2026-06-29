@@ -141,3 +141,38 @@ func TestMemberEndpoints_PerMemberServiceName(t *testing.T) {
 		}
 	}
 }
+
+// TestResolveEtcdImage pins the operator-wide repository resolution: the
+// --etcd-image-repository default (or the EtcdImage built-in when unset),
+// always tagged "v"+spec.version.
+func TestResolveEtcdImage(t *testing.T) {
+	member := func(version string) *lll.EtcdMember {
+		return &lll.EtcdMember{Spec: lll.EtcdMemberSpec{Version: version}}
+	}
+
+	cases := []struct {
+		name        string
+		member      *lll.EtcdMember
+		defaultRepo string
+		wantImage   string
+	}{
+		{
+			name:      "no operator default → built-in repo + v<version>",
+			member:    member("3.6.11"),
+			wantImage: EtcdImage + ":v3.6.11",
+		},
+		{
+			name:        "operator default repo, version-derived tag",
+			member:      member("3.6.11"),
+			defaultRepo: "registry.internal/mirror/etcd",
+			wantImage:   "registry.internal/mirror/etcd:v3.6.11",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if img := resolveEtcdImage(tc.member, tc.defaultRepo); img != tc.wantImage {
+				t.Errorf("image = %q, want %q", img, tc.wantImage)
+			}
+		})
+	}
+}

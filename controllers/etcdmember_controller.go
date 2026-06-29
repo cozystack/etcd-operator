@@ -49,6 +49,13 @@ type EtcdMemberReconciler struct {
 	// OperatorImage is the operator's own image; the restore agent runs from
 	// it as an initContainer on the bootstrap seed Pod.
 	OperatorImage string
+
+	// EtcdImageRepository is the operator-wide default etcd image repository
+	// (registry host + path, no tag) used for member Pods whose EtcdCluster
+	// does not set spec.image.repository. Empty falls back to the EtcdImage
+	// built-in. Set from --etcd-image-repository / ETCD_IMAGE_REPOSITORY; the
+	// common use is pointing every cluster at an air-gapped mirror once.
+	EtcdImageRepository string
 }
 
 //+kubebuilder:rbac:groups=etcd-operator.cozystack.io,resources=etcdmembers,verbs=get;list;watch;update;patch
@@ -751,6 +758,8 @@ func (r *EtcdMemberReconciler) buildPod(member *lll.EtcdMember) *corev1.Pod {
 		volumes = append(volumes, extraVols...)
 	}
 
+	etcdImage := resolveEtcdImage(member, r.EtcdImageRepository)
+
 	return &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:        member.Name,
@@ -763,6 +772,7 @@ func (r *EtcdMemberReconciler) buildPod(member *lll.EtcdMember) *corev1.Pod {
 			Subdomain:                 memberServiceName(member),
 			Affinity:                  member.Spec.Affinity,
 			TopologySpreadConstraints: member.Spec.TopologySpreadConstraints,
+			ImagePullSecrets:          member.Spec.ImagePullSecrets,
 			InitContainers:            initContainers,
 			// etcd and the restore agent never call the Kubernetes API, so
 			// don't mount a ServiceAccount token into the member Pod (matches
@@ -779,7 +789,7 @@ func (r *EtcdMemberReconciler) buildPod(member *lll.EtcdMember) *corev1.Pod {
 			},
 			Containers: []corev1.Container{{
 				Name:  "etcd",
-				Image: fmt.Sprintf("%s:v%s", EtcdImage, member.Spec.Version),
+				Image: etcdImage,
 				SecurityContext: &corev1.SecurityContext{
 					AllowPrivilegeEscalation: ptrBool(false),
 					Capabilities: &corev1.Capabilities{

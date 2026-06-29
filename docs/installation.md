@@ -97,7 +97,8 @@ Common values (`--set key=value`, or a `-f my-values.yaml`):
 | `metrics.serviceMonitor.enabled` | `false` | Create a prometheus-operator `ServiceMonitor` for the metrics endpoint (needs the `monitoring.coreos.com` CRDs and `kubeRbacProxy.enabled`). |
 | `crds.enabled` / `crds.keep` | `true` / `true` | Render the CRDs with the release / annotate them so uninstall keeps them. |
 | `manager.resources` | 10m/64Mi → 500m/128Mi | Manager container requests/limits. |
-| `imagePullSecrets` | `[]` | Pull secrets for a private registry mirror. |
+| `imagePullSecrets` | `[]` | Pull secrets for the **operator's own** image (private registry mirror). |
+| `etcdImage.repository` | `quay.io/coreos/etcd` | Operator-wide default **etcd** image repo for member Pods (always wired into `ETCD_IMAGE_REPOSITORY`). Repoint at an air-gapped mirror once; the tag is always `v<spec.version>`. |
 
 See `charts/etcd-operator/values.yaml` for the complete, annotated list. Verify
 the install:
@@ -243,7 +244,21 @@ The `spec.tls` subtree is immutable post-create — flipping TLS on or off on an
 
 ## Image versions
 
-`spec.version` in an `EtcdCluster` becomes `quay.io/coreos/etcd:v<version>`. The image repository is hard-coded in `controllers/helpers.go:EtcdImage`. Override it by patching the operator image with your own registry/repo if you mirror etcd internally.
+By default `spec.version` in an `EtcdCluster` becomes `quay.io/coreos/etcd:v<version>`. For an air-gapped environment that mirrors the image to a private registry, repoint the **repository** operator-wide and supply per-cluster pull credentials:
+
+- **Repository (operator-wide)** — set `etcdImage.repository` in the chart (env `ETCD_IMAGE_REPOSITORY` / flag `--etcd-image-repository`) to a registry/path, e.g. `registry.internal/mirror/etcd`. Every member Pod the operator creates pulls from it; the tag is always `v<spec.version>`. Mirror once per fleet — there is intentionally no per-cluster repository/tag override, because the operator keys every version-dependent behaviour (the restore version-compat pre-flight, the latched target, drift detection) off `spec.version`, and a per-cluster `tag` could silently disagree with it.
+- **Pull credentials (per-cluster)** — `spec.imagePullSecrets` on an `EtcdCluster`:
+
+  ```yaml
+  spec:
+    version: "3.6.11"
+    imagePullSecrets:
+      - name: regcreds   # Secret in the cluster's namespace
+  ```
+
+  It references pull-credential Secrets in the cluster's own namespace and is passed straight through to each member Pod. Like `spec.resources`, a change applies to **newly-created** members (scale-up, replacement), not existing Pods in place.
+
+  `spec.imagePullSecrets` is set Pod-wide, so it **does** cover the member Pod's restore initContainer (which runs the operator image at bootstrap-from-snapshot) — a `spec.bootstrap.restore` can pull the mirrored operator image via these secrets. Standalone `EtcdSnapshot` backup/restore **Jobs** also run the operator image but are **not** covered by `spec.imagePullSecrets`: in a fully air-gapped install repoint the operator image (chart `image.repository`) and make sure the snapshot's namespace can already pull it, or those Jobs `ImagePullBackOff`. The operator Pod itself uses the chart-level `imagePullSecrets`.
 
 The `spec.version` examples throughout these docs use **3.6.x**, to match the `etcdutl` bundled in the operator image: `spec.bootstrap.restore` requires `spec.version` and that `etcdutl` to share a minor (see the [restore runbook](operations.md#restoring-a-cluster-from-a-snapshot)). The operator's etcd client is v3.6.x and is wire-compatible with 3.5.x servers, so a cluster you never restore into can still run 3.5.x — but to back up and restore on the same version, run 3.6.x.
 

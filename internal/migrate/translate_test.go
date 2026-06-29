@@ -208,6 +208,36 @@ func TestTranslateCluster_KitchenSink(t *testing.T) {
 	}
 }
 
+// TestTranslateCluster_PullSecretsCarried pins the air-gap migration path:
+// a legacy podTemplate's imagePullSecrets are carried into
+// spec.imagePullSecrets (they used to be dropped), so an adopted cluster keeps
+// its credentials to pull from a private mirror. The etcd image's
+// registry/tag is deliberately NOT carried — the operator pins the image to
+// spec.version and repoints mirrors operator-wide.
+func TestTranslateCluster_PullSecretsCarried(t *testing.T) {
+	base := legacy.EtcdClusterSpec{
+		Storage: legacy.StorageSpec{VolumeClaimTemplate: legacy.EmbeddedPersistentVolumeClaim{
+			Spec: corev1.PersistentVolumeClaimSpec{Resources: corev1.VolumeResourceRequirements{
+				Requests: corev1.ResourceList{corev1.ResourceStorage: qty(t, "1Gi")}}},
+		}},
+	}
+
+	spec := base
+	spec.PodTemplate.Spec.Containers = []corev1.Container{
+		{Name: "etcd", Image: "registry.internal/mirror/etcd:v3.6.11"}}
+	spec.PodTemplate.Spec.ImagePullSecrets = []corev1.LocalObjectReference{{Name: "regcreds"}}
+
+	plan := TranslateCluster("c", "ns", spec, TranslateOptions{})
+	out := clusterTarget(t, plan)
+
+	if len(out.Spec.ImagePullSecrets) != 1 || out.Spec.ImagePullSecrets[0].Name != "regcreds" {
+		t.Errorf("spec.imagePullSecrets = %+v, want [regcreds]", out.Spec.ImagePullSecrets)
+	}
+	if hasWarning(plan.Warnings, "imagePullSecrets") {
+		t.Errorf("imagePullSecrets must no longer be dropped; warnings: %v", plan.Warnings)
+	}
+}
+
 // TestTranslateCluster_VersionExtraction pins the image-tag → spec.version
 // rules across default, override, and unparsable images.
 func TestTranslateCluster_VersionExtraction(t *testing.T) {

@@ -192,6 +192,7 @@ deploy: manifests require-helm ## Install/upgrade the operator (CRDs + RBAC + ma
 	img='$(IMG)'; $(HELM) upgrade --install $(HELM_RELEASE) charts/etcd-operator \
 		--namespace $(NAMESPACE) --create-namespace \
 		--set image.repository="$${img%:*}" --set image.tag="$${img##*:}" \
+		$(HELM_EXTRA_ARGS) \
 		--wait --timeout 5m
 
 .PHONY: undeploy

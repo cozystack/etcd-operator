@@ -23,7 +23,11 @@ const (
 	LabelRole = "etcd-operator.cozystack.io/role"
 	RoleVoter = "voter"
 
-	// EtcdImage is the container image repository for etcd.
+	// EtcdImage is the built-in fallback etcd image repository (registry
+	// host + path, no tag). It is used when the operator-wide
+	// --etcd-image-repository / ETCD_IMAGE_REPOSITORY default is unset. See
+	// resolveEtcdImage. Keep in sync with the chart's etcdImage.repository
+	// default in charts/etcd-operator/values.yaml.
 	EtcdImage = "quay.io/coreos/etcd"
 
 	// MemberFinalizer is placed on EtcdMember resources to ensure
@@ -106,6 +110,20 @@ func memberDataDir(member *lll.EtcdMember) string {
 		return etcdDataDirRoot
 	}
 	return path.Join(etcdDataDirRoot, sub)
+}
+
+// resolveEtcdImage resolves a member's etcd container image from the
+// operator-wide repository default (defaultRepo, from the operator's
+// --etcd-image-repository flag) or the EtcdImage built-in when that is empty,
+// tagged with "v"+spec.version. The operator keys every version-dependent
+// behaviour off spec.version, so the image is always pinned to that version —
+// there is no per-cluster tag override that could disagree with it.
+func resolveEtcdImage(member *lll.EtcdMember, defaultRepo string) string {
+	repo := defaultRepo
+	if repo == "" {
+		repo = EtcdImage
+	}
+	return repo + ":v" + member.Spec.Version
 }
 
 // peerURL returns the etcd peer URL for a member, using the headless Service

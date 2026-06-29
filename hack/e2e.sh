@@ -109,9 +109,30 @@ helm upgrade --install kamaji clastix/kamaji \
 echo "--- building and deploying the operator ($IMG)"
 docker build -t "$IMG" .
 kind load docker-image "$IMG" --name "$KIND_CLUSTER_NAME"
+
+# Air-gap image-repository coverage (TestEtcdImageOverride). The mirror
+# registry below never resolves over the network, so re-tag the upstream etcd
+# image under that name and side-load it into the node. With the kubelet's
+# default IfNotPresent policy for a fixed tag it uses the locally-present image
+# and never dials registry.internal — exactly how a private air-gapped mirror
+# behaves, but with no registry to stand up.
+#
+# The tag must track test/e2e/testdata/02-etcdcluster.yaml's spec.version
+# (operator pulls "v<version>"); the override test pins the same.
+ETCD_UPSTREAM=quay.io/coreos/etcd:v3.6.11
+OPERATOR_DEFAULT_MIRROR=registry.internal/mirror/etcd
+echo "--- side-loading the mirrored etcd image for the air-gap repository test"
+docker pull "$ETCD_UPSTREAM"
+docker tag "$ETCD_UPSTREAM" "$OPERATOR_DEFAULT_MIRROR:v3.6.11"
+kind load docker-image "$OPERATOR_DEFAULT_MIRROR:v3.6.11" --name "$KIND_CLUSTER_NAME"
+
 # Helm install: CRDs are templated into the release and image == OPERATOR_IMAGE
 # is wired by the chart, so this one command lands CRDs + RBAC + manager.
-make deploy IMG="$IMG"
+# etcdImage.repository points the operator-wide default at the mirror: this is
+# what exercises the chart-value -> ETCD_IMAGE_REPOSITORY env -> flag ->
+# resolveEtcdImage -> member Pod chain (the value differs from the built-in
+# EtcdImage constant, so a typo anywhere in that chain is caught).
+make deploy IMG="$IMG" HELM_EXTRA_ARGS="--set etcdImage.repository=$OPERATOR_DEFAULT_MIRROR"
 # Select by the chart's control-plane label rather than a fixed Deployment name.
 kubectl -n etcd-operator-system wait deploy \
     -l control-plane=controller-manager \

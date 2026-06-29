@@ -558,6 +558,17 @@ type EtcdClusterSpec struct {
 	// tuning change in place.
 	// +optional
 	Options *EtcdOptions `json:"options,omitempty"`
+
+	// ImagePullSecrets is a list of Secret references in the cluster's
+	// namespace used to pull the etcd (and restore initContainer) image from
+	// a private registry — e.g. an air-gapped mirror behind credentials.
+	// Passed straight through to each member Pod's spec.imagePullSecrets.
+	//
+	// Changes take effect on newly-created members (scale-up, replacement);
+	// the operator does not roll existing Pods. Latched through
+	// status.observed.
+	// +optional
+	ImagePullSecrets []corev1.LocalObjectReference `json:"imagePullSecrets,omitempty"`
 }
 
 // AdditionalMetadata is a set of labels and annotations the operator merges
@@ -624,6 +635,11 @@ type ObservedClusterSpec struct {
 	// reached.
 	// +optional
 	Options *EtcdOptions `json:"options,omitempty"`
+
+	// ImagePullSecrets is the locked target pull-secret list for member
+	// Pods. Latched with the rest of the target spec.
+	// +optional
+	ImagePullSecrets []corev1.LocalObjectReference `json:"imagePullSecrets,omitempty"`
 }
 
 // EtcdClusterStatus defines the observed state of an etcd cluster.

@@ -290,11 +290,22 @@ func translatePodTemplate(pt legacy.PodTemplate, out *lll.EtcdCluster, plan *Res
 	out.Spec.Affinity = ps.Affinity
 	out.Spec.TopologySpreadConstraints = ps.TopologySpreadConstraints
 
+	// Carry pull secrets so the new operator can still pull from a private
+	// (e.g. air-gapped) registry. v1alpha2 grew spec.imagePullSecrets, so
+	// this is no longer dropped.
+	if len(ps.ImagePullSecrets) > 0 {
+		out.Spec.ImagePullSecrets = ps.ImagePullSecrets
+	}
+
 	var dropped []string
 	if c := findContainer(ps.Containers, "etcd"); c != nil {
 		out.Spec.Resources = c.Resources
-		// Image and Resources are consumed above; everything else on the
-		// etcd container is an unmappable override.
+		// Image (consumed above by extractVersion → spec.version) and Resources
+		// are mapped; everything else on the etcd container is an unmappable
+		// override. The image's registry/tag is deliberately not carried: the
+		// operator pins the etcd image to spec.version, so a private mirror is
+		// repointed via the operator-wide --etcd-image-repository, not per
+		// cluster.
 		for field, set := range map[string]bool{
 			"command":         len(c.Command) > 0,
 			"args":            len(c.Args) > 0,
@@ -325,7 +336,6 @@ func translatePodTemplate(pt legacy.PodTemplate, out *lll.EtcdCluster, plan *Res
 		"serviceAccountName":            ps.ServiceAccountName != "",
 		"securityContext":               ps.SecurityContext != nil && !equality.Semantic.DeepEqual(*ps.SecurityContext, corev1.PodSecurityContext{}),
 		"priorityClassName":             ps.PriorityClassName != "",
-		"imagePullSecrets":              len(ps.ImagePullSecrets) > 0,
 		"hostNetwork":                   ps.HostNetwork,
 		"hostAliases":                   len(ps.HostAliases) > 0,
 		"dnsPolicy":                     ps.DNSPolicy != "",

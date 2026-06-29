@@ -29,6 +29,28 @@ image:
   # -- Image pull policy.
   pullPolicy: IfNotPresent
 
+# Operator-wide default for the etcd image that runs in member Pods (NOT the
+# operator's own image above). Set the repository here to point every cluster
+# at an air-gapped mirror once. Per-cluster pull credentials go on an
+# EtcdCluster's spec.imagePullSecrets (a Secret in the cluster's own
+# namespace), not here.
+etcdImage:
+  # -- Default etcd image repository (registry host + path, no tag) for member
+  # Pods. Repoint at an air-gapped mirror, e.g. registry.internal/mirror/etcd.
+  # The chart always wires this into the operator's ETCD_IMAGE_REPOSITORY.
+  #
+  # Only the repository is configurable; the tag is always derived from each
+  # cluster's spec.version as "v<version>" (e.g. v3.6.11). There is no
+  # per-cluster repository/tag override — the operator keys all
+  # version-dependent behaviour off spec.version, so a separate tag could
+  # silently disagree with it.
+  #
+  # Keep this in sync with the controllers.EtcdImage constant — the operator's
+  # built-in fallback used only when this env is unset (outside the chart). The
+  # chart always sets ETCD_IMAGE_REPOSITORY, so a drift between the two is
+  # harmless here, but bump both together to keep the no-chart default honest.
+  repository: quay.io/coreos/etcd
+
 # -- Number of operator replicas (leader election picks the active one).
 replicaCount: 1
 
