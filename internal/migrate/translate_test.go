@@ -208,11 +208,13 @@ func TestTranslateCluster_KitchenSink(t *testing.T) {
 	}
 }
 
-// TestTranslateCluster_ImageAndPullSecrets pins the air-gap migration path:
-// a custom etcd registry/tag is preserved as spec.image so replacement Pods
-// pull the same reference, and pull secrets are carried into
-// spec.imagePullSecrets instead of being dropped.
-func TestTranslateCluster_ImageAndPullSecrets(t *testing.T) {
+// TestTranslateCluster_PullSecretsCarried pins the air-gap migration path:
+// a legacy podTemplate's imagePullSecrets are carried into
+// spec.imagePullSecrets (they used to be dropped), so an adopted cluster keeps
+// its credentials to pull from a private mirror. The etcd image's
+// registry/tag is deliberately NOT carried — the operator pins the image to
+// spec.version and repoints mirrors operator-wide.
+func TestTranslateCluster_PullSecretsCarried(t *testing.T) {
 	base := legacy.EtcdClusterSpec{
 		Storage: legacy.StorageSpec{VolumeClaimTemplate: legacy.EmbeddedPersistentVolumeClaim{
 			Spec: corev1.PersistentVolumeClaimSpec{Resources: corev1.VolumeResourceRequirements{
@@ -220,83 +222,20 @@ func TestTranslateCluster_ImageAndPullSecrets(t *testing.T) {
 		}},
 	}
 
-	t.Run("custom registry preserved, version-matching tag elided", func(t *testing.T) {
-		spec := base
-		spec.PodTemplate.Spec.Containers = []corev1.Container{
-			{Name: "etcd", Image: "registry.internal/mirror/etcd:v3.6.11"}}
-		spec.PodTemplate.Spec.ImagePullSecrets = []corev1.LocalObjectReference{{Name: "regcreds"}}
+	spec := base
+	spec.PodTemplate.Spec.Containers = []corev1.Container{
+		{Name: "etcd", Image: "registry.internal/mirror/etcd:v3.6.11"}}
+	spec.PodTemplate.Spec.ImagePullSecrets = []corev1.LocalObjectReference{{Name: "regcreds"}}
 
-		plan := TranslateCluster("c", "ns", spec, TranslateOptions{})
-		out := clusterTarget(t, plan)
+	plan := TranslateCluster("c", "ns", spec, TranslateOptions{})
+	out := clusterTarget(t, plan)
 
-		if out.Spec.Image == nil || out.Spec.Image.Repository != "registry.internal/mirror/etcd" {
-			t.Fatalf("spec.image.repository = %+v, want mirror repo", out.Spec.Image)
-		}
-		if out.Spec.Image.Tag != "" {
-			t.Errorf("spec.image.tag = %q, want empty (tag equals v+version, so derived)", out.Spec.Image.Tag)
-		}
-		if len(out.Spec.ImagePullSecrets) != 1 || out.Spec.ImagePullSecrets[0].Name != "regcreds" {
-			t.Errorf("spec.imagePullSecrets = %+v, want [regcreds]", out.Spec.ImagePullSecrets)
-		}
-		if hasWarning(plan.Warnings, "imagePullSecrets") {
-			t.Errorf("imagePullSecrets must no longer be dropped; warnings: %v", plan.Warnings)
-		}
-	})
-
-	t.Run("non-default tag scheme preserved", func(t *testing.T) {
-		spec := base
-		// Mirror uses a bare "X.Y.Z" tag (no v prefix); the operator would
-		// otherwise default to v3.6.11 and ImagePullBackOff against the mirror.
-		spec.PodTemplate.Spec.Containers = []corev1.Container{
-			{Name: "etcd", Image: "registry.internal/mirror/etcd:3.6.11"}}
-
-		out := clusterTarget(t, TranslateCluster("c", "ns", spec, TranslateOptions{}))
-		if out.Spec.Image == nil || out.Spec.Image.Tag != "3.6.11" {
-			t.Fatalf("spec.image.tag = %+v, want 3.6.11 preserved", out.Spec.Image)
-		}
-	})
-
-	t.Run("digest-pinned mirror preserves the registry", func(t *testing.T) {
-		// Legacy air-gapped clusters often pin by digest. spec.image has no
-		// digest field, but the mirror registry must still be carried or the
-		// replacement Pods ImagePullBackOff against the operator's default
-		// registry. extractVersion forces --version for digest refs, so the
-		// tag defaults to v<version>; only the repository is recoverable.
-		spec := base
-		spec.PodTemplate.Spec.Containers = []corev1.Container{
-			{Name: "etcd", Image: "registry.internal/mirror/etcd@sha256:" + strings.Repeat("d", 64)}}
-
-		out := clusterTarget(t, TranslateCluster("c", "ns", spec, TranslateOptions{VersionOverride: "3.6.11"}))
-		if out.Spec.Image == nil || out.Spec.Image.Repository != "registry.internal/mirror/etcd" {
-			t.Fatalf("spec.image.repository = %+v, want mirror repo preserved from digest ref", out.Spec.Image)
-		}
-		if out.Spec.Image.Tag != "" {
-			t.Errorf("spec.image.tag = %q, want empty (digest carries no tag; defaults to v+version)", out.Spec.Image.Tag)
-		}
-	})
-
-	t.Run("digest-pinned upstream default yields no override", func(t *testing.T) {
-		// The mirror is the upstream default registry: nothing to preserve.
-		spec := base
-		spec.PodTemplate.Spec.Containers = []corev1.Container{
-			{Name: "etcd", Image: "quay.io/coreos/etcd@sha256:" + strings.Repeat("d", 64)}}
-
-		out := clusterTarget(t, TranslateCluster("c", "ns", spec, TranslateOptions{VersionOverride: "3.6.11"}))
-		if out.Spec.Image != nil {
-			t.Errorf("spec.image = %+v, want nil for a digest ref on the default registry", out.Spec.Image)
-		}
-	})
-
-	t.Run("upstream default image yields no override", func(t *testing.T) {
-		spec := base
-		spec.PodTemplate.Spec.Containers = []corev1.Container{
-			{Name: "etcd", Image: "quay.io/coreos/etcd:v3.6.11"}}
-
-		out := clusterTarget(t, TranslateCluster("c", "ns", spec, TranslateOptions{}))
-		if out.Spec.Image != nil {
-			t.Errorf("spec.image = %+v, want nil for the upstream default image", out.Spec.Image)
-		}
-	})
+	if len(out.Spec.ImagePullSecrets) != 1 || out.Spec.ImagePullSecrets[0].Name != "regcreds" {
+		t.Errorf("spec.imagePullSecrets = %+v, want [regcreds]", out.Spec.ImagePullSecrets)
+	}
+	if hasWarning(plan.Warnings, "imagePullSecrets") {
+		t.Errorf("imagePullSecrets must no longer be dropped; warnings: %v", plan.Warnings)
+	}
 }
 
 // TestTranslateCluster_VersionExtraction pins the image-tag → spec.version

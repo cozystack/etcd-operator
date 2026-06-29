@@ -30,24 +30,20 @@ image:
   pullPolicy: IfNotPresent
 
 # Operator-wide default for the etcd image that runs in member Pods (NOT the
-# operator's own image above). An EtcdCluster's spec.image overrides this per
-# cluster; set the repository here to point every cluster at an air-gapped
-# mirror once. Per-cluster pull credentials go on spec.imagePullSecrets (a
-# Secret in the cluster's own namespace), not here.
+# operator's own image above). Set the repository here to point every cluster
+# at an air-gapped mirror once. Per-cluster pull credentials go on an
+# EtcdCluster's spec.imagePullSecrets (a Secret in the cluster's own
+# namespace), not here.
 etcdImage:
   # -- Default etcd image repository (registry host + path, no tag) for member
   # Pods. Repoint at an air-gapped mirror, e.g. registry.internal/mirror/etcd.
-  # The chart always wires this into the operator's ETCD_IMAGE_REPOSITORY, so
-  # this value is the single operator-wide default; an EtcdCluster's spec.image
-  # overrides it per cluster.
+  # The chart always wires this into the operator's ETCD_IMAGE_REPOSITORY.
   #
-  # Only the repository is settable operator-wide; the other two parts of the
-  # image are NOT (no fleet-wide knob, override them per cluster):
-  #   - tag: always derived from each cluster's spec.version as "v<version>"
-  #     (e.g. v3.6.11). Override per cluster via EtcdCluster.spec.image.tag —
-  #     use that only when a mirror's tag scheme differs from upstream vX.Y.Z.
-  #   - pullPolicy: defaults to IfNotPresent (set in the CRD schema). Override
-  #     per cluster via EtcdCluster.spec.image.pullPolicy.
+  # Only the repository is configurable; the tag is always derived from each
+  # cluster's spec.version as "v<version>" (e.g. v3.6.11). There is no
+  # per-cluster repository/tag override — the operator keys all
+  # version-dependent behaviour off spec.version, so a separate tag could
+  # silently disagree with it.
   #
   # Keep this in sync with the controllers.EtcdImage constant — the operator's
   # built-in fallback used only when this env is unset (outside the chart). The

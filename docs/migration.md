@@ -147,11 +147,13 @@ What gets migrated:
 Every legacy knob with no v1alpha2 equivalent (`spec.options` keys beyond the
 [four typed ones](#specoptions-free-form-map--typed-fields), service/PDB
 templates, podTemplate overrides beyond affinity/topology-spread/resources/
-metadata) is reported as a warning — review them before `--apply`. A legacy
-`podTemplate` etcd image from a non-default registry/tag is **preserved** as
-`spec.image`, and `podTemplate.spec.imagePullSecrets` is **carried** into
-`spec.imagePullSecrets` (both used to be dropped) — so an air-gapped cluster
-keeps pulling from its mirror after the operator rolls a replacement Pod. Hard
+metadata) is reported as a warning — review them before `--apply`.
+`podTemplate.spec.imagePullSecrets` is **carried** into `spec.imagePullSecrets`
+(it used to be dropped) — so an air-gapped cluster keeps its credentials to pull
+from its mirror after the operator rolls a replacement Pod. (The etcd image's
+registry/tag is not carried; repoint the mirror operator-wide via
+`--etcd-image-repository`, since the operator pins the image to `spec.version`.)
+Hard
 blockers (`emptyDir` storage — nothing to adopt, an unparsable etcd image tag
 without `--version`, `enableAuth` without server TLS, a non-integer
 `quota-backend-bytes`/`snapshot-count`, a failed inspection) skip that

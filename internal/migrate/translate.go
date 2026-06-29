@@ -26,7 +26,6 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	lll "github.com/cozystack/etcd-operator/api/v1alpha2"
-	"github.com/cozystack/etcd-operator/controllers"
 	"github.com/cozystack/etcd-operator/internal/migrate/legacy"
 )
 
@@ -171,50 +170,6 @@ func extractVersion(podSpec corev1.PodSpec, override string) (string, []string, 
 	return tag, warns, nil
 }
 
-// etcdImageOverride returns the spec.image override needed to make the new
-// operator pull the same etcd image the legacy podTemplate ran, or nil when
-// the legacy image already matches the new operator's defaults (repository
-// controllers.EtcdImage, tag "v"+version). Only the differing parts are set;
-// spec.image fills the rest from those defaults.
-//
-// A digest reference (repo@sha256:... or repo:tag@sha256:...) carries no
-// per-digest field in spec.image, but its registry/repository — the load-
-// bearing part for an air-gapped mirror — is fully recoverable: strip the
-// digest and continue with the repo[:tag] prefix. A missing tag then defaults
-// to v<version> via spec.image, which extractVersion already forced an
-// explicit --version to supply. Dropping the whole override here (the old
-// behaviour) silently repointed digest-pinned mirrors back at the operator's
-// default registry and ImagePullBackOff'd — the very air-gap case this exists
-// to fix.
-func etcdImageOverride(image, version string) *lll.EtcdImageSpec {
-	if image == "" {
-		return nil
-	}
-	if at := strings.Index(image, "@"); at >= 0 {
-		image = image[:at]
-	}
-
-	// Split on the last ":" only when it introduces a tag. A registry-port
-	// colon (registry:5000/etcd) is followed by a path component; a tag is
-	// not, so the presence of a "/" after the colon tells them apart.
-	repo, tag := image, ""
-	if idx := strings.LastIndex(image, ":"); idx >= 0 && !strings.Contains(image[idx+1:], "/") {
-		repo, tag = image[:idx], image[idx+1:]
-	}
-
-	override := &lll.EtcdImageSpec{}
-	if repo != controllers.EtcdImage {
-		override.Repository = repo
-	}
-	if tag != "" && tag != "v"+version {
-		override.Tag = tag
-	}
-	if override.Repository == "" && override.Tag == "" {
-		return nil
-	}
-	return override
-}
-
 func findContainer(containers []corev1.Container, name string) *corev1.Container {
 	for i := range containers {
 		if containers[i].Name == name {
@@ -345,15 +300,12 @@ func translatePodTemplate(pt legacy.PodTemplate, out *lll.EtcdCluster, plan *Res
 	var dropped []string
 	if c := findContainer(ps.Containers, "etcd"); c != nil {
 		out.Spec.Resources = c.Resources
-		// Preserve a custom etcd image as spec.image so the replacement Pods
-		// the new operator builds pull the same reference the legacy cluster
-		// ran — load-bearing for air-gapped mirrors whose registry or tag
-		// scheme differs from the new operator's defaults.
-		if img := etcdImageOverride(c.Image, out.Spec.Version); img != nil {
-			out.Spec.Image = img
-		}
-		// Image (above), Resources are consumed here; everything else on the
-		// etcd container is an unmappable override.
+		// Image (consumed above by extractVersion → spec.version) and Resources
+		// are mapped; everything else on the etcd container is an unmappable
+		// override. The image's registry/tag is deliberately not carried: the
+		// operator pins the etcd image to spec.version, so a private mirror is
+		// repointed via the operator-wide --etcd-image-repository, not per
+		// cluster.
 		for field, set := range map[string]bool{
 			"command":         len(c.Command) > 0,
 			"args":            len(c.Args) > 0,

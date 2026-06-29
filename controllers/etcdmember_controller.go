@@ -758,7 +758,7 @@ func (r *EtcdMemberReconciler) buildPod(member *lll.EtcdMember) *corev1.Pod {
 		volumes = append(volumes, extraVols...)
 	}
 
-	etcdImage, etcdPullPolicy := resolveEtcdImage(member, r.EtcdImageRepository)
+	etcdImage := resolveEtcdImage(member, r.EtcdImageRepository)
 
 	return &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
@@ -788,9 +788,8 @@ func (r *EtcdMemberReconciler) buildPod(member *lll.EtcdMember) *corev1.Pod {
 				},
 			},
 			Containers: []corev1.Container{{
-				Name:            "etcd",
-				Image:           etcdImage,
-				ImagePullPolicy: etcdPullPolicy,
+				Name:  "etcd",
+				Image: etcdImage,
 				SecurityContext: &corev1.SecurityContext{
 					AllowPrivilegeEscalation: ptrBool(false),
 					Capabilities: &corev1.Capabilities{

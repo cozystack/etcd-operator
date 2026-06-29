@@ -135,10 +135,10 @@ func main() {
 			"EtcdSnapshot and spec.bootstrap.restore to function.")
 	flag.StringVar(&etcdImageRepository, "etcd-image-repository", os.Getenv("ETCD_IMAGE_REPOSITORY"),
 		"Operator-wide default etcd image repository (registry host + path, no tag), "+
-			"e.g. 'registry.internal/mirror/etcd'. Used for every member Pod whose "+
-			"EtcdCluster does not set spec.image.repository — point air-gapped "+
-			"deployments at a mirror once instead of per cluster. Defaults to "+
-			"$ETCD_IMAGE_REPOSITORY; when empty the built-in quay.io/coreos/etcd is used.")
+			"e.g. 'registry.internal/mirror/etcd'. Used for every member Pod — point "+
+			"air-gapped deployments at a mirror once; the tag is always v<spec.version>. "+
+			"Defaults to $ETCD_IMAGE_REPOSITORY; when empty the built-in "+
+			"quay.io/coreos/etcd is used.")
 	opts := zap.Options{
 		Development: true,
 	}
