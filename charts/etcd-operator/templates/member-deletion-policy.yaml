@@ -1,0 +1,74 @@
+{{- /*
+Enforces at the API boundary the contract the docs have carried since day one:
+EtcdMember objects are created and deleted by the operator, not by users.
+
+Deleting one is not a recoverable mistake. Its data PVC is controller-owned by
+the member, so the volume — and on a Delete-reclaim StorageClass the data
+itself — goes with it, while the member's finalizer removes the member from
+etcd on the way out. A cluster whose members are deleted one by one therefore
+dismembers itself and leaves nothing to restore from.
+
+Denied here rather than survived in the controllers: the accident (a stray
+kubectl delete, a GitOps prune, a cleanup script sweeping CRs) is what needs to
+stop, and the requester learns why at the moment they try it.
+
+Allowed through:
+  - the operator's own ServiceAccount — scale-down and crash-loop replacement
+    delete members deliberately;
+  - the garbage collector — cascade from a deleted EtcdCluster must still work;
+  - the namespace controller — deleting a namespace must not hang.
+
+Break-glass without uninstalling the policy: annotate the member with
+etcd-operator.cozystack.io/allow-deletion=true, then delete it.
+
+Requires Kubernetes 1.30+ (ValidatingAdmissionPolicy GA). On an older
+apiserver the install fails with "no matches for kind
+ValidatingAdmissionPolicy"; set memberDeletionProtection.enabled=false to
+install without the guard. Deliberately not gated on .Capabilities: that is
+empty for a plain `helm template`, so gating there would silently drop the
+policy from the rendered release manifests.
+*/ -}}
+{{- if .Values.memberDeletionProtection.enabled }}
+{{- $allowed := concat
+      (list
+        (printf "system:serviceaccount:%s:%s" .Release.Namespace (include "etcd-operator.serviceAccountName" .))
+        "system:serviceaccount:kube-system:generic-garbage-collector"
+        "system:serviceaccount:kube-system:namespace-controller")
+      .Values.memberDeletionProtection.additionalAllowedUsers }}
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: {{ include "etcd-operator.fullname" . }}-protect-members
+  labels:
+    {{- include "etcd-operator.labels" . | nindent 4 }}
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: ["etcd-operator.cozystack.io"]
+        apiVersions: ["*"]
+        operations: ["DELETE"]
+        resources: ["etcdmembers"]
+  validations:
+    - expression: >-
+        request.userInfo.username in {{ $allowed | toJson }}
+        || (has(oldObject.metadata.annotations)
+            && "etcd-operator.cozystack.io/allow-deletion" in oldObject.metadata.annotations
+            && oldObject.metadata.annotations["etcd-operator.cozystack.io/allow-deletion"] == "true")
+      reason: Forbidden
+      messageExpression: >-
+        "EtcdMember " + oldObject.metadata.name + " is managed exclusively by etcd-operator, and deleting it
+        removes the member from etcd and releases its data volume — the data is not recoverable from here.
+        Scale the EtcdCluster instead. If you really mean it, annotate the member with
+        etcd-operator.cozystack.io/allow-deletion=true first."
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: {{ include "etcd-operator.fullname" . }}-protect-members
+  labels:
+    {{- include "etcd-operator.labels" . | nindent 4 }}
+spec:
+  policyName: {{ include "etcd-operator.fullname" . }}-protect-members
+  validationActions: ["Deny"]
+{{- end }}

@@ -10,11 +10,36 @@ Two custom resources, one of them user-facing.
 
 **`EtcdCluster`** — the user-facing object. It captures cluster-wide intent: replica count, etcd version, per-member storage size, a progress deadline. This is the only resource users normally touch.
 
-**`EtcdMember`** — one per etcd member. Created and deleted by the cluster controller. Each `EtcdMember` owns its Pod and PVC. Users should not create or edit these directly.
+**`EtcdMember`** — one per etcd member. Created and deleted by the cluster controller. Each `EtcdMember` owns its Pod and PVC. Users should not create, edit or **delete** these directly.
+
+Deleting one by hand is not a recoverable mistake: the member's PVC is controller-owned by it, so the data volume is removed with the CR (and on a `Delete`-reclaim StorageClass the data itself), while the member's finalizer removes the member from etcd on the way out. Delete every member of a cluster and it dismembers itself, leaving nothing to restore from. Scale the `EtcdCluster` instead — see [member deletion is denied at admission](#member-deletion-is-denied-at-admission).
 
 There is **no StatefulSet**. Each member's Pod and PVC are reconciled independently by the member controller. The motivation is protocol awareness: scale-up adds a member as a learner first and only promotes once it's caught up; scale-down runs `MemberRemove` via a finalizer before reclaiming the Pod; pod restarts reuse the existing data dir and rejoin with the same etcd-side member ID. None of these flows fit StatefulSet's "all replicas are one fungible workload" model.
 
 The cluster controller decides *which* members exist and orchestrates the etcd-side state machine (`MemberAddAsLearner` / `MemberPromote` / `MemberRemove`). The member controller decides *how* a member becomes real — Pod, PVC, etcd flags — and reports observed facts (member ID, readiness) back up to its CR's status.
+
+## Member deletion is denied at admission
+
+The chart installs a `ValidatingAdmissionPolicy` that rejects `DELETE` on `etcdmembers` for everyone except:
+
+- the operator's own ServiceAccount — scale-down and crash-loop replacement delete members deliberately;
+- `system:serviceaccount:kube-system:generic-garbage-collector` — a deleted `EtcdCluster` must still cascade to its members;
+- `system:serviceaccount:kube-system:namespace-controller` — deleting a namespace must not hang;
+- anything listed in `memberDeletionProtection.additionalAllowedUsers`, for platforms whose own controllers legitimately reap these objects.
+
+The rejection message says what would have happened and how to proceed deliberately. Break-glass without uninstalling the policy:
+
+```sh
+kubectl annotate etcdmember.etcd-operator.cozystack.io <member> -n <ns> \
+  etcd-operator.cozystack.io/allow-deletion=true
+kubectl delete etcdmember.etcd-operator.cozystack.io <member> -n <ns>
+```
+
+The guard exists because the accident it prevents is unrecoverable and easy: one `kubectl delete`, a GitOps prune of an unexpected object, a cleanup script sweeping CRs by label. The controllers cannot make that survivable — a member's data volume is bound to its identity, and a replacement member gets a fresh name and UID — so the event is stopped at the boundary instead.
+
+Requires Kubernetes 1.30+ (`ValidatingAdmissionPolicy` GA). On older apiservers, install with `memberDeletionProtection.enabled=false`; the operator behaves as before, without the guard.
+
+**Uninstalling:** remove the policy before removing the CRDs. `helm uninstall` does this in the right order, but a manual teardown that deletes the CRDs first will find member deletion denied and stall.
 
 ## Member naming
 

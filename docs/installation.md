@@ -311,6 +311,13 @@ kubectl delete etcdcluster.etcd-operator.cozystack.io --all -A
 # intentionally left in place.
 make undeploy
 
+# Remove the member-deletion guard before the CRDs. Removing the CRD makes the
+# apiserver delete every EtcdMember, and the policy would deny those requests —
+# leaving the CRD stuck in Terminating. `helm uninstall` above already removed
+# it; this is for teardowns that skipped Helm:
+kubectl delete validatingadmissionpolicybinding etcd-operator-protect-members --ignore-not-found
+kubectl delete validatingadmissionpolicy etcd-operator-protect-members --ignore-not-found
+
 # Remove the CRDs too (only after all EtcdClusters are gone) — deleting them
 # cascade-deletes every remaining EtcdCluster:
 kubectl delete crd etcdclusters.etcd-operator.cozystack.io \

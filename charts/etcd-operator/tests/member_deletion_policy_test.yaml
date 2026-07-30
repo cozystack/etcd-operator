@@ -1,0 +1,128 @@
+suite: EtcdMember deletion is denied at admission
+
+# The policy is the enforcement point for a contract the docs have always
+# stated: EtcdMember objects belong to the operator. What matters in these
+# assertions is not the YAML shape but who keeps the ability to delete —
+# getting that list wrong either wedges cluster/namespace deletion (too
+# strict) or leaves the hole open (too loose).
+
+templates:
+  - member-deletion-policy.yaml
+
+tests:
+  - it: is installed by default
+    asserts:
+      - hasDocuments:
+          count: 2
+      - containsDocument:
+          apiVersion: admissionregistration.k8s.io/v1
+          kind: ValidatingAdmissionPolicy
+          name: RELEASE-NAME-etcd-operator-protect-members
+        documentIndex: 0
+      - containsDocument:
+          apiVersion: admissionregistration.k8s.io/v1
+          kind: ValidatingAdmissionPolicyBinding
+          name: RELEASE-NAME-etcd-operator-protect-members
+        documentIndex: 1
+      # The binding must name the policy it enforces — a typo here installs a
+      # policy that matches nothing and silently protects nothing.
+      - equal:
+          path: spec.policyName
+          value: RELEASE-NAME-etcd-operator-protect-members
+        documentIndex: 1
+
+  - it: matches only DELETE on etcdmembers
+    documentSelector:
+      path: kind
+      value: ValidatingAdmissionPolicy
+    asserts:
+      - equal:
+          path: spec.matchConstraints.resourceRules[0].operations
+          value: ["DELETE"]
+      - equal:
+          path: spec.matchConstraints.resourceRules[0].resources
+          value: ["etcdmembers"]
+      - equal:
+          path: spec.matchConstraints.resourceRules[0].apiGroups
+          value: ["etcd-operator.cozystack.io"]
+
+  - it: denies rather than warns, and fails closed
+    asserts:
+      - equal:
+          path: spec.validationActions
+          value: ["Deny"]
+        documentSelector:
+          path: kind
+          value: ValidatingAdmissionPolicyBinding
+      - equal:
+          path: spec.failurePolicy
+          value: Fail
+        documentSelector:
+          path: kind
+          value: ValidatingAdmissionPolicy
+
+  # The operator deletes members itself on scale-down and crash-loop
+  # replacement; the GC has to cascade from a deleted EtcdCluster; the
+  # namespace controller has to finish a namespace deletion. Denying any of
+  # the three turns a routine operation into a wedge.
+  - it: still allows the operator, the garbage collector and the namespace controller
+    documentSelector:
+      path: kind
+      value: ValidatingAdmissionPolicy
+    asserts:
+      - matchRegex:
+          path: spec.validations[0].expression
+          pattern: system:serviceaccount:NAMESPACE:RELEASE-NAME-etcd-operator
+      - matchRegex:
+          path: spec.validations[0].expression
+          pattern: system:serviceaccount:kube-system:generic-garbage-collector
+      - matchRegex:
+          path: spec.validations[0].expression
+          pattern: system:serviceaccount:kube-system:namespace-controller
+
+  - it: honours the break-glass annotation
+    documentSelector:
+      path: kind
+      value: ValidatingAdmissionPolicy
+    asserts:
+      - matchRegex:
+          path: spec.validations[0].expression
+          pattern: etcd-operator\.cozystack\.io/allow-deletion
+
+  # A platform whose own controller legitimately reaps members needs a way in
+  # that does not mean disabling the guard outright.
+  - it: accepts additional allowed users
+    set:
+      memberDeletionProtection:
+        additionalAllowedUsers:
+          - system:serviceaccount:platform:reaper
+    documentSelector:
+      path: kind
+      value: ValidatingAdmissionPolicy
+    asserts:
+      - matchRegex:
+          path: spec.validations[0].expression
+          pattern: system:serviceaccount:platform:reaper
+
+  # Kubernetes below 1.30 has no ValidatingAdmissionPolicy; the chart must
+  # still install there.
+  - it: can be switched off for older apiservers
+    set:
+      memberDeletionProtection:
+        enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: names the ServiceAccount the release actually uses
+    set:
+      serviceAccount:
+        create: false
+        name: byo-sa
+    documentSelector:
+      path: kind
+      value: ValidatingAdmissionPolicy
+    asserts:
+      - matchRegex:
+          path: spec.validations[0].expression
+          pattern: system:serviceaccount:NAMESPACE:byo-sa
