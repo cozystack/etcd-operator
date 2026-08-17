@@ -35,11 +35,13 @@ kubectl annotate etcdmember.etcd-operator.cozystack.io <member> -n <ns> \
 kubectl delete etcdmember.etcd-operator.cozystack.io <member> -n <ns>
 ```
 
-The guard exists because the accident it prevents is unrecoverable and easy: one `kubectl delete`, a GitOps prune of an unexpected object, a cleanup script sweeping CRs by label. The controllers cannot make that survivable — a member's data volume is bound to its identity, and a replacement member gets a fresh name and UID — so the event is stopped at the boundary instead.
+The guard exists because the accident it prevents is unrecoverable and easy, and because nothing legitimately manages `EtcdMember` objects declaratively — the only sanctioned non-operator writer is `cmd/etcd-migrate`, which creates and never deletes. So a DELETE from anywhere else — a stray `kubectl delete`, a cleanup script sweeping CRs by label, a GitOps tool that wrongly tracks these objects (a tracking misconfiguration, not a workflow to support) — is always an accident. The controllers cannot make it survivable (a member's data volume is bound to its identity, and a replacement gets a fresh name and UID), so the event is stopped at the boundary instead.
 
 Requires Kubernetes 1.30+ (`ValidatingAdmissionPolicy` GA). On older apiservers, install with `memberDeletionProtection.enabled=false`; the operator behaves as before, without the guard.
 
-**Uninstalling:** remove the policy before removing the CRDs. `helm uninstall` does this in the right order, but a manual teardown that deletes the CRDs first will find member deletion denied and stall.
+**Known limitation:** the guard does not cover member removal driven by *CRD* deletion. When the `etcdmembers` CRD is deleted, apiextensions cleans up the CR instances in-process, through the storage layer rather than the authenticated request path — the same route that keeps admission webhooks from firing for CRs deleted during CRD deletion — so admission (and this policy) never sees those deletes. `crds.keep=true` (the default) is what actually protects against that path.
+
+**Uninstalling:** `helm uninstall` removes the policy for you. A manual teardown should remove the policy too (see the [teardown runbook](installation.md#teardown)); ordering it before the CRD deletion is tidy but not load-bearing — per the limitation above, CRD cleanup bypasses the policy rather than stalling on it.
 
 ## Member naming
 

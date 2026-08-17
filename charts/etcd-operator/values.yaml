@@ -23,6 +23,11 @@ crds:
 #
 # Requires Kubernetes 1.30+ (ValidatingAdmissionPolicy GA). Set to false on
 # older apiservers.
+#
+# Scope: with manager.watchNamespaces set, the binding is scoped to those
+# namespaces so scoped releases coexist. Cluster-wide (watchNamespaces empty)
+# the install must be a singleton — a second cluster-wide release would deny
+# this operator's own scale-down/replacement (admission is deny-wins).
 memberDeletionProtection:
   # -- Install the ValidatingAdmissionPolicy protecting EtcdMember objects.
   enabled: true

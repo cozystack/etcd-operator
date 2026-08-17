@@ -8,15 +8,20 @@ itself — goes with it, while the member's finalizer removes the member from
 etcd on the way out. A cluster whose members are deleted one by one therefore
 dismembers itself and leaves nothing to restore from.
 
-Denied here rather than survived in the controllers: the accident (a stray
-kubectl delete, a GitOps prune, a cleanup script sweeping CRs) is what needs to
-stop, and the requester learns why at the moment they try it.
+Nothing manages EtcdMember objects declaratively (the only sanctioned
+non-operator writer is cmd/etcd-migrate, which creates and never deletes), so a
+DELETE from anywhere else is always an accident or a tracking misconfiguration
+— stopped at the boundary, with the requester told why.
 
 Allowed through:
   - the operator's own ServiceAccount — scale-down and crash-loop replacement
     delete members deliberately;
   - the garbage collector — cascade from a deleted EtcdCluster must still work;
-  - the namespace controller — deleting a namespace must not hang.
+  - the namespace controller — deleting a namespace must not hang;
+  - kube-controller-manager itself — on clusters run without
+    --use-service-account-credentials the GC and namespace-cleanup deletes
+    authenticate as the user system:kube-controller-manager rather than the
+    per-controller ServiceAccounts above.
 
 Break-glass without uninstalling the policy: annotate the member with
 etcd-operator.cozystack.io/allow-deletion=true, then delete it.
@@ -24,16 +29,22 @@ etcd-operator.cozystack.io/allow-deletion=true, then delete it.
 Requires Kubernetes 1.30+ (ValidatingAdmissionPolicy GA). On an older
 apiserver the install fails with "no matches for kind
 ValidatingAdmissionPolicy"; set memberDeletionProtection.enabled=false to
-install without the guard. Deliberately not gated on .Capabilities: that is
-empty for a plain `helm template`, so gating there would silently drop the
-policy from the rendered release manifests.
+install without the guard.
+
+Rendered unconditionally (NOT gated on .Capabilities.APIVersions): capability
+detection would make a security guard's absence silent — a pre-1.30 `helm
+install`, or a GitOps render carrying the destination's API versions, would
+quietly omit it. Absence of a guard against an unrecoverable accident must be
+loud and explicit: always render, and opt out via
+memberDeletionProtection.enabled=false.
 */ -}}
 {{- if .Values.memberDeletionProtection.enabled }}
 {{- $allowed := concat
       (list
         (printf "system:serviceaccount:%s:%s" .Release.Namespace (include "etcd-operator.serviceAccountName" .))
         "system:serviceaccount:kube-system:generic-garbage-collector"
-        "system:serviceaccount:kube-system:namespace-controller")
+        "system:serviceaccount:kube-system:namespace-controller"
+        "system:kube-controller-manager")
       .Values.memberDeletionProtection.additionalAllowedUsers }}
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicy
@@ -71,4 +82,18 @@ metadata:
 spec:
   policyName: {{ include "etcd-operator.fullname" . }}-protect-members
   validationActions: ["Deny"]
+{{- with .Values.manager.watchNamespaces }}
+  # Scope to the watched namespaces so multiple namespace-scoped releases don't
+  # deny each other's members (admission is deny-wins; each allowlist holds only
+  # its own operator SA). Cluster-wide install must be a singleton — see values.yaml.
+  matchResources:
+    namespaceSelector:
+      matchExpressions:
+        - key: kubernetes.io/metadata.name
+          operator: In
+          values:
+            {{- range . }}
+            - {{ . | quote }}
+            {{- end }}
+{{- end }}
 {{- end }}

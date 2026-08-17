@@ -174,11 +174,14 @@ func TestKamajiDataStore(t *testing.T) {
 		if err := kube.Get(ctx, client.ObjectKey{Namespace: e2eNamespace, Name: victim}, m); err != nil {
 			t.Fatalf("get member %s before deletion: %v", victim, err)
 		}
+		// Patch (not Get+Update) so a concurrent member-controller status write
+		// can't 409 and fail the test spuriously.
+		base := m.DeepCopy()
 		if m.Annotations == nil {
 			m.Annotations = map[string]string{}
 		}
 		m.Annotations["etcd-operator.cozystack.io/allow-deletion"] = "true"
-		if err := kube.Update(ctx, m); err != nil {
+		if err := kube.Patch(ctx, m, client.MergeFrom(base)); err != nil {
 			t.Fatalf("annotate member %s for deletion: %v", victim, err)
 		}
 		if err := kube.Delete(ctx, m); err != nil && !apierrors.IsNotFound(err) {

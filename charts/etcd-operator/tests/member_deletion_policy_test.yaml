@@ -65,7 +65,7 @@ tests:
   # replacement; the GC has to cascade from a deleted EtcdCluster; the
   # namespace controller has to finish a namespace deletion. Denying any of
   # the three turns a routine operation into a wedge.
-  - it: still allows the operator, the garbage collector and the namespace controller
+  - it: still allows the operator, the garbage collector, the namespace controller and kube-controller-manager
     documentSelector:
       path: kind
       value: ValidatingAdmissionPolicy
@@ -79,6 +79,11 @@ tests:
       - matchRegex:
           path: spec.validations[0].expression
           pattern: system:serviceaccount:kube-system:namespace-controller
+      # Clusters without --use-service-account-credentials run GC and namespace
+      # cleanup as the user system:kube-controller-manager, not per-controller SAs.
+      - matchRegex:
+          path: spec.validations[0].expression
+          pattern: system:kube-controller-manager
 
   - it: honours the break-glass annotation
     documentSelector:
@@ -126,3 +131,35 @@ tests:
       - matchRegex:
           path: spec.validations[0].expression
           pattern: system:serviceaccount:NAMESPACE:byo-sa
+
+  # Cluster-wide by default (no watchNamespaces): the binding must match every
+  # namespace, so it carries no matchResources scoping.
+  - it: binds cluster-wide when the operator watches all namespaces
+    documentSelector:
+      path: kind
+      value: ValidatingAdmissionPolicyBinding
+    asserts:
+      - notExists:
+          path: spec.matchResources
+
+  # Namespace-scoped operator: the binding must scope to the watched namespaces
+  # so two scoped releases don't deny each other's members.
+  - it: scopes the binding to the watched namespaces when set
+    set:
+      manager:
+        watchNamespaces:
+          - team-a
+          - team-b
+    documentSelector:
+      path: kind
+      value: ValidatingAdmissionPolicyBinding
+    asserts:
+      - equal:
+          path: spec.matchResources.namespaceSelector.matchExpressions[0].key
+          value: kubernetes.io/metadata.name
+      - equal:
+          path: spec.matchResources.namespaceSelector.matchExpressions[0].operator
+          value: In
+      - equal:
+          path: spec.matchResources.namespaceSelector.matchExpressions[0].values
+          value: [team-a, team-b]
