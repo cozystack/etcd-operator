@@ -9,11 +9,10 @@ It is a one-shot, run-to-completion record, modeled on [`EtcdSnapshot`](concepts
 the operator drives it through `status.phase` and it never re-runs.
 
 **Scheduling.** `EtcdDefrag` is the *run*; what *triggers* a run is separate.
-Today, recurring defragmentation is driven by creating `EtcdDefrag` objects from
-outside (a `CronJob`, a GitOps cron). A companion `EtcdDefragPolicy` kind — a
-cadence (`schedule`) and/or a condition (`when`) that stamps out `EtcdDefrag`
-runs — is planned so the operator absorbs that scheduling itself; it is not part
-of this API PR.
+For recurring defragmentation, [`EtcdDefragPolicy`](#recurring-runs-etcddefragpolicy)
+stamps out `EtcdDefrag` objects on a cron schedule so the operator drives the
+cadence itself; you can also create `EtcdDefrag` objects from outside (a
+`CronJob`, a GitOps cron) if you prefer to own the schedule elsewhere.
 
 ## Why in the operator (not a bare CronJob)
 
@@ -131,10 +130,54 @@ no `spec` knobs:
   backoff up to the deadline; a failed per-member RPC is retried a bounded number
   of times then marked `Failed` (a failing leader fails the run).
 - **Retry across runs:** terminal phases (`Complete`/`Failed`) are sticky — an
-  `EtcdDefrag` never re-runs itself. A retry is a *new* `EtcdDefrag`: the external
-  scheduler's next tick for periodic use, or a re-create for a one-shot. Each
-  attempt is a discrete, auditable object (GC'd via `ttlSecondsAfterFinished`)
-  rather than hidden retry state.
+  `EtcdDefrag` never re-runs itself. A retry is a *new* `EtcdDefrag`: an
+  [`EtcdDefragPolicy`](#recurring-runs-etcddefragpolicy) tick for periodic use, or
+  a re-create for a one-shot. Each attempt is a discrete, auditable object (GC'd
+  via `ttlSecondsAfterFinished`) rather than hidden retry state.
+
+## Recurring runs (`EtcdDefragPolicy`)
+
+`EtcdDefragPolicy` schedules `EtcdDefrag` runs on a cron cadence. Each tick
+stamps a new `EtcdDefrag` — owned by the policy (so it cascades on delete) — and
+the run then follows all the safety rules above. The policy only *triggers*
+runs; it never defragments directly.
+
+```yaml
+apiVersion: etcd-operator.cozystack.io/v1alpha2
+kind: EtcdDefragPolicy
+metadata:
+  name: nightly
+  namespace: team-a
+spec:
+  clusterRef:
+    name: etcd
+  schedule: "0 3 * * *"        # standard five-field cron, evaluated in UTC
+  concurrencyPolicy: Forbid    # skip a tick while a previous run is still active (default)
+  ttlSecondsAfterFinished: 3600
+  historyLimit: 3              # keep the last 3 finished runs
+  rule:
+    freeSpaceAbove: 200Mi
+    quotaUsageAbove: 80%
+    minReclaim: 32Mi
+```
+
+- **`schedule`** is a standard five-field cron expression in UTC. Prefix it with
+  `CRON_TZ=<zone>` to use another zone.
+- **`concurrencyPolicy`** is `Forbid` (default — a tick is skipped while a
+  stamped run is still active) or `Allow` (stamp anyway; `EtcdDefrag`'s own
+  per-cluster serialization queues it behind the active run).
+- **`suspend: true`** pauses stamping without deleting the policy; missed ticks
+  are not backfilled on resume.
+- **`startingDeadlineSeconds`** skips a tick that is already older than the
+  deadline (e.g. after the operator was down) instead of starting it late.
+- **`historyLimit`** caps retained finished runs; `ttlSecondsAfterFinished` (per
+  run) is the other cleanup path.
+- **`rule`** / **`ttlSecondsAfterFinished`** are copied verbatim into each
+  stamped `EtcdDefrag`.
+
+`status.lastScheduleTime` anchors the next tick (so a tick is never acted on
+twice), `status.lastSuccessfulTime` records the last `Complete`, and
+`status.active` lists runs still in flight.
 
 ## Relationship to capacity metrics
 
