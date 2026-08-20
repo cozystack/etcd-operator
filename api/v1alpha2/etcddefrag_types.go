@@ -38,9 +38,8 @@ type EtcdDefragSpec struct {
 
 	// TTLSecondsAfterFinished records how long after a terminal phase this
 	// object should be garbage-collected — meaningful for objects a scheduler
-	// stamps out. NOTE: acted on by the (not-yet-implemented) reconciling
-	// controller; the API server does not garbage-collect custom resources on
-	// its own. Absent means the record is kept.
+	// stamps out. Acted on by the reconciling controller; the API server does not
+	// garbage-collect custom resources on its own. Absent means the record is kept.
 	// +kubebuilder:validation:Minimum=0
 	// +optional
 	TTLSecondsAfterFinished *int32 `json:"ttlSecondsAfterFinished,omitempty"`
@@ -71,9 +70,10 @@ type DefragRule struct {
 	// QuotaUsageAbove: when DbSize exceeds this fraction of the backend quota
 	// (approaching NOSPACE), lower the reclaimable floor to MinReclaim so small
 	// wins are taken under pressure. A member is never defragmented when its
-	// reclaimable space is below MinReclaim. Integer percent 1..100 with a "%"
-	// suffix, e.g. "80%".
-	// +kubebuilder:validation:Pattern=`^([1-9][0-9]?|100)%$`
+	// reclaimable space is below MinReclaim. Integer percent 1..99 with a "%"
+	// suffix, e.g. "80%"; 100% is rejected because a backend never exceeds its
+	// quota (etcd raises NOSPACE first), so the arm could never fire.
+	// +kubebuilder:validation:Pattern=`^[1-9][0-9]?%$`
 	// +optional
 	QuotaUsageAbove string `json:"quotaUsageAbove,omitempty"`
 
@@ -201,10 +201,6 @@ type MemberDefragStatus struct {
 // run-to-completion defragmentation of an EtcdCluster's members. Like
 // EtcdSnapshot it is a record: the operator drives it through status.phase and
 // it never re-runs.
-//
-// NOTE: this ships the API type ahead of its reconciling controller. Until that
-// controller lands, an EtcdDefrag is inert — creating one records intent but
-// nothing acts on it (no sweep runs, status stays empty, TTL does not fire).
 type EtcdDefrag struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`

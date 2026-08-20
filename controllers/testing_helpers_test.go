@@ -48,6 +48,26 @@ type fakeEtcd struct {
 	statusVersion string
 	statusErr     error
 
+	// Defrag surface. statusByEndpoint overrides Status per endpoint (backend
+	// sizes, leader); statusErrByEndpoint fails Status for a specific endpoint
+	// (an unhealthy member); leader is the default StatusResponse.Leader.
+	// defragCalls records each Defragment endpoint in call order; defragErr fails
+	// every Defragment, defragErrByEndpoint fails it for a specific endpoint.
+	statusByEndpoint    map[string]*clientv3.StatusResponse
+	statusErrByEndpoint map[string]error
+	leader              uint64
+	defragCalls         []string
+	defragErr           error
+	defragErrByEndpoint map[string]error
+
+	// Alarm surface. alarms is what AlarmList returns; alarmListErr fails it;
+	// disarmCalls records each AlarmDisarm target in call order;
+	// disarmErrByMember fails AlarmDisarm for a specific member.
+	alarms            []*etcdserverpb.AlarmMember
+	alarmListErr      error
+	disarmCalls       []*etcdserverpb.AlarmMember
+	disarmErrByMember map[uint64]error
+
 	addCalls        []string
 	addLearnerCalls []string
 	promoteCalls    []uint64
@@ -181,14 +201,53 @@ func (f *fakeEtcd) UserGrantRole(_ context.Context, user, role string) (*clientv
 	return &clientv3.AuthUserGrantRoleResponse{Header: &etcdserverpb.ResponseHeader{ClusterId: f.clusterID}}, nil
 }
 
-func (f *fakeEtcd) Status(_ context.Context, _ string) (*clientv3.StatusResponse, error) {
+func (f *fakeEtcd) Status(_ context.Context, endpoint string) (*clientv3.StatusResponse, error) {
 	if f.statusErr != nil {
 		return nil, f.statusErr
+	}
+	if err := f.statusErrByEndpoint[endpoint]; err != nil {
+		return nil, err
+	}
+	if resp, ok := f.statusByEndpoint[endpoint]; ok {
+		if resp.Header == nil {
+			resp.Header = &etcdserverpb.ResponseHeader{ClusterId: f.clusterID}
+		}
+		return resp, nil
 	}
 	return &clientv3.StatusResponse{
 		Header:  &etcdserverpb.ResponseHeader{ClusterId: f.clusterID},
 		Version: f.statusVersion,
+		Leader:  f.leader,
 	}, nil
+}
+
+func (f *fakeEtcd) Defragment(_ context.Context, endpoint string) (*clientv3.DefragmentResponse, error) {
+	f.defragCalls = append(f.defragCalls, endpoint)
+	if f.defragErr != nil {
+		return nil, f.defragErr
+	}
+	if err := f.defragErrByEndpoint[endpoint]; err != nil {
+		return nil, err
+	}
+	return &clientv3.DefragmentResponse{Header: &etcdserverpb.ResponseHeader{ClusterId: f.clusterID}}, nil
+}
+
+func (f *fakeEtcd) AlarmList(_ context.Context) (*clientv3.AlarmResponse, error) {
+	if f.alarmListErr != nil {
+		return nil, f.alarmListErr
+	}
+	return &clientv3.AlarmResponse{
+		Header: &etcdserverpb.ResponseHeader{ClusterId: f.clusterID},
+		Alarms: f.alarms,
+	}, nil
+}
+
+func (f *fakeEtcd) AlarmDisarm(_ context.Context, m *clientv3.AlarmMember) (*clientv3.AlarmResponse, error) {
+	f.disarmCalls = append(f.disarmCalls, (*etcdserverpb.AlarmMember)(m))
+	if err := f.disarmErrByMember[m.MemberID]; err != nil {
+		return nil, err
+	}
+	return &clientv3.AlarmResponse{Header: &etcdserverpb.ResponseHeader{ClusterId: f.clusterID}}, nil
 }
 
 func (f *fakeEtcd) Close() error { f.closed = true; return nil }
@@ -251,7 +310,7 @@ func newTestClient(t *testing.T, objs ...client.Object) (client.Client, *runtime
 	c := fake.NewClientBuilder().
 		WithScheme(s).
 		WithObjects(objs...).
-		WithStatusSubresource(&lll.EtcdCluster{}, &lll.EtcdMember{}, &lll.EtcdSnapshot{}).
+		WithStatusSubresource(&lll.EtcdCluster{}, &lll.EtcdMember{}, &lll.EtcdSnapshot{}, &lll.EtcdDefrag{}).
 		Build()
 	return c, s
 }

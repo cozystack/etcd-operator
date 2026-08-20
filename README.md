@@ -76,7 +76,7 @@ For step-by-step setup, RBAC, image versions, and teardown see [docs/installatio
 - **[Installation](docs/installation.md)** — deploy the operator, create your first cluster, networking pitfalls, upgrades.
 - **[Concepts](docs/concepts.md)** — design rationale: locking pattern, single-seed bootstrap, GenerateName naming, scale-to-zero mechanics, conditions reference.
 - **[Operations](docs/operations.md)** — runbook for day-2: scaling, pausing/resuming, decoding conditions, escalating stuck reconciles, broken-member recovery.
-- **[Defragmentation](docs/etcd-defrag.md)** — the `EtcdDefrag` resource: reclaiming etcd backend disk and its safety model (API type; reconciling controller is a follow-up).
+- **[Defragmentation](docs/etcd-defrag.md)** — the `EtcdDefrag` resource: reclaiming etcd backend disk, one-shot and driven from outside on a schedule, and its safety model.
 - **[Migration](docs/migration.md)** — moving onto this operator from the legacy aenix operator; tracks behavioural changes that need an explicit migration step — currently the BYO root-credentials requirement when enabling auth.
 
 ## Testing

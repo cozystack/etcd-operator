@@ -1,6 +1,13 @@
 - apiGroups:
     - ""
   resources:
+    - events
+  verbs:
+    - create
+    - patch
+- apiGroups:
+    - ""
+  resources:
     - persistentvolumeclaims
   verbs:
     - create
@@ -87,12 +94,24 @@
     - etcd-operator.cozystack.io
   resources:
     - etcdclusters/status
+    - etcddefrags/status
     - etcdmembers/status
     - etcdsnapshots/status
   verbs:
     - get
     - patch
     - update
+- apiGroups:
+    - etcd-operator.cozystack.io
+  resources:
+    - etcddefrags
+  verbs:
+    - delete
+    - get
+    - list
+    - patch
+    - update
+    - watch
 - apiGroups:
     - etcd-operator.cozystack.io
   resources:
