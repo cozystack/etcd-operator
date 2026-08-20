@@ -311,6 +311,17 @@ kubectl delete etcdcluster.etcd-operator.cozystack.io --all -A
 # intentionally left in place.
 make undeploy
 
+# Remove the member-deletion guard. `helm uninstall` above already removed it;
+# this is for teardowns that skipped Helm. Order does not actually matter for
+# the CRD: apiextensions cleans up CR instances in-process during CRD deletion,
+# which bypasses admission, so the policy neither denies those deletes nor
+# stalls the CRD (this is also why CRD-deletion-driven member removal is a
+# known gap the guard does not cover — see concepts.md). Delete by label so it
+# works regardless of the release name (add app.kubernetes.io/instance=<release>
+# to disambiguate when several releases are installed):
+kubectl delete validatingadmissionpolicybinding,validatingadmissionpolicy \
+  -l app.kubernetes.io/name=etcd-operator --ignore-not-found
+
 # Remove the CRDs too (only after all EtcdClusters are gone) — deleting them
 # cascade-deletes every remaining EtcdCluster:
 kubectl delete crd etcdclusters.etcd-operator.cozystack.io \

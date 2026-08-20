@@ -214,13 +214,19 @@ Manual recovery:
 ```sh
 # 1. Identify the broken member.
 kubectl get etcdmember.etcd-operator.cozystack.io -n <ns>
-# 2. Delete it — the finalizer runs MemberRemove against peers, then GC takes
+# 2. Deleting a member is denied by default (see concepts: member deletion is
+#    denied at admission) — this is the deliberate exception, so unlock it:
+kubectl annotate etcdmember.etcd-operator.cozystack.io <broken-member> -n <ns> \
+  etcd-operator.cozystack.io/allow-deletion=true
+# 3. Delete it — the finalizer runs MemberRemove against peers, then GC takes
 #    the Pod and PVC. Quorum holds because we remove before adding.
 kubectl delete etcdmember.etcd-operator.cozystack.io <broken-member> -n <ns>
-# 3. The cluster controller's next reconcile observes current < desired and
+# 4. The cluster controller's next reconcile observes current < desired and
 #    scales up automatically — a new member is added with GenerateName and
 #    fresh storage.
 ```
+
+The annotation step is the point of the guard: this recovery discards a data volume on purpose, and typing that out is what separates it from the same command issued by accident.
 
 This sequence preserves quorum if you have an odd number of voters and only one is broken. If multiple voters are broken simultaneously, quorum is lost and you can't `MemberRemove` cleanly. In that case the recovery is to delete the EtcdCluster, recreate it, and restore from a snapshot — see [Restoring a cluster from a snapshot](#restoring-a-cluster-from-a-snapshot). Snapshots only exist if you have been taking `EtcdSnapshot`s, so set that up *before* you need it.
 

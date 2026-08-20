@@ -165,7 +165,25 @@ func TestKamajiDataStore(t *testing.T) {
 	t.Logf("original members: %v", original)
 	for _, victim := range original {
 		t.Logf("deleting EtcdMember %q (operator does MemberRemove + a GenerateName replacement)", victim)
-		m := &etcdv1alpha2.EtcdMember{ObjectMeta: metav1.ObjectMeta{Namespace: e2eNamespace, Name: victim}}
+		// Member deletion is denied at admission — the guard exists precisely to
+		// stop this command when it is issued by accident. This test issues it on
+		// purpose, so it takes the documented break-glass path: annotate first.
+		// Doing it here rather than exempting the test's identity in the policy
+		// keeps the e2e honest about what a human has to do.
+		m := &etcdv1alpha2.EtcdMember{}
+		if err := kube.Get(ctx, client.ObjectKey{Namespace: e2eNamespace, Name: victim}, m); err != nil {
+			t.Fatalf("get member %s before deletion: %v", victim, err)
+		}
+		// Patch (not Get+Update) so a concurrent member-controller status write
+		// can't 409 and fail the test spuriously.
+		base := m.DeepCopy()
+		if m.Annotations == nil {
+			m.Annotations = map[string]string{}
+		}
+		m.Annotations["etcd-operator.cozystack.io/allow-deletion"] = "true"
+		if err := kube.Patch(ctx, m, client.MergeFrom(base)); err != nil {
+			t.Fatalf("annotate member %s for deletion: %v", victim, err)
+		}
 		if err := kube.Delete(ctx, m); err != nil && !apierrors.IsNotFound(err) {
 			t.Fatalf("delete member %s: %v", victim, err)
 		}

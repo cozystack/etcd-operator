@@ -9,6 +9,33 @@ crds:
   # EtcdCluster and its data.
   keep: true
 
+# Deny DELETE on EtcdMember objects at the API boundary, except for the
+# operator itself, the garbage collector (so a deleted EtcdCluster still
+# cascades) and the namespace controller (so namespace deletion does not hang).
+#
+# Deleting an EtcdMember by hand is not a recoverable mistake: its data PVC is
+# controller-owned by the member, so the volume goes with it, while the
+# member's finalizer removes the member from etcd on the way out. The docs have
+# always said these objects are the operator's; this enforces it.
+#
+# Break-glass without uninstalling: annotate the member with
+# etcd-operator.cozystack.io/allow-deletion=true, then delete it.
+#
+# Requires Kubernetes 1.30+ (ValidatingAdmissionPolicy GA). Set to false on
+# older apiservers.
+#
+# Scope: with manager.watchNamespaces set, the binding is scoped to those
+# namespaces so scoped releases coexist. Cluster-wide (watchNamespaces empty)
+# the install must be a singleton — a second cluster-wide release would deny
+# this operator's own scale-down/replacement (admission is deny-wins).
+memberDeletionProtection:
+  # -- Install the ValidatingAdmissionPolicy protecting EtcdMember objects.
+  enabled: true
+  # -- Extra usernames allowed to delete EtcdMembers, in apiserver form
+  # (e.g. "system:serviceaccount:<ns>:<sa>" or a user name). For platforms
+  # whose own controllers legitimately reap these objects.
+  additionalAllowedUsers: []
+
 # -- Render a Namespace object. Off by default (real `helm install` uses
 # --create-namespace); build-dist-manifests turns it on so the rendered
 # kubectl-apply manifest is self-contained.
