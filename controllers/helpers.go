@@ -16,6 +16,10 @@ const (
 	// LabelCluster is the label key used to associate resources with an EtcdCluster.
 	LabelCluster = "etcd-operator.cozystack.io/cluster"
 
+	// LabelDefragPolicy tags an EtcdDefrag with the EtcdDefragPolicy that
+	// stamped it, so the policy controller can find its own runs.
+	LabelDefragPolicy = "etcd-operator.cozystack.io/defrag-policy"
+
 	// LabelRole identifies the etcd-side raft role of a member's Pod. The
 	// only value the operator emits today is RoleVoter; learners carry no
 	// LabelRole at all so the per-cluster PodDisruptionBudget can select

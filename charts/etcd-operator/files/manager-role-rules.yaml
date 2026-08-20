@@ -94,6 +94,7 @@
     - etcd-operator.cozystack.io
   resources:
     - etcdclusters/status
+    - etcddefragpolicies/status
     - etcddefrags/status
     - etcdmembers/status
     - etcdsnapshots/status
@@ -104,9 +105,8 @@
 - apiGroups:
     - etcd-operator.cozystack.io
   resources:
-    - etcddefrags
+    - etcddefragpolicies
   verbs:
-    - delete
     - get
     - list
     - patch
@@ -115,6 +115,7 @@
 - apiGroups:
     - etcd-operator.cozystack.io
   resources:
+    - etcddefrags
     - etcdmembers
     - etcdsnapshots
   verbs:
