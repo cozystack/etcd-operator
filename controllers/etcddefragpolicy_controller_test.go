@@ -223,6 +223,38 @@ func TestDefragPolicy_AllowConcurrent(t *testing.T) {
 	}
 }
 
+// A tick older than StartingDeadlineSeconds is skipped rather than started
+// late: nothing is stamped, but the tick is consumed (lastScheduleTime advances
+// to it) so the controller does not retry the stale slot.
+func TestDefragPolicy_MissedDeadline(t *testing.T) {
+	deadline := int64(60)
+	pol := defragPolicy("p", "0 * * * *", func(p *lll.EtcdDefragPolicy) { p.Spec.StartingDeadlineSeconds = &deadline })
+	// now is 01:30, so the 01:00 tick is 30m old — well past the 60s deadline.
+	r, c := policyReconciler(t, epoch.Add(90*time.Minute), pol)
+
+	reconcilePolicy(t, r, "p")
+	if runs := listPolicyRuns(t, c, "p"); len(runs) != 0 {
+		t.Fatalf("stamped a run past the starting deadline: %d runs", len(runs))
+	}
+	got := mustGet(t, c, "p", "ns", &lll.EtcdDefragPolicy{})
+	if got.Status.LastScheduleTime == nil || !got.Status.LastScheduleTime.Time.Equal(epoch.Add(time.Hour)) {
+		t.Errorf("lastScheduleTime = %v, want the missed 01:00 tick consumed", got.Status.LastScheduleTime)
+	}
+}
+
+// A tick within StartingDeadlineSeconds is stamped normally: the deadline only
+// suppresses runs older than its window.
+func TestDefragPolicy_WithinDeadline(t *testing.T) {
+	deadline := int64(7200) // 2h, comfortably wider than the 30m-old tick
+	pol := defragPolicy("p", "0 * * * *", func(p *lll.EtcdDefragPolicy) { p.Spec.StartingDeadlineSeconds = &deadline })
+	r, c := policyReconciler(t, epoch.Add(90*time.Minute), pol)
+
+	reconcilePolicy(t, r, "p")
+	if runs := listPolicyRuns(t, c, "p"); len(runs) != 1 {
+		t.Fatalf("a tick within the deadline should stamp one run, got %d", len(runs))
+	}
+}
+
 // HistoryLimit trims the oldest finished runs, keeping the newest.
 func TestDefragPolicy_HistoryLimit(t *testing.T) {
 	limit := int32(1)
