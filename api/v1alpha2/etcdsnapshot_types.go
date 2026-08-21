@@ -103,6 +103,8 @@ const SnapshotReady = "Ready"
 // EtcdSnapshotSpec defines a one-shot etcd snapshot of a cluster to a
 // destination. Snapshots are immutable: change the destination by creating a
 // new EtcdSnapshot.
+//
+// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="spec is immutable; create a new EtcdSnapshot instead"
 type EtcdSnapshotSpec struct {
 	// ClusterRef names the EtcdCluster (same namespace) to snapshot.
 	ClusterRef corev1.LocalObjectReference `json:"clusterRef"`
