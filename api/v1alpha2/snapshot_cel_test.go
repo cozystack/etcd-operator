@@ -91,6 +91,82 @@ func TestCEL_SnapshotLocationExactlyOne(t *testing.T) {
 	})
 }
 
+func TestCEL_EtcdSnapshotSpecImmutable(t *testing.T) {
+	skipIfNoEnvtest(t)
+	ctx := context.Background()
+
+	newSnapshot := func(name string) *lll.EtcdSnapshot {
+		return &lll.EtcdSnapshot{
+			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default"},
+			Spec: lll.EtcdSnapshotSpec{
+				ClusterRef:  corev1.LocalObjectReference{Name: "c1"},
+				Destination: s3Source(),
+			},
+		}
+	}
+
+	for _, tc := range []struct {
+		name   string
+		mutate func(*lll.EtcdSnapshot)
+	}{
+		{
+			name: "cluster-ref",
+			mutate: func(snapshot *lll.EtcdSnapshot) {
+				snapshot.Spec.ClusterRef.Name = "c2"
+			},
+		},
+		{
+			name: "destination",
+			mutate: func(snapshot *lll.EtcdSnapshot) {
+				snapshot.Spec.Destination.S3.Key = "other/snapshot.db"
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			snapshot := newSnapshot("immutable-" + tc.name)
+			if err := k8s.Create(ctx, snapshot); err != nil {
+				t.Fatalf("Create: %v", err)
+			}
+			t.Cleanup(func() { _ = k8s.Delete(ctx, snapshot) })
+
+			live := &lll.EtcdSnapshot{}
+			if err := k8s.Get(ctx, ctrlclient.ObjectKeyFromObject(snapshot), live); err != nil {
+				t.Fatalf("Get: %v", err)
+			}
+			tc.mutate(live)
+			err := k8s.Update(ctx, live)
+			if err == nil {
+				t.Fatal("apiserver accepted an EtcdSnapshot spec update; expected rejection")
+			}
+			if !strings.Contains(err.Error(), "spec is immutable") {
+				t.Fatalf("error did not mention spec immutability: %v", err)
+			}
+		})
+	}
+
+	t.Run("metadata and status remain mutable", func(t *testing.T) {
+		snapshot := newSnapshot("immutable-non-spec-updates")
+		if err := k8s.Create(ctx, snapshot); err != nil {
+			t.Fatalf("Create: %v", err)
+		}
+		t.Cleanup(func() { _ = k8s.Delete(ctx, snapshot) })
+
+		live := &lll.EtcdSnapshot{}
+		if err := k8s.Get(ctx, ctrlclient.ObjectKeyFromObject(snapshot), live); err != nil {
+			t.Fatalf("Get: %v", err)
+		}
+		live.Labels = map[string]string{"example.com/owner": "test"}
+		if err := k8s.Update(ctx, live); err != nil {
+			t.Fatalf("metadata update rejected unexpectedly: %v", err)
+		}
+
+		live.Status.Phase = lll.EtcdSnapshotStatusPhasePending
+		if err := k8s.Status().Update(ctx, live); err != nil {
+			t.Fatalf("status update rejected unexpectedly: %v", err)
+		}
+	})
+}
+
 // A restore S3 source addresses one exact object; an empty key must be
 // rejected by the apiserver rather than failing opaquely in the seed.
 func TestCEL_RestoreS3KeyRequired(t *testing.T) {
