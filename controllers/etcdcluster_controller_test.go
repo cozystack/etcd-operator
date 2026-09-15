@@ -590,6 +590,101 @@ func TestTryDiscoverCluster_AuthCredentialsRejected(t *testing.T) {
 	}
 }
 
+// TestReconcile_UnreachableEtcdDoesNotFreezeStatus pins the fix for #367:
+// on a converged cluster (ClusterID latched, current==desired) whose etcd
+// has gone unreachable, the steady-state promote attempt returns a transient
+// requeue. That requeue must be threaded through updateStatus rather than
+// returned early — otherwise the cluster's Available/Degraded conditions
+// freeze at their last-healthy value while every member reports Ready=False,
+// and a fully down cluster keeps advertising QuorumHealthy.
+func TestReconcile_UnreachableEtcdDoesNotFreezeStatus(t *testing.T) {
+	ctx := context.Background()
+	cluster := &lll.EtcdCluster{
+		ObjectMeta: metav1.ObjectMeta{Name: "test", Namespace: "ns"},
+		Spec: lll.EtcdClusterSpec{
+			Replicas: ptrInt32(3),
+			Version:  "3.5.17",
+			Storage:  lll.StorageSpec{Size: quickQty(t, "1Gi")},
+		},
+		Status: lll.EtcdClusterStatus{
+			ClusterToken: "test",
+			ClusterID:    "deadbeef",
+			Observed: &lll.ObservedClusterSpec{
+				Replicas: 3,
+				Version:  "3.5.17",
+				Storage:  lll.StorageSpec{Size: quickQty(t, "1Gi")},
+			},
+			ProgressDeadline: &metav1.Time{Time: metav1.Now().Add(60 * 60 * 1e9)},
+			// Stale last-healthy snapshot: this is what must NOT survive a
+			// reconcile once etcd is unreachable and members are Ready=False.
+			ReadyMembers: 3,
+			Conditions: []metav1.Condition{{
+				Type: lll.ClusterAvailable, Status: metav1.ConditionTrue,
+				Reason: "QuorumHealthy", Message: "All members are ready",
+				LastTransitionTime: metav1.Now(),
+			}},
+		},
+	}
+	objs := []client.Object{cluster}
+	// Three members, all Ready=False — the member controller has already
+	// observed the down etcd and flipped them, exactly as reported in #367.
+	for i := 0; i < 3; i++ {
+		objs = append(objs, &lll.EtcdMember{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      fmt.Sprintf("test-%d", i),
+				Namespace: "ns",
+				Labels:    memberLabels("test", fmt.Sprintf("test-%d", i)),
+			},
+			Spec: lll.EtcdMemberSpec{ClusterName: "test", Version: "3.5.17", Storage: lll.StorageSpec{Size: quickQty(t, "1Gi")}, InitialCluster: "x", ClusterToken: "test"},
+			Status: lll.EtcdMemberStatus{
+				PodName:  fmt.Sprintf("test-%d", i),
+				MemberID: "abc",
+				Conditions: []metav1.Condition{{
+					Type: lll.MemberReady, Status: metav1.ConditionFalse, Reason: "PodNotReady",
+					LastTransitionTime: metav1.Now(),
+				}},
+			},
+		})
+	}
+	c, _ := newTestClient(t, objs...)
+	// Dialable client whose MemberList errors: this is the etcd-unreachable
+	// shape (a lazy clientv3 dial succeeds; the RPC is where it fails).
+	fe := newFakeEtcd(0xdeadbeef)
+	fe.listErr = errors.New("context deadline exceeded")
+	r := &EtcdClusterReconciler{
+		Client:            c,
+		Scheme:            testScheme(t),
+		EtcdClientFactory: factoryReturning(fe),
+	}
+
+	res, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: "test", Namespace: "ns"}})
+	if err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+
+	mustGet(t, c, "test", "ns", cluster)
+	var available *metav1.Condition
+	for i := range cluster.Status.Conditions {
+		if cluster.Status.Conditions[i].Type == lll.ClusterAvailable {
+			available = &cluster.Status.Conditions[i]
+		}
+	}
+	if available == nil {
+		t.Fatalf("no Available condition after reconcile")
+	}
+	if available.Status != metav1.ConditionFalse {
+		t.Fatalf("Available = %v/%q, want False (status must not freeze at QuorumHealthy)", available.Status, available.Reason)
+	}
+	if cluster.Status.ReadyMembers != 0 {
+		t.Fatalf("ReadyMembers = %d, want 0 (recomputed from member conditions)", cluster.Status.ReadyMembers)
+	}
+	// The promote attempt's 10s transient requeue must survive: it is sooner
+	// than updateStatus's 30s cadence, so it wins.
+	if res.RequeueAfter != 10*time.Second {
+		t.Fatalf("RequeueAfter = %v, want 10s (promote requeue threaded through updateStatus)", res.RequeueAfter)
+	}
+}
+
 // TestUpdateStatus_SurfacesBrokenCount covers reviewer issue #6: the isBroken
 // stub must have a tested call site so the predicate is actually exercised.
 // Today it always returns false, so the count must always be 0 — this test
@@ -1185,7 +1280,7 @@ func TestUpdateStatus_PausedClusterReportsPausedCondition(t *testing.T) {
 	c, _ := newTestClient(t, cluster, &dormant)
 	r := &EtcdClusterReconciler{Client: c, Scheme: testScheme(t), EtcdClientFactory: factoryReturning(newFakeEtcd(0xdead))}
 
-	if _, err := r.updateStatus(ctx, cluster, []lll.EtcdMember{dormant}); err != nil {
+	if _, err := r.updateStatus(ctx, cluster, []lll.EtcdMember{dormant}, nil); err != nil {
 		t.Fatalf("updateStatus: %v", err)
 	}
 	mustGet(t, c, "test", "ns", cluster)
@@ -1241,7 +1336,7 @@ func TestUpdateStatus_PausedFreshZeroMessageDifferentiates(t *testing.T) {
 	c, _ := newTestClient(t, cluster)
 	r := &EtcdClusterReconciler{Client: c, Scheme: testScheme(t), EtcdClientFactory: factoryReturning(newFakeEtcd(0xdead))}
 
-	if _, err := r.updateStatus(ctx, cluster, nil); err != nil {
+	if _, err := r.updateStatus(ctx, cluster, nil, nil); err != nil {
 		t.Fatalf("updateStatus: %v", err)
 	}
 	mustGet(t, c, "test", "ns", cluster)
@@ -1301,7 +1396,7 @@ func TestUpdateStatus_PausedMessageHonestForMemoryMember(t *testing.T) {
 	c, _ := newTestClient(t, cluster, dormant)
 	r := &EtcdClusterReconciler{Client: c, Scheme: testScheme(t), EtcdClientFactory: factoryReturning(newFakeEtcd(0xdead))}
 
-	if _, err := r.updateStatus(ctx, cluster, []lll.EtcdMember{*dormant}); err != nil {
+	if _, err := r.updateStatus(ctx, cluster, []lll.EtcdMember{*dormant}, nil); err != nil {
 		t.Fatalf("updateStatus: %v", err)
 	}
 	got := mustGet(t, c, "c", "ns", &lll.EtcdCluster{})
@@ -3154,7 +3249,7 @@ func TestUpdateStatus_SetsScaleSelector(t *testing.T) {
 	c, _ := newTestClient(t, cluster)
 	r := &EtcdClusterReconciler{Client: c, Scheme: testScheme(t), EtcdClientFactory: factoryReturning(newFakeEtcd(0xabc))}
 
-	if _, err := r.updateStatus(ctx, cluster, nil); err != nil {
+	if _, err := r.updateStatus(ctx, cluster, nil, nil); err != nil {
 		t.Fatalf("updateStatus: %v", err)
 	}
 

@@ -241,7 +241,7 @@ func (r *EtcdClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		//    to discovery to latch ClusterID once etcd answers.
 		if desired == 0 {
 			log.Info("cluster declared paused from the start; not bootstrapping")
-			return r.updateStatus(ctx, cluster, active)
+			return r.updateStatus(ctx, cluster, active, nil)
 		}
 		if current == 0 || hasPendingBootstrap(running) {
 			log.Info("bootstrapping single-node cluster")
@@ -321,6 +321,15 @@ func (r *EtcdClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	// so scaleUp won't run again on its own). We need a promote attempt
 	// here too. Cheap: list etcd once and try to promote any learner;
 	// no-op if none.
+	//
+	// A transient requeue from either the promote or the auth attempt
+	// (etcd unreachable, learner not yet promotable, auth just latched)
+	// is threaded into updateStatus via `pending` rather than returned
+	// here. Returning early would skip updateStatus, freezing the
+	// cluster's Available/Degraded conditions at their last-healthy value
+	// while every EtcdMember has already flipped Ready=False — a down
+	// cluster would keep reporting QuorumHealthy indefinitely.
+	var pending *ctrl.Result
 	if cluster.Status.ClusterID != "" && len(running) > 0 {
 		endpoints := memberEndpoints(clusterClientScheme(cluster), running, cluster.Namespace)
 		tlsCfg, tlsErr := buildOperatorTLSConfig(ctx, r.Client, cluster)
@@ -345,9 +354,7 @@ func (r *EtcdClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 				if perr != nil {
 					return ctrl.Result{}, perr
 				}
-				if res != nil {
-					return *res, nil
-				}
+				pending = res
 			}
 		}
 		// Fall through to updateStatus — the next reconcile will retry
@@ -364,7 +371,7 @@ func (r *EtcdClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	if res, err := r.reconcileAuth(ctx, cluster, running); err != nil {
 		return ctrl.Result{}, err
 	} else if res != nil {
-		return *res, nil
+		pending = res
 	}
 
 	// ── Steady state ───────────────────────────────────────────────────
@@ -376,7 +383,7 @@ func (r *EtcdClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	// dormant member with a real PVC exists. updateStatus re-derives
 	// `running` internally for its accounting, so passing `active`
 	// here is the correct shape.
-	return r.updateStatus(ctx, cluster, active)
+	return r.updateStatus(ctx, cluster, active, pending)
 }
 
 // ── Bootstrap ────────────────────────────────────────────────────────────
@@ -1331,10 +1338,18 @@ func hasPendingBootstrap(members []lll.EtcdMember) bool {
 // including any dormant member. It extracts the running subset for the
 // per-condition accounting and uses the dormant member separately for
 // the Paused message's PVC name.
+// updateStatus recomputes the cluster's cached status fields and conditions
+// from the current EtcdMember set and writes them. It is the single exit
+// point of a converged reconcile, so callers with a transient requeue to
+// honour (promote/auth retries) pass it as `pending` instead of returning
+// early: the status write still happens, and the returned Result carries
+// whichever requeue fires sooner — `pending` or updateStatus's own steady-
+// state cadence. `pending` is nil when there is nothing to thread through.
 func (r *EtcdClusterReconciler) updateStatus(
 	ctx context.Context,
 	cluster *lll.EtcdCluster,
 	members []lll.EtcdMember,
+	pending *ctrl.Result,
 ) (ctrl.Result, error) {
 	desired := cluster.Status.Observed.Replicas
 	running := filterRunningMembers(members)
@@ -1489,7 +1504,28 @@ func (r *EtcdClusterReconciler) updateStatus(
 		}
 	}
 
-	return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+	return soonerRequeue(ctrl.Result{RequeueAfter: 30 * time.Second}, pending), nil
+}
+
+// soonerRequeue returns whichever of the two results asks the controller to
+// come back sooner. `base` is updateStatus's own steady-state cadence and
+// always requeues; `pending` is an optional transient retry (nil when none).
+// A Requeue=true (requeue-now) beats any RequeueAfter delay; between two
+// delays the shorter wins.
+func soonerRequeue(base ctrl.Result, pending *ctrl.Result) ctrl.Result {
+	if pending == nil {
+		return base
+	}
+	if pending.Requeue && !base.Requeue {
+		return *pending
+	}
+	if !pending.Requeue && base.Requeue {
+		return base
+	}
+	if pending.RequeueAfter > 0 && pending.RequeueAfter < base.RequeueAfter {
+		return *pending
+	}
+	return base
 }
 
 // pdbMinAvailable returns the eviction floor: quorum (n/2+1) of
