@@ -161,6 +161,23 @@ func (r *EtcdMemberReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		}
 	}
 
+	// A Pod that reached a terminal phase (Succeeded/Failed) without a
+	// deletionTimestamp will not come back on its own: the kubelet does not
+	// restart containers in a terminal Pod, and the operator manages bare
+	// Pods, not a StatefulSet. Graceful node shutdown is the trap — the
+	// kubelet SIGTERMs etcd, it exits 0, the Pod goes Succeeded, and the
+	// member stays down until the Pod is deleted. Delete it so the next
+	// reconcile recreates it: a PVC-backed member resumes from its data dir
+	// with the same member ID; a memory-backed member falls into the pod-loss
+	// path above once the Pod is gone. Not quorum-gated — a whole-cluster
+	// reboot lands every member here at once and all must recreate.
+	if deleted, err := r.deleteTerminalPod(ctx, member); err != nil {
+		log.Error(err, "failed to delete terminal-phase pod")
+		return ctrl.Result{}, err
+	} else if deleted {
+		return ctrl.Result{RequeueAfter: 2 * time.Second}, nil
+	}
+
 	if err := r.ensurePVC(ctx, member); err != nil {
 		log.Error(err, "failed to ensure PVC")
 		return ctrl.Result{}, err
@@ -188,6 +205,35 @@ func (r *EtcdMemberReconciler) memoryMemberPodLost(ctx context.Context, member *
 		return false, err
 	}
 	return string(pod.UID) != member.Status.PodUID, nil
+}
+
+// podInTerminalPhase reports whether the Pod has run to a terminal phase
+// (Succeeded or Failed) and so will never be restarted by the kubelet.
+func podInTerminalPhase(pod *corev1.Pod) bool {
+	return pod.Status.Phase == corev1.PodSucceeded || pod.Status.Phase == corev1.PodFailed
+}
+
+// deleteTerminalPod deletes the member's Pod when it has reached a terminal
+// phase without a deletionTimestamp, reporting whether it issued the delete.
+// A Pod already terminating is left to finish (a manual restart, drain, or
+// eviction is on its way to a clean reschedule). Only a Pod this member owns
+// is touched.
+func (r *EtcdMemberReconciler) deleteTerminalPod(ctx context.Context, member *lll.EtcdMember) (bool, error) {
+	pod := &corev1.Pod{}
+	err := r.Get(ctx, types.NamespacedName{Namespace: member.Namespace, Name: member.Name}, pod)
+	if errors.IsNotFound(err) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if !podOwnedBy(pod, member) || pod.DeletionTimestamp != nil || !podInTerminalPhase(pod) {
+		return false, nil
+	}
+	if err := r.Delete(ctx, pod); err != nil && !errors.IsNotFound(err) {
+		return false, err
+	}
+	return true, nil
 }
 
 // ── Deletion ─────────────────────────────────────────────────────────────
