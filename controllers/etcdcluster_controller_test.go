@@ -685,6 +685,29 @@ func TestReconcile_UnreachableEtcdDoesNotFreezeStatus(t *testing.T) {
 	}
 }
 
+func TestSoonerRequeue(t *testing.T) {
+	base := ctrl.Result{RequeueAfter: 30 * time.Second}
+	cases := []struct {
+		name    string
+		base    ctrl.Result
+		pending *ctrl.Result
+		want    ctrl.Result
+	}{
+		{"nil pending keeps base", base, nil, base},
+		{"shorter delay wins", base, &ctrl.Result{RequeueAfter: 10 * time.Second}, ctrl.Result{RequeueAfter: 10 * time.Second}},
+		{"longer delay loses to base", base, &ctrl.Result{RequeueAfter: 40 * time.Second}, base},
+		{"requeue-now beats a delay", base, &ctrl.Result{Requeue: true}, ctrl.Result{Requeue: true}},
+		{"base requeue-now beats pending delay", ctrl.Result{Requeue: true}, &ctrl.Result{RequeueAfter: 5 * time.Second}, ctrl.Result{Requeue: true}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := soonerRequeue(tc.base, tc.pending); got != tc.want {
+				t.Fatalf("soonerRequeue = %+v, want %+v", got, tc.want)
+			}
+		})
+	}
+}
+
 // TestUpdateStatus_SurfacesBrokenCount covers reviewer issue #6: the isBroken
 // stub must have a tested call site so the predicate is actually exercised.
 // Today it always returns false, so the count must always be 0 — this test

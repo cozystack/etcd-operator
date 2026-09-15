@@ -368,10 +368,19 @@ func (r *EtcdClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	// formed). Gating on convergence keeps the auth flip from racing in-
 	// flight scale-up dials. No-op (and skipped) once status.authEnabled
 	// has latched.
-	if res, err := r.reconcileAuth(ctx, cluster, running); err != nil {
-		return ctrl.Result{}, err
-	} else if res != nil {
-		pending = res
+	//
+	// Only attempt auth when the promote step above produced no pending
+	// requeue: a pending promote means a learner is still unpromoted or
+	// etcd is unreachable, and the pre-fix flow returned before auth in
+	// exactly that case. Preserving that promote-before-auth ordering keeps
+	// the auth-enable flip from racing an in-flight promotion while still
+	// falling through to updateStatus with the promote requeue.
+	if pending == nil {
+		if res, err := r.reconcileAuth(ctx, cluster, running); err != nil {
+			return ctrl.Result{}, err
+		} else if res != nil {
+			pending = res
+		}
 	}
 
 	// ── Steady state ───────────────────────────────────────────────────
@@ -1336,15 +1345,13 @@ func hasPendingBootstrap(members []lll.EtcdMember) bool {
 
 // updateStatus is called with the full active member list (non-deleted),
 // including any dormant member. It extracts the running subset for the
-// per-condition accounting and uses the dormant member separately for
-// the Paused message's PVC name.
-// updateStatus recomputes the cluster's cached status fields and conditions
-// from the current EtcdMember set and writes them. It is the single exit
-// point of a converged reconcile, so callers with a transient requeue to
-// honour (promote/auth retries) pass it as `pending` instead of returning
-// early: the status write still happens, and the returned Result carries
-// whichever requeue fires sooner — `pending` or updateStatus's own steady-
-// state cadence. `pending` is nil when there is nothing to thread through.
+// per-condition accounting and uses the dormant member separately for the
+// Paused message's PVC name. It is the single exit point of a converged
+// reconcile, so callers holding a transient requeue (promote/auth retries)
+// pass it as `pending` rather than returning early: the status write still
+// happens, and the returned Result carries whichever requeue fires sooner —
+// `pending` or updateStatus's own steady-state cadence. `pending` is nil
+// when there is nothing to thread through.
 func (r *EtcdClusterReconciler) updateStatus(
 	ctx context.Context,
 	cluster *lll.EtcdCluster,
