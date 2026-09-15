@@ -322,13 +322,10 @@ func (r *EtcdClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	// here too. Cheap: list etcd once and try to promote any learner;
 	// no-op if none.
 	//
-	// A transient requeue from either the promote or the auth attempt
-	// (etcd unreachable, learner not yet promotable, auth just latched)
-	// is threaded into updateStatus via `pending` rather than returned
-	// here. Returning early would skip updateStatus, freezing the
-	// cluster's Available/Degraded conditions at their last-healthy value
-	// while every EtcdMember has already flipped Ready=False — a down
-	// cluster would keep reporting QuorumHealthy indefinitely.
+	// A transient requeue from promote/auth is threaded through
+	// updateStatus via `pending`, not returned here: an early return skips
+	// updateStatus, freezing the cluster conditions at their last-healthy
+	// value while the members already read Ready=False.
 	var pending *ctrl.Result
 	if cluster.Status.ClusterID != "" && len(running) > 0 {
 		endpoints := memberEndpoints(clusterClientScheme(cluster), running, cluster.Namespace)
@@ -369,12 +366,9 @@ func (r *EtcdClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	// flight scale-up dials. No-op (and skipped) once status.authEnabled
 	// has latched.
 	//
-	// Only attempt auth when the promote step above produced no pending
-	// requeue: a pending promote means a learner is still unpromoted or
-	// etcd is unreachable, and the pre-fix flow returned before auth in
-	// exactly that case. Preserving that promote-before-auth ordering keeps
-	// the auth-enable flip from racing an in-flight promotion while still
-	// falling through to updateStatus with the promote requeue.
+	// Skip when a promote requeue is already pending: auth-enable must not
+	// race an in-flight promotion (a pending promote means a learner is
+	// unpromoted or etcd is unreachable).
 	if pending == nil {
 		if res, err := r.reconcileAuth(ctx, cluster, running); err != nil {
 			return ctrl.Result{}, err
@@ -1343,15 +1337,12 @@ func hasPendingBootstrap(members []lll.EtcdMember) bool {
 
 // ── Status ───────────────────────────────────────────────────────────────
 
-// updateStatus is called with the full active member list (non-deleted),
-// including any dormant member. It extracts the running subset for the
-// per-condition accounting and uses the dormant member separately for the
-// Paused message's PVC name. It is the single exit point of a converged
-// reconcile, so callers holding a transient requeue (promote/auth retries)
-// pass it as `pending` rather than returning early: the status write still
-// happens, and the returned Result carries whichever requeue fires sooner —
-// `pending` or updateStatus's own steady-state cadence. `pending` is nil
-// when there is nothing to thread through.
+// updateStatus takes the full active member list including any dormant member
+// (running is extracted for accounting; the dormant one names the Paused-
+// message PVC) and writes the recomputed status. A caller holding a transient
+// promote/auth requeue passes it as `pending` (nil otherwise) instead of
+// returning early, so the status write always happens; the returned Result
+// carries whichever of `pending` and the steady-state cadence fires sooner.
 func (r *EtcdClusterReconciler) updateStatus(
 	ctx context.Context,
 	cluster *lll.EtcdCluster,
@@ -1514,11 +1505,9 @@ func (r *EtcdClusterReconciler) updateStatus(
 	return soonerRequeue(ctrl.Result{RequeueAfter: 30 * time.Second}, pending), nil
 }
 
-// soonerRequeue returns whichever of the two results asks the controller to
-// come back sooner. `base` is updateStatus's own steady-state cadence and
-// always requeues; `pending` is an optional transient retry (nil when none).
-// A Requeue=true (requeue-now) beats any RequeueAfter delay; between two
-// delays the shorter wins.
+// soonerRequeue returns whichever result requeues sooner: Requeue=true
+// (requeue-now) beats any RequeueAfter delay, and between two delays the
+// shorter wins. `pending` is nil when there is no transient retry to merge.
 func soonerRequeue(base ctrl.Result, pending *ctrl.Result) ctrl.Result {
 	if pending == nil {
 		return base

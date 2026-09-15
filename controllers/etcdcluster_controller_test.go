@@ -590,13 +590,10 @@ func TestTryDiscoverCluster_AuthCredentialsRejected(t *testing.T) {
 	}
 }
 
-// TestReconcile_UnreachableEtcdDoesNotFreezeStatus pins the fix for #367:
-// on a converged cluster (ClusterID latched, current==desired) whose etcd
-// has gone unreachable, the steady-state promote attempt returns a transient
-// requeue. That requeue must be threaded through updateStatus rather than
-// returned early — otherwise the cluster's Available/Degraded conditions
-// freeze at their last-healthy value while every member reports Ready=False,
-// and a fully down cluster keeps advertising QuorumHealthy.
+// On a converged cluster whose etcd is unreachable, the steady-state promote
+// requeue must flow through updateStatus rather than return early: otherwise
+// the cluster conditions freeze at their last-healthy value while the members
+// already read Ready=False.
 func TestReconcile_UnreachableEtcdDoesNotFreezeStatus(t *testing.T) {
 	ctx := context.Background()
 	cluster := &lll.EtcdCluster{
@@ -615,8 +612,7 @@ func TestReconcile_UnreachableEtcdDoesNotFreezeStatus(t *testing.T) {
 				Storage:  lll.StorageSpec{Size: quickQty(t, "1Gi")},
 			},
 			ProgressDeadline: &metav1.Time{Time: metav1.Now().Add(60 * 60 * 1e9)},
-			// Stale last-healthy snapshot: this is what must NOT survive a
-			// reconcile once etcd is unreachable and members are Ready=False.
+			// Stale last-healthy snapshot: must NOT survive the reconcile.
 			ReadyMembers: 3,
 			Conditions: []metav1.Condition{{
 				Type: lll.ClusterAvailable, Status: metav1.ConditionTrue,
@@ -626,8 +622,7 @@ func TestReconcile_UnreachableEtcdDoesNotFreezeStatus(t *testing.T) {
 		},
 	}
 	objs := []client.Object{cluster}
-	// Three members, all Ready=False — the member controller has already
-	// observed the down etcd and flipped them, exactly as reported in #367.
+	// Members already flipped Ready=False by their own controller.
 	for i := 0; i < 3; i++ {
 		objs = append(objs, &lll.EtcdMember{
 			ObjectMeta: metav1.ObjectMeta{
@@ -647,8 +642,8 @@ func TestReconcile_UnreachableEtcdDoesNotFreezeStatus(t *testing.T) {
 		})
 	}
 	c, _ := newTestClient(t, objs...)
-	// Dialable client whose MemberList errors: this is the etcd-unreachable
-	// shape (a lazy clientv3 dial succeeds; the RPC is where it fails).
+	// Dialable client whose MemberList errors — the etcd-unreachable shape
+	// (a lazy clientv3 dial succeeds; the RPC is where it fails).
 	fe := newFakeEtcd(0xdeadbeef)
 	fe.listErr = errors.New("context deadline exceeded")
 	r := &EtcdClusterReconciler{
@@ -678,8 +673,7 @@ func TestReconcile_UnreachableEtcdDoesNotFreezeStatus(t *testing.T) {
 	if cluster.Status.ReadyMembers != 0 {
 		t.Fatalf("ReadyMembers = %d, want 0 (recomputed from member conditions)", cluster.Status.ReadyMembers)
 	}
-	// The promote attempt's 10s transient requeue must survive: it is sooner
-	// than updateStatus's 30s cadence, so it wins.
+	// The promote's 10s requeue survives (sooner than the 30s cadence).
 	if res.RequeueAfter != 10*time.Second {
 		t.Fatalf("RequeueAfter = %v, want 10s (promote requeue threaded through updateStatus)", res.RequeueAfter)
 	}
