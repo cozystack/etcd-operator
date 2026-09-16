@@ -27,6 +27,7 @@ import (
 	policyv1 "k8s.io/api/policy/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -611,7 +612,7 @@ func TestReconcile_UnreachableEtcdDoesNotFreezeStatus(t *testing.T) {
 				Version:  "3.5.17",
 				Storage:  lll.StorageSpec{Size: quickQty(t, "1Gi")},
 			},
-			ProgressDeadline: &metav1.Time{Time: metav1.Now().Add(60 * 60 * 1e9)},
+			ProgressDeadline: &metav1.Time{Time: metav1.Now().Add(time.Hour)},
 			// Stale last-healthy snapshot: must NOT survive the reconcile.
 			ReadyMembers: 3,
 			Conditions: []metav1.Condition{{
@@ -621,26 +622,8 @@ func TestReconcile_UnreachableEtcdDoesNotFreezeStatus(t *testing.T) {
 			}},
 		},
 	}
-	objs := []client.Object{cluster}
 	// Members already flipped Ready=False by their own controller.
-	for i := 0; i < 3; i++ {
-		objs = append(objs, &lll.EtcdMember{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      fmt.Sprintf("test-%d", i),
-				Namespace: "ns",
-				Labels:    memberLabels("test", fmt.Sprintf("test-%d", i)),
-			},
-			Spec: lll.EtcdMemberSpec{ClusterName: "test", Version: "3.5.17", Storage: lll.StorageSpec{Size: quickQty(t, "1Gi")}, InitialCluster: "x", ClusterToken: "test"},
-			Status: lll.EtcdMemberStatus{
-				PodName:  fmt.Sprintf("test-%d", i),
-				MemberID: "abc",
-				Conditions: []metav1.Condition{{
-					Type: lll.MemberReady, Status: metav1.ConditionFalse, Reason: "PodNotReady",
-					LastTransitionTime: metav1.Now(),
-				}},
-			},
-		})
-	}
+	objs := append([]client.Object{cluster}, membersAsObjects(scaleUpMembers(t, "test", "ns", 0, 3))...)
 	c, _ := newTestClient(t, objs...)
 	// Dialable client whose MemberList errors — the etcd-unreachable shape
 	// (a lazy clientv3 dial succeeds; the RPC is where it fails).
@@ -658,12 +641,7 @@ func TestReconcile_UnreachableEtcdDoesNotFreezeStatus(t *testing.T) {
 	}
 
 	mustGet(t, c, "test", "ns", cluster)
-	var available *metav1.Condition
-	for i := range cluster.Status.Conditions {
-		if cluster.Status.Conditions[i].Type == lll.ClusterAvailable {
-			available = &cluster.Status.Conditions[i]
-		}
-	}
+	available := meta.FindStatusCondition(cluster.Status.Conditions, lll.ClusterAvailable)
 	if available == nil {
 		t.Fatalf("no Available condition after reconcile")
 	}
@@ -676,6 +654,170 @@ func TestReconcile_UnreachableEtcdDoesNotFreezeStatus(t *testing.T) {
 	// The promote's 10s requeue survives (sooner than the 30s cadence).
 	if res.RequeueAfter != 10*time.Second {
 		t.Fatalf("RequeueAfter = %v, want 10s (promote requeue threaded through updateStatus)", res.RequeueAfter)
+	}
+}
+
+// scaleUpMembers builds nReady Ready=True members followed by nNotReady
+// Ready=False members for cluster `name` in `ns` — the minimal shared fixture
+// for the status tests, standing in for a cluster caught mid-flight (Ready
+// voters plus joining members the member controller has not marked Ready).
+func scaleUpMembers(t *testing.T, name, ns string, nReady, nNotReady int) []lll.EtcdMember {
+	t.Helper()
+	build := func(i int, ready bool) lll.EtcdMember {
+		mn := fmt.Sprintf("%s-%d", name, i)
+		status, reason := metav1.ConditionFalse, "PodNotReady"
+		if ready {
+			status, reason = metav1.ConditionTrue, "PodReady"
+		}
+		return lll.EtcdMember{
+			ObjectMeta: metav1.ObjectMeta{Name: mn, Namespace: ns, Labels: memberLabels(name, mn)},
+			Spec:       lll.EtcdMemberSpec{ClusterName: name, Version: "3.5.17", Storage: lll.StorageSpec{Size: quickQty(t, "1Gi")}, InitialCluster: "x", ClusterToken: name},
+			Status: lll.EtcdMemberStatus{
+				PodName:  mn,
+				MemberID: "abc",
+				IsVoter:  ready,
+				Conditions: []metav1.Condition{{
+					Type: lll.MemberReady, Status: status, Reason: reason, LastTransitionTime: metav1.Now(),
+				}},
+			},
+		}
+	}
+	out := make([]lll.EtcdMember, 0, nReady+nNotReady)
+	for i := 0; i < nReady; i++ {
+		out = append(out, build(i, true))
+	}
+	for i := 0; i < nNotReady; i++ {
+		out = append(out, build(nReady+i, false))
+	}
+	return out
+}
+
+// membersAsObjects adapts a member slice for newTestClient's variadic seed.
+func membersAsObjects(members []lll.EtcdMember) []client.Object {
+	out := make([]client.Object, 0, len(members))
+	for i := range members {
+		out = append(out, &members[i])
+	}
+	return out
+}
+
+// TestUpdateStatus_NoDegradedFlapDuringScaleUp covers review item 1: on the
+// converged pass that promotes the last learner, a not-ready promote retry
+// (pending) reaches updateStatus with ready<desired. It must not rewrite the
+// Available/Degraded pair — the live voters hold quorum and the cluster is
+// Progressing, so alerting on Degraded here would flap on every scale-up. The
+// earlier learners of the same scale-up never reach updateStatus (the
+// allMembersReady early-return suppresses them), so this window must report
+// the same healthy pair they do.
+func TestUpdateStatus_NoDegradedFlapDuringScaleUp(t *testing.T) {
+	ctx := context.Background()
+	cluster := &lll.EtcdCluster{
+		ObjectMeta: metav1.ObjectMeta{Name: "test", Namespace: "ns"},
+		Spec: lll.EtcdClusterSpec{
+			Replicas: ptrInt32(3),
+			Version:  "3.5.17",
+			Storage:  lll.StorageSpec{Size: quickQty(t, "1Gi")},
+		},
+		Status: lll.EtcdClusterStatus{
+			ClusterToken: "test",
+			ClusterID:    "deadbeef",
+			Observed: &lll.ObservedClusterSpec{
+				Replicas: 3, Version: "3.5.17", Storage: lll.StorageSpec{Size: quickQty(t, "1Gi")},
+			},
+			ProgressDeadline: &metav1.Time{Time: metav1.Now().Add(time.Hour)},
+			Conditions: []metav1.Condition{
+				{Type: lll.ClusterProgressing, Status: metav1.ConditionTrue, Reason: "SpecChanged", LastTransitionTime: metav1.Now()},
+				{Type: lll.ClusterAvailable, Status: metav1.ConditionTrue, Reason: "QuorumHealthy", Message: "All members are ready", LastTransitionTime: metav1.Now()},
+				{Type: lll.ClusterDegraded, Status: metav1.ConditionFalse, Reason: "QuorumHealthy", LastTransitionTime: metav1.Now()},
+			},
+		},
+	}
+	// Two voters Ready, the joining learner not Ready yet: ready=2, desired=3.
+	members := scaleUpMembers(t, "test", "ns", 2, 1)
+	c, _ := newTestClient(t, append([]client.Object{cluster}, membersAsObjects(members)...)...)
+	r := &EtcdClusterReconciler{Client: c, Scheme: testScheme(t), EtcdClientFactory: factoryReturning(newFakeEtcd(0xdead))}
+
+	// The last learner is not promotable yet: promote returns a 5s retry.
+	if _, err := r.updateStatus(ctx, cluster, members, &ctrl.Result{RequeueAfter: 5 * time.Second}); err != nil {
+		t.Fatalf("updateStatus: %v", err)
+	}
+	mustGet(t, c, "test", "ns", cluster)
+
+	deg := meta.FindStatusCondition(cluster.Status.Conditions, lll.ClusterDegraded)
+	if deg == nil || deg.Status != metav1.ConditionFalse {
+		t.Fatalf("Degraded = %+v, want False (must not flap to Degraded mid-scale-up)", deg)
+	}
+	av := meta.FindStatusCondition(cluster.Status.Conditions, lll.ClusterAvailable)
+	if av == nil || av.Status != metav1.ConditionTrue {
+		t.Fatalf("Available = %+v, want the last healthy value (unchanged mid-scale-up)", av)
+	}
+	if cluster.Status.ReadyMembers != 2 {
+		t.Fatalf("ReadyMembers = %d, want 2 (scalar still recomputed while conditions hold)", cluster.Status.ReadyMembers)
+	}
+}
+
+// TestUpdateStatus_WithholdsReconciledWhilePendingRetry covers review item 2:
+// reconciliationComplete only checks MemberReady, so a learner whose pod is
+// Ready but whose MemberPromote keeps being rejected (pending set) satisfies
+// it. Stamping Progressing=False/Reconciled and clearing ProgressDeadline
+// there would report the cluster settled while etcd still has an unpromoted
+// voter. The Reconciled write must wait until pending clears.
+func TestUpdateStatus_WithholdsReconciledWhilePendingRetry(t *testing.T) {
+	ctx := context.Background()
+	newCluster := func() *lll.EtcdCluster {
+		return &lll.EtcdCluster{
+			ObjectMeta: metav1.ObjectMeta{Name: "test", Namespace: "ns"},
+			Spec: lll.EtcdClusterSpec{
+				Replicas: ptrInt32(3),
+				Version:  "3.5.17",
+				Storage:  lll.StorageSpec{Size: quickQty(t, "1Gi")},
+			},
+			Status: lll.EtcdClusterStatus{
+				ClusterToken: "test",
+				ClusterID:    "deadbeef",
+				Observed: &lll.ObservedClusterSpec{
+					Replicas: 3, Version: "3.5.17", Storage: lll.StorageSpec{Size: quickQty(t, "1Gi")},
+				},
+				ProgressDeadline: &metav1.Time{Time: metav1.Now().Add(time.Hour)},
+				Conditions: []metav1.Condition{
+					{Type: lll.ClusterProgressing, Status: metav1.ConditionTrue, Reason: "SpecChanged", LastTransitionTime: metav1.Now()},
+				},
+			},
+		}
+	}
+	// All three pods Ready, so reconciliationComplete passes on member state.
+	members := scaleUpMembers(t, "test", "ns", 3, 0)
+
+	// Pending retry outstanding (a learner still catching up): withhold Reconciled.
+	pendingCluster := newCluster()
+	c1, _ := newTestClient(t, append([]client.Object{pendingCluster}, membersAsObjects(members)...)...)
+	r1 := &EtcdClusterReconciler{Client: c1, Scheme: testScheme(t), EtcdClientFactory: factoryReturning(newFakeEtcd(0xdead))}
+	if _, err := r1.updateStatus(ctx, pendingCluster, members, &ctrl.Result{RequeueAfter: 10 * time.Second}); err != nil {
+		t.Fatalf("updateStatus(pending): %v", err)
+	}
+	mustGet(t, c1, "test", "ns", pendingCluster)
+	prog := meta.FindStatusCondition(pendingCluster.Status.Conditions, lll.ClusterProgressing)
+	if prog == nil || prog.Reason == "Reconciled" {
+		t.Fatalf("Progressing = %+v, want not Reconciled while a retry is pending", prog)
+	}
+	if pendingCluster.Status.ProgressDeadline == nil {
+		t.Fatalf("ProgressDeadline cleared while a retry is pending; deadline escalation would lapse")
+	}
+
+	// Same state, no pending retry: Reconciled is stamped and the deadline cleared.
+	settledCluster := newCluster()
+	c2, _ := newTestClient(t, append([]client.Object{settledCluster}, membersAsObjects(members)...)...)
+	r2 := &EtcdClusterReconciler{Client: c2, Scheme: testScheme(t), EtcdClientFactory: factoryReturning(newFakeEtcd(0xdead))}
+	if _, err := r2.updateStatus(ctx, settledCluster, members, nil); err != nil {
+		t.Fatalf("updateStatus(settled): %v", err)
+	}
+	mustGet(t, c2, "test", "ns", settledCluster)
+	prog = meta.FindStatusCondition(settledCluster.Status.Conditions, lll.ClusterProgressing)
+	if prog == nil || prog.Status != metav1.ConditionFalse || prog.Reason != "Reconciled" {
+		t.Fatalf("Progressing = %+v, want False/Reconciled once pending clears", prog)
+	}
+	if settledCluster.Status.ProgressDeadline != nil {
+		t.Fatalf("ProgressDeadline = %v, want nil once reconciled", settledCluster.Status.ProgressDeadline)
 	}
 }
 
@@ -692,6 +834,13 @@ func TestSoonerRequeue(t *testing.T) {
 		{"longer delay loses to base", base, &ctrl.Result{RequeueAfter: 40 * time.Second}, base},
 		{"requeue-now beats a delay", base, &ctrl.Result{Requeue: true}, ctrl.Result{Requeue: true}},
 		{"base requeue-now beats pending delay", ctrl.Result{Requeue: true}, &ctrl.Result{RequeueAfter: 5 * time.Second}, ctrl.Result{Requeue: true}},
+		// A zero base (no Requeue, no RequeueAfter) never fires on its own, so
+		// the pending retry must survive rather than being dropped.
+		{"zero base keeps pending delay", ctrl.Result{}, &ctrl.Result{RequeueAfter: 10 * time.Second}, ctrl.Result{RequeueAfter: 10 * time.Second}},
+		{"zero base keeps pending requeue-now", ctrl.Result{}, &ctrl.Result{Requeue: true}, ctrl.Result{Requeue: true}},
+		// controller-runtime v0.21 dispatches RequeueAfter>0 before the
+		// deprecated Requeue flag, so a 40s pending loses to the 30s base.
+		{"pending requeue-after outranks its own requeue flag", base, &ctrl.Result{Requeue: true, RequeueAfter: 40 * time.Second}, base},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

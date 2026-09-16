@@ -19,6 +19,7 @@ package controllers
 import (
 	"context"
 	"fmt"
+	"math"
 	"sort"
 	"strings"
 	"time"
@@ -366,9 +367,13 @@ func (r *EtcdClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	// flight scale-up dials. No-op (and skipped) once status.authEnabled
 	// has latched.
 	//
-	// Skip when a promote requeue is already pending: auth-enable must not
-	// race an in-flight promotion (a pending promote means a learner is
-	// unpromoted or etcd is unreachable).
+	// Skip when a promote requeue is already pending. A pending promote means
+	// the just-finished MemberList/MemberPromote either found etcd unreachable
+	// or a learner not yet caught up. reconcileAuth's clientv3 calls
+	// (AuthStatus/UserAdd/UserGrantRole/AuthEnable) run on the raw reconcile
+	// context with clientv3's default WaitForReady and no per-call deadline, so
+	// dialing again against a dead endpoint would block the worker rather than
+	// error out. Deferring auth to the pass after promote clears avoids that.
 	if pending == nil {
 		if res, err := r.reconcileAuth(ctx, cluster, running); err != nil {
 			return ctrl.Result{}, err
@@ -1341,8 +1346,11 @@ func hasPendingBootstrap(members []lll.EtcdMember) bool {
 // (running is extracted for accounting; the dormant one names the Paused-
 // message PVC) and writes the recomputed status. A caller holding a transient
 // promote/auth requeue passes it as `pending` (nil otherwise) instead of
-// returning early, so the status write always happens; the returned Result
-// carries whichever of `pending` and the steady-state cadence fires sooner.
+// returning early, so the status write always happens. `pending` is a status
+// input, not just a requeue to forward: while it is non-nil the cluster is not
+// settled, so updateStatus withholds the Progressing=False/Reconciled stamp.
+// The returned Result carries whichever of `pending` and the steady-state
+// cadence fires sooner.
 func (r *EtcdClusterReconciler) updateStatus(
 	ctx context.Context,
 	cluster *lll.EtcdCluster,
@@ -1387,7 +1395,17 @@ func (r *EtcdClusterReconciler) updateStatus(
 	// downstream operators that wait for Available=True). The Paused
 	// branch takes precedence over the health switch below and also
 	// overrides the Reconciled-Progressing override further down.
+	// While the operator is actively driving toward the target (Progressing=
+	// True and not yet reconciled — a bootstrap or scale step in flight), the
+	// ready/desired ratio counts not-yet-joined members against quorum, so the
+	// health switch below would stamp Degraded on a cluster whose live voters
+	// are all healthy. Leave Available/Degraded at their last value in that
+	// window; the steady-state pass (Progressing=False) writes the truthful
+	// health. This matches the allMembersReady early-return in Reconcile, which
+	// already suppresses the same write for the earlier learners of the same
+	// scale-up — so every mid-scale-up window reports alike.
 	paused := desired == 0
+	progressing := !paused && clusterProgressing(cluster) && !reconciliationComplete(cluster, running)
 	switch {
 	case paused:
 		// Three flavours of paused:
@@ -1424,6 +1442,8 @@ func (r *EtcdClusterReconciler) updateStatus(
 		if setClusterCondition(cluster, lll.ClusterProgressing, metav1.ConditionFalse, "Paused", "") {
 			changed = true
 		}
+	case progressing:
+		// Health left as-is; see the comment above the switch.
 	case ready == desired:
 		if setClusterCondition(cluster, lll.ClusterAvailable, metav1.ConditionTrue, "QuorumHealthy", "All members are ready") {
 			changed = true
@@ -1458,7 +1478,14 @@ func (r *EtcdClusterReconciler) updateStatus(
 			cluster.Status.ProgressDeadline = nil
 			changed = true
 		}
-	} else if reconciliationComplete(cluster, running) {
+	} else if pending == nil && reconciliationComplete(cluster, running) {
+		// A non-nil `pending` means a promote or auth-enable retry is still
+		// outstanding: a learner whose MemberPromote keeps being rejected (its
+		// pod is MemberReady, so reconciliationComplete would otherwise pass
+		// while it is still a learner), or spec.auth.enabled with reconcileAuth
+		// looping. Stamping Reconciled and clearing ProgressDeadline there
+		// would report the cluster settled and let deadline escalation lapse
+		// while etcd still has an unpromoted voter or auth was never applied.
 		if setClusterCondition(cluster, lll.ClusterProgressing, metav1.ConditionFalse, "Reconciled",
 			"actual state matches status.observed") {
 			changed = true
@@ -1505,23 +1532,34 @@ func (r *EtcdClusterReconciler) updateStatus(
 	return soonerRequeue(ctrl.Result{RequeueAfter: 30 * time.Second}, pending), nil
 }
 
-// soonerRequeue returns whichever result requeues sooner: Requeue=true
-// (requeue-now) beats any RequeueAfter delay, and between two delays the
-// shorter wins. `pending` is nil when there is no transient retry to merge.
+// soonerRequeue returns whichever of base and pending fires sooner. `pending`
+// is nil when there is no transient retry to merge. Firing order follows
+// controller-runtime v0.21: a positive RequeueAfter takes precedence (Requeue
+// is deprecated there and RequeueAfter wins when both are set), a bare
+// Requeue=true fires immediately, and a zero Result never fires on its own —
+// so soonerRequeue(ctrl.Result{}, pending) yields pending, not the dropped
+// retry that an "empty base is immediate" reading would produce.
 func soonerRequeue(base ctrl.Result, pending *ctrl.Result) ctrl.Result {
 	if pending == nil {
 		return base
 	}
-	if pending.Requeue && !base.Requeue {
-		return *pending
-	}
-	if !pending.Requeue && base.Requeue {
-		return base
-	}
-	if pending.RequeueAfter > 0 && pending.RequeueAfter < base.RequeueAfter {
+	if requeueDelay(*pending) < requeueDelay(base) {
 		return *pending
 	}
 	return base
+}
+
+// requeueDelay is the delay after which a Result triggers the next reconcile,
+// used only to order two Results. A zero Result maps to "never".
+func requeueDelay(r ctrl.Result) time.Duration {
+	switch {
+	case r.RequeueAfter > 0:
+		return r.RequeueAfter
+	case r.Requeue:
+		return 0
+	default:
+		return math.MaxInt64
+	}
 }
 
 // pdbMinAvailable returns the eviction floor: quorum (n/2+1) of
@@ -2132,6 +2170,18 @@ func reconciliationComplete(cluster *lll.EtcdCluster, members []lll.EtcdMember) 
 		}
 	}
 	return true
+}
+
+// clusterProgressing reports whether the Progressing condition is currently
+// True — the operator is actively driving toward the observed target
+// (bootstrap or a scale step in flight).
+func clusterProgressing(cluster *lll.EtcdCluster) bool {
+	for _, c := range cluster.Status.Conditions {
+		if c.Type == lll.ClusterProgressing {
+			return c.Status == metav1.ConditionTrue
+		}
+	}
+	return false
 }
 
 func setProgressDeadline(cluster *lll.EtcdCluster, now metav1.Time) {
