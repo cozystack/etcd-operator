@@ -1362,11 +1362,27 @@ func (r *EtcdClusterReconciler) updateStatus(
 	dormant := findDormantMember(members)
 
 	ready := int32(0)
+	// Voter accounting from Status.IsVoter (synced from etcd's MemberList in
+	// promotePendingLearner; sticky at its last value while etcd is
+	// unreachable). readyVoters is the live quorum count — it decides both the
+	// progressing withhold below and the PodDisruptionBudget floor.
+	voters := int32(0)
+	readyVoters := int32(0)
 	for _, m := range running {
+		memberReady := false
 		for _, c := range m.Status.Conditions {
 			if c.Type == lll.MemberReady && c.Status == metav1.ConditionTrue {
-				ready++
+				memberReady = true
 				break
+			}
+		}
+		if memberReady {
+			ready++
+		}
+		if m.Status.IsVoter {
+			voters++
+			if memberReady {
+				readyVoters++
 			}
 		}
 	}
@@ -1404,8 +1420,17 @@ func (r *EtcdClusterReconciler) updateStatus(
 	// health. This matches the allMembersReady early-return in Reconcile, which
 	// already suppresses the same write for the earlier learners of the same
 	// scale-up — so every mid-scale-up window reports alike.
+	//
+	// The withhold is floored on quorum: it holds only while the ready voters
+	// still carry the live voter set (readyVoters > voters/2). Progressing can
+	// latch indefinitely — spec.auth.enabled looping on a bad root Secret, or a
+	// learner whose MemberPromote keeps being rejected — so an unfloored
+	// withhold would freeze Available=True on a cluster that then loses every
+	// pod, reopening #367. Once quorum is gone the switch falls through and
+	// writes QuorumLost. The general joining-member denominator is #371.
 	paused := desired == 0
-	progressing := !paused && clusterProgressing(cluster) && !reconciliationComplete(cluster, running)
+	quorumHeld := readyVoters > voters/2
+	progressing := !paused && quorumHeld && clusterProgressing(cluster) && !reconciliationComplete(cluster, running)
 	switch {
 	case paused:
 		// Three flavours of paused:
@@ -1507,18 +1532,11 @@ func (r *EtcdClusterReconciler) updateStatus(
 		changed = true
 	}
 
-	// Reconcile PDB. Voter count comes from members' Status.IsVoter
-	// (written by this controller from etcd's MemberList in
-	// promotePendingLearner). On a brand-new cluster pre-bootstrap, no
-	// member has IsVoter=true yet — voterCount=0 and no PDB is emitted
-	// until the seed reaches its Status.IsVoter=true pre-stamp.
-	voterCount := int32(0)
-	for _, m := range running {
-		if m.Status.IsVoter {
-			voterCount++
-		}
-	}
-	if err := r.reconcilePDB(ctx, cluster, voterCount); err != nil {
+	// Reconcile PDB. Voter count comes from members' Status.IsVoter (counted
+	// above). On a brand-new cluster pre-bootstrap, no member has IsVoter=true
+	// yet — voters=0 and no PDB is emitted until the seed reaches its
+	// Status.IsVoter=true pre-stamp.
+	if err := r.reconcilePDB(ctx, cluster, voters); err != nil {
 		log.FromContext(ctx).Error(err, "failed to reconcile PodDisruptionBudget")
 		// Non-fatal: status update still runs; next reconcile retries.
 	}
