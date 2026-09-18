@@ -692,6 +692,31 @@ func scaleUpMembers(t *testing.T, name, ns string, nReady, nNotReady int) []lll.
 	return out
 }
 
+// downVoterMembers builds n members that are voters (IsVoter=true) but not
+// Ready — the etcd-unreachable shape, where syncIsVoter cannot refresh the
+// MemberList so IsVoter stays at its last value while pod readiness flips off.
+// scaleUpMembers cannot express this (it ties IsVoter to readiness).
+func downVoterMembers(t *testing.T, name, ns string, n int) []lll.EtcdMember {
+	t.Helper()
+	out := make([]lll.EtcdMember, 0, n)
+	for i := 0; i < n; i++ {
+		mn := fmt.Sprintf("%s-%d", name, i)
+		out = append(out, lll.EtcdMember{
+			ObjectMeta: metav1.ObjectMeta{Name: mn, Namespace: ns, Labels: memberLabels(name, mn)},
+			Spec:       lll.EtcdMemberSpec{ClusterName: name, Version: "3.5.17", Storage: lll.StorageSpec{Size: quickQty(t, "1Gi")}, InitialCluster: "x", ClusterToken: name},
+			Status: lll.EtcdMemberStatus{
+				PodName:  mn,
+				MemberID: "abc",
+				IsVoter:  true,
+				Conditions: []metav1.Condition{{
+					Type: lll.MemberReady, Status: metav1.ConditionFalse, Reason: "PodNotReady", LastTransitionTime: metav1.Now(),
+				}},
+			},
+		})
+	}
+	return out
+}
+
 // membersAsObjects adapts a member slice for newTestClient's variadic seed.
 func membersAsObjects(members []lll.EtcdMember) []client.Object {
 	out := make([]client.Object, 0, len(members))
@@ -764,48 +789,64 @@ func TestUpdateStatus_NoDegradedFlapDuringScaleUp(t *testing.T) {
 // the switch must write QuorumLost. Without the floor this is the #367 freeze
 // again, now with ReadyMembers=0 contradicting Available=True on one object.
 func TestUpdateStatus_AllDownWhileProgressingWritesQuorumLost(t *testing.T) {
-	ctx := context.Background()
-	cluster := &lll.EtcdCluster{
-		ObjectMeta: metav1.ObjectMeta{Name: "test", Namespace: "ns"},
-		Spec: lll.EtcdClusterSpec{
-			Replicas: ptrInt32(3),
-			Version:  "3.5.17",
-			Storage:  lll.StorageSpec{Size: quickQty(t, "1Gi")},
-		},
-		Status: lll.EtcdClusterStatus{
-			ClusterToken: "test",
-			ClusterID:    "deadbeef",
-			Observed: &lll.ObservedClusterSpec{
-				Replicas: 3, Version: "3.5.17", Storage: lll.StorageSpec{Size: quickQty(t, "1Gi")},
-			},
-			ProgressDeadline: &metav1.Time{Time: metav1.Now().Add(time.Hour)},
-			Conditions: []metav1.Condition{
-				{Type: lll.ClusterProgressing, Status: metav1.ConditionTrue, Reason: "SpecChanged", LastTransitionTime: metav1.Now()},
-				{Type: lll.ClusterAvailable, Status: metav1.ConditionTrue, Reason: "QuorumHealthy", Message: "All members are ready", LastTransitionTime: metav1.Now()},
-				{Type: lll.ClusterDegraded, Status: metav1.ConditionFalse, Reason: "QuorumHealthy", LastTransitionTime: metav1.Now()},
-			},
-		},
+	// Two shapes of "every pod down while Progressing is latched". The floor
+	// must break the withhold in both, because readyVoters cannot exceed
+	// voters/2 when no voter is ready:
+	//   - fixture shape: the down members carry IsVoter=false (voters=0);
+	//   - production shape: etcd is unreachable, so syncIsVoter leaves IsVoter
+	//     sticky-true and only MemberReady flips false (voters=3, readyVoters=0)
+	//     — the exact state the fix targets.
+	cases := []struct {
+		name    string
+		members []lll.EtcdMember
+	}{
+		{"down members are non-voters", scaleUpMembers(t, "test", "ns", 0, 3)},
+		{"sticky voters, pods not ready", downVoterMembers(t, "test", "ns", 3)},
 	}
-	// Every pod down: no ready voter holds the live voter set.
-	members := scaleUpMembers(t, "test", "ns", 0, 3)
-	c, _ := newTestClient(t, append([]client.Object{cluster}, membersAsObjects(members)...)...)
-	r := &EtcdClusterReconciler{Client: c, Scheme: testScheme(t), EtcdClientFactory: factoryReturning(newFakeEtcd(0xdead))}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			cluster := &lll.EtcdCluster{
+				ObjectMeta: metav1.ObjectMeta{Name: "test", Namespace: "ns"},
+				Spec: lll.EtcdClusterSpec{
+					Replicas: ptrInt32(3),
+					Version:  "3.5.17",
+					Storage:  lll.StorageSpec{Size: quickQty(t, "1Gi")},
+				},
+				Status: lll.EtcdClusterStatus{
+					ClusterToken: "test",
+					ClusterID:    "deadbeef",
+					Observed: &lll.ObservedClusterSpec{
+						Replicas: 3, Version: "3.5.17", Storage: lll.StorageSpec{Size: quickQty(t, "1Gi")},
+					},
+					ProgressDeadline: &metav1.Time{Time: metav1.Now().Add(time.Hour)},
+					Conditions: []metav1.Condition{
+						{Type: lll.ClusterProgressing, Status: metav1.ConditionTrue, Reason: "SpecChanged", LastTransitionTime: metav1.Now()},
+						{Type: lll.ClusterAvailable, Status: metav1.ConditionTrue, Reason: "QuorumHealthy", Message: "All members are ready", LastTransitionTime: metav1.Now()},
+						{Type: lll.ClusterDegraded, Status: metav1.ConditionFalse, Reason: "QuorumHealthy", LastTransitionTime: metav1.Now()},
+					},
+				},
+			}
+			c, _ := newTestClient(t, append([]client.Object{cluster}, membersAsObjects(tc.members)...)...)
+			r := &EtcdClusterReconciler{Client: c, Scheme: testScheme(t), EtcdClientFactory: factoryReturning(newFakeEtcd(0xdead))}
 
-	if _, err := r.updateStatus(ctx, cluster, members, &ctrl.Result{RequeueAfter: 10 * time.Second}); err != nil {
-		t.Fatalf("updateStatus: %v", err)
-	}
-	mustGet(t, c, "test", "ns", cluster)
+			if _, err := r.updateStatus(ctx, cluster, tc.members, &ctrl.Result{RequeueAfter: 10 * time.Second}); err != nil {
+				t.Fatalf("updateStatus: %v", err)
+			}
+			mustGet(t, c, "test", "ns", cluster)
 
-	av := meta.FindStatusCondition(cluster.Status.Conditions, lll.ClusterAvailable)
-	if av == nil || av.Status != metav1.ConditionFalse {
-		t.Fatalf("Available = %+v, want False (quorum lost must break the progressing withhold)", av)
-	}
-	deg := meta.FindStatusCondition(cluster.Status.Conditions, lll.ClusterDegraded)
-	if deg == nil || deg.Status != metav1.ConditionTrue {
-		t.Fatalf("Degraded = %+v, want True (quorum lost)", deg)
-	}
-	if cluster.Status.ReadyMembers != 0 {
-		t.Fatalf("ReadyMembers = %d, want 0", cluster.Status.ReadyMembers)
+			av := meta.FindStatusCondition(cluster.Status.Conditions, lll.ClusterAvailable)
+			if av == nil || av.Status != metav1.ConditionFalse {
+				t.Fatalf("Available = %+v, want False (quorum lost must break the progressing withhold)", av)
+			}
+			deg := meta.FindStatusCondition(cluster.Status.Conditions, lll.ClusterDegraded)
+			if deg == nil || deg.Status != metav1.ConditionTrue {
+				t.Fatalf("Degraded = %+v, want True (quorum lost)", deg)
+			}
+			if cluster.Status.ReadyMembers != 0 {
+				t.Fatalf("ReadyMembers = %d, want 0", cluster.Status.ReadyMembers)
+			}
+		})
 	}
 }
 
