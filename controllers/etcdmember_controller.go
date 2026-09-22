@@ -161,6 +161,30 @@ func (r *EtcdMemberReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		}
 	}
 
+	// The kubelet never restarts a Pod in a terminal phase (a graceful node
+	// shutdown leaves etcd Succeeded) and nothing else replaces a bare Pod.
+	// Delete it so the next pass recreates it: PVC-backed resumes with the
+	// same member ID, memory-backed takes the pod-loss path above. Not
+	// quorum-gated: a whole-cluster reboot lands every member here at once.
+	// Ready=False is written before the delete so a failed write leaves the
+	// Pod in place as the retry trigger; PodUID stays for the pod-loss gate.
+	if pod, err := r.terminalPod(ctx, member); err != nil {
+		return ctrl.Result{}, err
+	} else if pod != nil {
+		if setMemberCondition(member, lll.MemberReady, metav1.ConditionFalse, "PodReplacing",
+			terminalPodMessage(pod)) {
+			if err := r.Status().Update(ctx, member); err != nil {
+				return ctrl.Result{}, err
+			}
+		}
+		log.Info("deleting terminal-phase pod for recreation",
+			"phase", pod.Status.Phase, "reason", pod.Status.Reason, "podUID", pod.UID)
+		if err := r.Delete(ctx, pod); err != nil && !errors.IsNotFound(err) {
+			return ctrl.Result{}, err
+		}
+		return ctrl.Result{RequeueAfter: 2 * time.Second}, nil
+	}
+
 	if err := r.ensurePVC(ctx, member); err != nil {
 		log.Error(err, "failed to ensure PVC")
 		return ctrl.Result{}, err
@@ -188,6 +212,38 @@ func (r *EtcdMemberReconciler) memoryMemberPodLost(ctx context.Context, member *
 		return false, err
 	}
 	return string(pod.UID) != member.Status.PodUID, nil
+}
+
+// podInTerminalPhase reports whether the kubelet will never restart the Pod.
+func podInTerminalPhase(pod *corev1.Pod) bool {
+	return pod.Status.Phase == corev1.PodSucceeded || pod.Status.Phase == corev1.PodFailed
+}
+
+// terminalPod returns the member's own Pod when it sits in a terminal phase
+// and is not already terminating (drain, eviction, manual delete), else nil.
+func (r *EtcdMemberReconciler) terminalPod(ctx context.Context, member *lll.EtcdMember) (*corev1.Pod, error) {
+	pod := &corev1.Pod{}
+	err := r.Get(ctx, types.NamespacedName{Namespace: member.Namespace, Name: member.Name}, pod)
+	if errors.IsNotFound(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if !podOwnedBy(pod, member) || pod.DeletionTimestamp != nil || !podInTerminalPhase(pod) {
+		return nil, nil
+	}
+	return pod, nil
+}
+
+// terminalPodMessage keeps the phase and reason the Pod died with; the
+// replacement Pod's status will not carry them.
+func terminalPodMessage(pod *corev1.Pod) string {
+	msg := fmt.Sprintf("pod reached terminal phase %s", pod.Status.Phase)
+	if pod.Status.Reason != "" {
+		msg += " (" + pod.Status.Reason + ")"
+	}
+	return msg + "; deleted for recreation"
 }
 
 // ── Deletion ─────────────────────────────────────────────────────────────
