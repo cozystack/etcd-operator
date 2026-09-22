@@ -1364,8 +1364,8 @@ func (r *EtcdClusterReconciler) updateStatus(
 	ready := int32(0)
 	// Voter accounting from Status.IsVoter (synced from etcd's MemberList in
 	// promotePendingLearner; sticky at its last value while etcd is
-	// unreachable). readyVoters is the live quorum count — it decides both the
-	// progressing withhold below and the PodDisruptionBudget floor.
+	// unreachable). voters feeds the PodDisruptionBudget floor; readyVoters
+	// against voters decides the progressing withhold below.
 	voters := int32(0)
 	readyVoters := int32(0)
 	for _, m := range running {
@@ -1421,16 +1421,19 @@ func (r *EtcdClusterReconciler) updateStatus(
 	// already suppresses the same write for the earlier learners of the same
 	// scale-up — so every mid-scale-up window reports alike.
 	//
-	// The withhold is floored on quorum: it holds only while the ready voters
-	// still carry the live voter set (readyVoters > voters/2). Progressing can
-	// latch indefinitely — spec.auth.enabled looping on a bad root Secret, or a
-	// learner whose MemberPromote keeps being rejected — so an unfloored
-	// withhold would freeze Available=True on a cluster that then loses every
-	// pod, reopening #367. Once quorum is gone the switch falls through and
-	// writes QuorumLost. The general joining-member denominator is #371.
+	// The withhold holds only while every established voter is Ready, i.e. the
+	// only not-Ready members are joiners that etcd has not promoted yet. A
+	// not-Ready voter is a real failure and must fall through to the health
+	// switch even mid-progression: Progressing can latch indefinitely —
+	// spec.auth.enabled looping on a bad root Secret, or a learner whose
+	// MemberPromote keeps being rejected — so a withhold keyed on quorum alone
+	// would hide a minority voter loss under "All members are ready", and a
+	// withhold with no floor at all would freeze Available=True on a cluster
+	// that then loses every pod, reopening #367. The general joining-member
+	// denominator is #371.
 	paused := desired == 0
-	quorumHeld := readyVoters > voters/2
-	progressing := !paused && quorumHeld && clusterProgressing(cluster) && !reconciliationComplete(cluster, running)
+	votersHealthy := voters > 0 && readyVoters == voters
+	progressing := !paused && votersHealthy && clusterProgressing(cluster) && !reconciliationComplete(cluster, running)
 	switch {
 	case paused:
 		// Three flavours of paused:

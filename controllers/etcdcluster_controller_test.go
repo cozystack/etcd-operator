@@ -850,6 +850,61 @@ func TestUpdateStatus_AllDownWhileProgressingWritesQuorumLost(t *testing.T) {
 	}
 }
 
+// TestUpdateStatus_VoterDownWhileProgressingWritesDegraded pins the shape
+// between the flap test and the all-down test: Progressing is latched and
+// quorum still holds, but the not-Ready member is an established voter, not a
+// joiner. The withhold is for joiners only — a voter that lost its pod is a
+// real minority failure and must surface as Degraded=True/MembersUnhealthy
+// rather than hide under the stale "All members are ready".
+func TestUpdateStatus_VoterDownWhileProgressingWritesDegraded(t *testing.T) {
+	ctx := context.Background()
+	cluster := &lll.EtcdCluster{
+		ObjectMeta: metav1.ObjectMeta{Name: "test", Namespace: "ns"},
+		Spec: lll.EtcdClusterSpec{
+			Replicas: ptrInt32(3),
+			Version:  "3.5.17",
+			Storage:  lll.StorageSpec{Size: quickQty(t, "1Gi")},
+		},
+		Status: lll.EtcdClusterStatus{
+			ClusterToken: "test",
+			ClusterID:    "deadbeef",
+			Observed: &lll.ObservedClusterSpec{
+				Replicas: 3, Version: "3.5.17", Storage: lll.StorageSpec{Size: quickQty(t, "1Gi")},
+			},
+			ProgressDeadline: &metav1.Time{Time: metav1.Now().Add(time.Hour)},
+			ReadyMembers:     3,
+			Conditions: []metav1.Condition{
+				{Type: lll.ClusterProgressing, Status: metav1.ConditionTrue, Reason: "SpecChanged", LastTransitionTime: metav1.Now()},
+				{Type: lll.ClusterAvailable, Status: metav1.ConditionTrue, Reason: "QuorumHealthy", Message: "All members are ready", LastTransitionTime: metav1.Now()},
+				{Type: lll.ClusterDegraded, Status: metav1.ConditionFalse, Reason: "QuorumHealthy", LastTransitionTime: metav1.Now()},
+			},
+		},
+	}
+	// Two Ready voters plus one not-Ready member that is an established voter
+	// (sticky IsVoter=true), not a joining learner.
+	members := scaleUpMembers(t, "test", "ns", 2, 1)
+	members[2].Status.IsVoter = true
+	c, _ := newTestClient(t, append([]client.Object{cluster}, membersAsObjects(members)...)...)
+	r := &EtcdClusterReconciler{Client: c, Scheme: testScheme(t), EtcdClientFactory: factoryReturning(newFakeEtcd(0xdead))}
+
+	if _, err := r.updateStatus(ctx, cluster, members, &ctrl.Result{RequeueAfter: 10 * time.Second}); err != nil {
+		t.Fatalf("updateStatus: %v", err)
+	}
+	mustGet(t, c, "test", "ns", cluster)
+
+	deg := meta.FindStatusCondition(cluster.Status.Conditions, lll.ClusterDegraded)
+	if deg == nil || deg.Status != metav1.ConditionTrue || deg.Reason != "MembersUnhealthy" {
+		t.Fatalf("Degraded = %+v, want True/MembersUnhealthy (a down voter is not a joiner)", deg)
+	}
+	av := meta.FindStatusCondition(cluster.Status.Conditions, lll.ClusterAvailable)
+	if av == nil || av.Status != metav1.ConditionTrue || av.Reason != "QuorumAvailable" {
+		t.Fatalf("Available = %+v, want True/QuorumAvailable (quorum holds on 2/3)", av)
+	}
+	if cluster.Status.ReadyMembers != 2 {
+		t.Fatalf("ReadyMembers = %d, want 2", cluster.Status.ReadyMembers)
+	}
+}
+
 // TestUpdateStatus_WithholdsReconciledWhilePendingRetry covers review item 2:
 // reconciliationComplete only checks MemberReady, so a learner whose pod is
 // Ready but whose MemberPromote keeps being rejected (pending set) satisfies
