@@ -171,10 +171,26 @@ func (r *EtcdMemberReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	// with the same member ID; a memory-backed member falls into the pod-loss
 	// path above once the Pod is gone. Not quorum-gated — a whole-cluster
 	// reboot lands every member here at once and all must recreate.
-	if deleted, err := r.deleteTerminalPod(ctx, member); err != nil {
+	//
+	// Ready flips to False here, not in updateStatus: if re-creation then
+	// fails (missing TLS Secret, quota) updateStatus never runs and the
+	// member would keep advertising Ready with no Pod, inflating the
+	// cluster's readyMembers that the crash-loop quorum gate reads.
+	// Status.PodUID is left as is — the memory pod-loss gate above needs it.
+	terminal, err := r.deleteTerminalPod(ctx, member)
+	if err != nil {
 		log.Error(err, "failed to delete terminal-phase pod")
 		return ctrl.Result{}, err
-	} else if deleted {
+	}
+	if terminal != nil {
+		log.Info("deleted terminal-phase pod for recreation",
+			"phase", terminal.Status.Phase, "reason", terminal.Status.Reason, "podUID", terminal.UID)
+		if setMemberCondition(member, lll.MemberReady, metav1.ConditionFalse, "PodReplacing",
+			terminalPodMessage(terminal)) {
+			if err := r.Status().Update(ctx, member); err != nil {
+				return ctrl.Result{}, err
+			}
+		}
 		return ctrl.Result{RequeueAfter: 2 * time.Second}, nil
 	}
 
@@ -214,26 +230,37 @@ func podInTerminalPhase(pod *corev1.Pod) bool {
 }
 
 // deleteTerminalPod deletes the member's Pod when it has reached a terminal
-// phase without a deletionTimestamp, reporting whether it issued the delete.
-// A Pod already terminating is left to finish (a manual restart, drain, or
-// eviction is on its way to a clean reschedule). Only a Pod this member owns
-// is touched.
-func (r *EtcdMemberReconciler) deleteTerminalPod(ctx context.Context, member *lll.EtcdMember) (bool, error) {
+// phase without a deletionTimestamp and returns the Pod it deleted, or nil
+// when there was nothing to delete. A Pod already terminating is left to
+// finish (a manual restart, drain, or eviction is on its way to a clean
+// reschedule). Only a Pod this member owns is touched.
+func (r *EtcdMemberReconciler) deleteTerminalPod(ctx context.Context, member *lll.EtcdMember) (*corev1.Pod, error) {
 	pod := &corev1.Pod{}
 	err := r.Get(ctx, types.NamespacedName{Namespace: member.Namespace, Name: member.Name}, pod)
 	if errors.IsNotFound(err) {
-		return false, nil
+		return nil, nil
 	}
 	if err != nil {
-		return false, err
+		return nil, err
 	}
 	if !podOwnedBy(pod, member) || pod.DeletionTimestamp != nil || !podInTerminalPhase(pod) {
-		return false, nil
+		return nil, nil
 	}
 	if err := r.Delete(ctx, pod); err != nil && !errors.IsNotFound(err) {
-		return false, err
+		return nil, err
 	}
-	return true, nil
+	return pod, nil
+}
+
+// terminalPodMessage is the MemberReady=False message for a Pod deleted in a
+// terminal phase; it keeps the phase and reason the Pod died with, which the
+// fresh Pod's status no longer carries.
+func terminalPodMessage(pod *corev1.Pod) string {
+	msg := fmt.Sprintf("pod reached terminal phase %s", pod.Status.Phase)
+	if pod.Status.Reason != "" {
+		msg += " (" + pod.Status.Reason + ")"
+	}
+	return msg + "; deleted for recreation"
 }
 
 // ── Deletion ─────────────────────────────────────────────────────────────

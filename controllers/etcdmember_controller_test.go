@@ -2442,8 +2442,112 @@ func TestDeleteTerminalPod_SkipsPodBeingDeleted(t *testing.T) {
 	if err != nil {
 		t.Fatalf("deleteTerminalPod: %v", err)
 	}
-	if deleted {
+	if deleted != nil {
 		t.Fatalf("a Pod already terminating must not be treated as a terminal Pod to delete")
+	}
+}
+
+// A terminal Pod of the same name that belongs to a different EtcdMember
+// (a leftover from a previous generation awaiting GC) is not ours to delete.
+func TestDeleteTerminalPod_SkipsPodOwnedByAnotherMember(t *testing.T) {
+	ctx := context.Background()
+	tru := true
+
+	member := &lll.EtcdMember{
+		ObjectMeta: metav1.ObjectMeta{Name: "test-0", Namespace: "ns", UID: types.UID("member-uid")},
+	}
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "test-0", Namespace: "ns", UID: types.UID("old-uid"),
+			OwnerReferences: []metav1.OwnerReference{{
+				APIVersion: "etcd-operator.cozystack.io/v1alpha2", Kind: "EtcdMember",
+				Name: "test-0", UID: types.UID("previous-member-uid"), Controller: &tru, BlockOwnerDeletion: &tru,
+			}},
+		},
+		Status: corev1.PodStatus{Phase: corev1.PodFailed},
+	}
+	c, _ := newTestClient(t, member, pod)
+	r := &EtcdMemberReconciler{Client: c, Scheme: testScheme(t)}
+
+	deleted, err := r.deleteTerminalPod(ctx, member)
+	if err != nil {
+		t.Fatalf("deleteTerminalPod: %v", err)
+	}
+	if deleted != nil {
+		t.Fatalf("a terminal Pod owned by another EtcdMember must not be deleted")
+	}
+	if err := c.Get(ctx, types.NamespacedName{Namespace: "ns", Name: "test-0"}, &corev1.Pod{}); err != nil {
+		t.Fatalf("the other member's Pod must still exist; got err=%v", err)
+	}
+}
+
+// Deleting the terminal Pod must flip MemberReady to False in the same pass.
+// If re-creation then fails (here: the referenced TLS Secret is gone) the
+// running flow never reaches updateStatus, and a member left at Ready=True
+// with no Pod would inflate the cluster's readyMembers count that the
+// crash-loop quorum gate reads.
+func TestReconcile_TerminalPodDeleteFlipsReadyFalse(t *testing.T) {
+	ctx := context.Background()
+	tru := true
+	owner := []metav1.OwnerReference{{
+		APIVersion: "etcd-operator.cozystack.io/v1alpha2", Kind: "EtcdMember",
+		Name: "test-0", UID: types.UID("member-uid"), Controller: &tru, BlockOwnerDeletion: &tru,
+	}}
+
+	member := &lll.EtcdMember{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "test-0", Namespace: "ns", UID: types.UID("member-uid"),
+			Labels:     memberLabels("test", "test-0"),
+			Finalizers: []string{MemberFinalizer},
+		},
+		Spec: lll.EtcdMemberSpec{
+			ClusterName: "test", Version: "3.5.17", Storage: lll.StorageSpec{Size: quickQty(t, "1Gi")},
+			InitialCluster: "x", ClusterToken: "ns-test-x", Bootstrap: true,
+			TLS: &lll.EtcdMemberTLS{ClientServerSecretRef: &corev1.LocalObjectReference{Name: "missing-tls"}},
+		},
+		Status: lll.EtcdMemberStatus{PodName: "test-0", PodUID: "old-uid", PVCName: "data-test-0", MemberID: "abc"},
+	}
+	setMemberCondition(member, lll.MemberReady, metav1.ConditionTrue, "PodReady", "etcd member is ready")
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "test-0", Namespace: "ns", UID: types.UID("old-uid"), OwnerReferences: owner},
+		Status:     corev1.PodStatus{Phase: corev1.PodFailed, Reason: "Terminated"},
+	}
+	pvc := &corev1.PersistentVolumeClaim{
+		ObjectMeta: metav1.ObjectMeta{Name: "data-test-0", Namespace: "ns", OwnerReferences: owner},
+	}
+	c, _ := newTestClient(t, member, pod, pvc)
+	r := &EtcdMemberReconciler{Client: c, Scheme: testScheme(t), EtcdClientFactory: factoryReturning(newFakeEtcd(0xdead))}
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "test-0", Namespace: "ns"}}
+
+	readyCond := func() metav1.Condition {
+		got := mustGet(t, c, "test-0", "ns", &lll.EtcdMember{})
+		for _, cond := range got.Status.Conditions {
+			if cond.Type == lll.MemberReady {
+				return cond
+			}
+		}
+		t.Fatalf("MemberReady condition missing: %+v", got.Status.Conditions)
+		return metav1.Condition{}
+	}
+
+	// Pass 1: Pod deleted, Ready=False persisted with the phase it died in.
+	if _, err := r.Reconcile(ctx, req); err != nil {
+		t.Fatalf("Reconcile (pass 1): %v", err)
+	}
+	if cond := readyCond(); cond.Status != metav1.ConditionFalse || cond.Reason != "PodReplacing" ||
+		!strings.Contains(cond.Message, "Failed") || !strings.Contains(cond.Message, "Terminated") {
+		t.Fatalf("after deleting the terminal Pod want Ready=False/PodReplacing naming Failed (Terminated); got %+v", cond)
+	}
+	if got := mustGet(t, c, "test-0", "ns", &lll.EtcdMember{}); got.Status.PodUID != "old-uid" {
+		t.Fatalf("Status.PodUID must be preserved for the memory pod-loss gate; got %q", got.Status.PodUID)
+	}
+
+	// Pass 2: re-creation fails on the missing Secret; Ready must stay False.
+	if _, err := r.Reconcile(ctx, req); err == nil {
+		t.Fatalf("Reconcile (pass 2): expected the missing TLS Secret to block Pod creation")
+	}
+	if cond := readyCond(); cond.Status != metav1.ConditionFalse {
+		t.Fatalf("Ready must stay False while re-creation fails; got %+v", cond)
 	}
 }
 
