@@ -24,11 +24,24 @@ import (
 
 // EtcdClusterTLS configures transport-layer security for the cluster's two
 // etcd surfaces: the client API (port 2379) and the peer API (port 2380).
-// Each subtree is independently optional. Subtree fields are immutable
-// post-create — flipping TLS on or off on an existing cluster is a
-// non-trivial rolling change (the operator's own etcd client must switch
-// protocols in lockstep with the members), so v1 punts that to delete-and-
-// recreate.
+// Each subtree is independently optional and immutable post-create, with
+// one exception: the source of the material may be handed over from
+// user-provided Secrets to operator-managed cert-manager issuance
+// (Client.ServerSecretRef → Client.CertManager, Peer.SecretRef →
+// Peer.CertManager). The operator drives that handover itself — it issues
+// the new material, waits for cert-manager to populate it, then rolls every
+// member onto it at once.
+//
+// Nothing else about the subtree may change. Flipping TLS on or off, or
+// handing back from cert-manager to BYO Secrets, still requires delete-and-
+// recreate: the operator's own etcd client would have to switch protocols
+// or trust roots in lockstep with the members, and there is no safe
+// operator-driven sequence for that.
+//
+// The handover is deliberately one-way. Going back to BYO would mean
+// trusting material the operator cannot verify is in place, and the
+// cert-manager Certificates it owns would be GC'd out from under a running
+// cluster the moment the spec stopped referencing them.
 type EtcdClusterTLS struct {
 	// Client configures TLS for the etcd client API (port 2379). Absent
 	// means plaintext. See ClientTLS for the mTLS-toggle semantics.
@@ -307,6 +320,31 @@ const (
 	ClusterProgressing = "Progressing"
 	// ClusterDegraded indicates some members are unhealthy but quorum holds.
 	ClusterDegraded = "Degraded"
+	// ClusterTLSHandover tracks the one-way move from user-provided TLS
+	// Secrets to operator-managed cert-manager material. True while a
+	// handover is in flight; False once it has settled or when it is
+	// blocked. It is deliberately a type of its own rather than a reason
+	// on Available/Degraded/Progressing: updateStatus rewrites those three
+	// from quorum health on every pass, so a handover signal parked on any
+	// of them would be clobbered within seconds.
+	ClusterTLSHandover = "TLSHandover"
+)
+
+// Condition reasons for ClusterTLSHandover.
+const (
+	// TLSHandoverAwaitingMaterial: the operator has requested the new
+	// Certificates and is waiting for cert-manager to populate the Secrets.
+	// No member has been touched yet.
+	TLSHandoverAwaitingMaterial = "AwaitingMaterial"
+	// TLSHandoverRollingMembers: every member has been repointed at the new
+	// material and their Pods are being rebuilt.
+	TLSHandoverRollingMembers = "RollingMembers"
+	// TLSHandoverBlocked: a piece of TLS material the operator must own is
+	// held by another controller. Requires human intervention; the cluster
+	// keeps running on the material it already has.
+	TLSHandoverBlocked = "Blocked"
+	// TLSHandoverComplete: every member runs on operator-managed material.
+	TLSHandoverComplete = "Complete"
 )
 
 // BootstrapSpec configures one-time cluster initialization. Consulted only
@@ -425,10 +463,25 @@ type StorageSpec struct {
 //     the tmpfs is unbounded against node memory, which defeats the whole
 //     point of opting into memory backing.
 //
+//   - spec.tls is immutable post-create with exactly one exception: the
+//     one-way handover from user-provided Secrets to operator-managed
+//     cert-manager issuance (client.serverSecretRef → client.certManager,
+//     peer.secretRef → peer.certManager). Everything else about the TLS
+//     subtree stays frozen — the plaintext↔TLS flip, the reverse handover
+//     back to BYO Secrets, swapping one Secret ref for another, and
+//     toggling the client-mTLS posture. The handover is permitted because
+//     the operator can drive it safely end to end (issue the new material,
+//     wait for it, then roll every member onto it in one step); the
+//     others have no such path and still require delete-and-recreate.
+//     Progress is reported on the TLSHandover status condition.
+//
 // +kubebuilder:validation:XValidation:rule="!(has(self.replicas) && self.replicas == 0 && has(self.storage) && has(self.storage.medium) && self.storage.medium == 'Memory')",message="spec.replicas=0 with spec.storage.medium=Memory is unsupported: pausing a memory-backed cluster wedges on resume. Delete and recreate the cluster instead."
 // +kubebuilder:validation:XValidation:rule="!(has(self.storage) && has(self.storage.medium) && self.storage.medium == 'Memory') || quantity(string(self.storage.size)).isGreaterThan(quantity('0'))",message="spec.storage.size must be > 0 when spec.storage.medium=Memory (the tmpfs sizeLimit cannot be zero)."
 // +kubebuilder:validation:XValidation:rule="has(self.tls) == has(oldSelf.tls)",message="spec.tls cannot be added to or removed from an existing cluster; delete and recreate"
-// +kubebuilder:validation:XValidation:rule="!has(self.tls) || !has(oldSelf.tls) || self.tls == oldSelf.tls",message="spec.tls is immutable post-create; delete and recreate the cluster to change TLS configuration"
+// +kubebuilder:validation:XValidation:rule="!has(self.tls) || !has(oldSelf.tls) || has(self.tls.client) == has(oldSelf.tls.client)",message="spec.tls.client cannot be added to or removed from an existing cluster; delete and recreate"
+// +kubebuilder:validation:XValidation:rule="!has(self.tls) || !has(oldSelf.tls) || has(self.tls.peer) == has(oldSelf.tls.peer)",message="spec.tls.peer cannot be added to or removed from an existing cluster; delete and recreate"
+// +kubebuilder:validation:XValidation:rule="!has(self.tls) || !has(oldSelf.tls) || !has(self.tls.client) || self.tls.client == oldSelf.tls.client || (has(oldSelf.tls.client.serverSecretRef) && has(self.tls.client.certManager) && has(oldSelf.tls.client.operatorClientSecretRef) == has(self.tls.client.certManager.operatorClientIssuerRef))",message="spec.tls.client is immutable post-create except for the one-way handover from serverSecretRef to certManager, which must preserve the mTLS posture (operatorClientSecretRef set iff certManager.operatorClientIssuerRef is set)"
+// +kubebuilder:validation:XValidation:rule="!has(self.tls) || !has(oldSelf.tls) || !has(self.tls.peer) || self.tls.peer == oldSelf.tls.peer || (has(oldSelf.tls.peer.secretRef) && has(self.tls.peer.certManager))",message="spec.tls.peer is immutable post-create except for the one-way handover from secretRef to certManager"
 // +kubebuilder:validation:XValidation:rule="has(self.storage.storageClassName) == has(oldSelf.storage.storageClassName)",message="spec.storage.storageClassName cannot be added to or removed from an existing cluster; delete and recreate"
 // +kubebuilder:validation:XValidation:rule="!has(self.storage.storageClassName) || !has(oldSelf.storage.storageClassName) || self.storage.storageClassName == oldSelf.storage.storageClassName",message="spec.storage.storageClassName is immutable post-create (a PVC's storageClassName itself is immutable, and the operator does not roll PVCs); delete and recreate the cluster to change the StorageClass"
 // +kubebuilder:validation:XValidation:rule="has(self.auth) == has(oldSelf.auth)",message="spec.auth cannot be added to or removed from an existing cluster; delete and recreate"

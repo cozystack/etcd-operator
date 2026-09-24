@@ -235,7 +235,7 @@ The `PodDisruptionBudget` *is* auto-emitted now — see the [PodDisruptionBudget
 
 ### Apiserver-enforced validation
 
-Four CEL `x-kubernetes-validations` rules on `EtcdClusterSpec` are evaluated at admission time. **k8s 1.29+ is the safe floor**: CEL CRD validation (`CustomResourceValidationExpressions`) went GA in 1.29, and the `quantity()` extension function used by two of the rules was added in 1.28. The CEL gate was beta-on-by-default from 1.25, so 1.28 *may* work in practice — but 1.29 is the first version where both pieces are GA and the project doesn't have to chase feature-gate state across releases.
+The CEL `x-kubernetes-validations` rules on `EtcdClusterSpec` listed below are evaluated at admission time. **k8s 1.29+ is the safe floor**: CEL CRD validation (`CustomResourceValidationExpressions`) went GA in 1.29, and the `quantity()` extension function used by two of the rules was added in 1.28. The CEL gate was beta-on-by-default from 1.25, so 1.28 *may* work in practice — but 1.29 is the first version where both pieces are GA and the project doesn't have to chase feature-gate state across releases.
 
 | Rule | When | Why |
 |---|---|---|
@@ -246,7 +246,8 @@ Four CEL `x-kubernetes-validations` rules on `EtcdClusterSpec` are evaluated at 
 | `storage.storageClassName` cannot be added or removed | UPDATE | `PersistentVolumeClaim.spec.storageClassName` is immutable; honouring a mid-life add/remove would require rolling every PVC. |
 | `storage.storageClassName` value immutable | UPDATE | Same reason — the StorageClass chosen at cluster creation is the only one PVCs will ever carry. |
 | `tls` cannot be added or removed | UPDATE | Toggling TLS on an existing cluster is a rolling restart that has to land on the operator's etcd client and every member Pod in lockstep; not implemented. |
-| `tls` subtree immutable | UPDATE | Same reason — secret-ref swaps, mTLS-flip via `operatorClientSecretRef`, peer-only ↔ both toggles are all in-place rolling changes that v1 doesn't perform. |
+| `tls.client` / `tls.peer` cannot be added or removed | UPDATE | Turning one plane on or off mid-life is the same lockstep rolling problem as adding `tls` wholesale. |
+| `tls.client` / `tls.peer` immutable, except BYO → `certManager` | UPDATE | Secret-ref swaps and mTLS flips via `operatorClientSecretRef` are in-place rolling changes v1 doesn't perform. The single exception is handing the material over to operator-managed cert-manager issuance, which the operator *can* drive end to end — see [Handing TLS over to the operator](operations.md#handing-tls-over-to-the-operator). It is one-way, and must preserve the client-mTLS posture. |
 
 These rules live in the CRD itself; the apiserver enforces them with no separate webhook, no cert-manager, no extra Deployment. Errors come back as standard apiserver admission rejections (`kubectl apply` prints the rule's `message` field).
 
@@ -313,7 +314,11 @@ Because the operator never stamps these annotations, every rolled or replaced me
 
 ## TLS
 
-`spec.tls` configures transport-layer security for the cluster's two etcd surfaces: the client API (port 2379) and the peer API (port 2380). Each subtree is independently optional — you can opt one surface into TLS without the other. The whole `tls` subtree is immutable post-create (see the validation table above): toggling TLS on an existing cluster is a rolling change that v1 doesn't perform, so the policy is delete-and-recreate.
+`spec.tls` configures transport-layer security for the cluster's two etcd surfaces: the client API (port 2379) and the peer API (port 2380). Each subtree is independently optional — you can opt one surface into TLS without the other. The `tls` subtree is immutable post-create (see the validation table above): toggling TLS on an existing cluster is a rolling change that v1 doesn't perform, so the policy is delete-and-recreate.
+
+The one exception is the **source** of the material. A cluster running on user-provided Secrets can be handed over to operator-managed cert-manager issuance in place — `client.serverSecretRef` → `client.certManager`, `peer.secretRef` → `peer.certManager` — because that is a change the operator can drive safely from end to end: it issues the new Certificates, waits for cert-manager to populate every Secret, then repoints and rolls all members together. The runbook is [Handing TLS over to the operator](operations.md#handing-tls-over-to-the-operator).
+
+The exception is deliberately narrow. It is **one-way** (there is no `certManager` → `secretRef`: the operator would be handing a live cluster to material it cannot verify, while the Certificates it owns get garbage-collected out from under it), it may not change whether client mTLS is in effect, and it does not let a plane be switched on or off. Everything else is still delete-and-recreate.
 
 Material can come from one of two sources per subtree, mutually exclusive:
 
