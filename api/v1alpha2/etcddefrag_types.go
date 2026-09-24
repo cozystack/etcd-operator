@@ -25,7 +25,15 @@ import (
 // EtcdDefragSpec is the desired state of an EtcdDefrag: a one-shot request to
 // defragment an EtcdCluster's members.
 //
+// clusterRef and rule are the request itself and are immutable: the controller
+// consults them once and never re-runs, so editing them post-create would
+// silently do nothing. ttlSecondsAfterFinished stays mutable — it is a
+// record-retention knob, not part of the request (see Job.spec.ttlSecondsAfterFinished).
+//
 // +kubebuilder:validation:XValidation:rule="size(self.clusterRef.name) != 0",message="spec.clusterRef.name is required"
+// +kubebuilder:validation:XValidation:rule="self.clusterRef == oldSelf.clusterRef",message="spec.clusterRef is immutable; create a new EtcdDefrag to defragment a different cluster"
+// +kubebuilder:validation:XValidation:rule="has(self.rule) == has(oldSelf.rule)",message="spec.rule cannot be added to or removed from an existing EtcdDefrag; create a new EtcdDefrag to change what it defragments"
+// +kubebuilder:validation:XValidation:rule="!has(self.rule) || !has(oldSelf.rule) || self.rule == oldSelf.rule",message="spec.rule is immutable; create a new EtcdDefrag to change what it defragments"
 type EtcdDefragSpec struct {
 	// ClusterRef names the EtcdCluster (same namespace) to defragment.
 	ClusterRef corev1.LocalObjectReference `json:"clusterRef"`
