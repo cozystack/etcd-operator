@@ -505,6 +505,25 @@ func (r *EtcdMemberReconciler) ensurePod(ctx context.Context, member *lll.EtcdMe
 		}
 		member.Status.PodName = pod.Name
 		member.Status.PodUID = string(pod.UID)
+		// TLS handover: the cluster controller has repointed spec.tls at
+		// different Secrets, so this Pod is mounting material the member is
+		// no longer supposed to use. A Pod's volumes are immutable, so the
+		// only way onto the new material is a rebuild — delete here and let
+		// the next reconcile recreate, gated as ever on the new Secrets
+		// actually existing.
+		//
+		// This is the one case where an existing Pod is torn down for spec
+		// drift. Storage, Resources and Version are all deliberately frozen
+		// per member at creation; TLS is different because holding the
+		// wrong material does not degrade a member, it isolates it.
+		if pod.DeletionTimestamp.IsZero() && tlsMountsOutOfDate(pod, member) {
+			log.FromContext(ctx).Info("member TLS material changed; rebuilding Pod against the new Secrets",
+				"pod", pod.Name)
+			if err := r.Delete(ctx, pod); err != nil && !errors.IsNotFound(err) {
+				return err
+			}
+			return nil
+		}
 		if err := r.reconcileRoleLabel(ctx, pod, member); err != nil {
 			return err
 		}

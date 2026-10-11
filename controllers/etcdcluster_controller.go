@@ -138,9 +138,18 @@ func (r *EtcdClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		return ctrl.Result{}, err
 	}
 
+	// tlsConflict is set when a Certificate this cluster must own is held by
+	// another controller. That is not fatal to the reconcile — the cluster
+	// keeps serving on the material it already has — so it is carried down
+	// to reconcileTLSHandover, which reports it, rather than short-circuiting
+	// here and leaving the rest of the status to go stale.
+	var tlsConflict *tlsMaterialConflictError
 	if err := r.reconcileTLSCertificates(ctx, cluster); err != nil {
-		log.Error(err, "failed to reconcile cert-manager Certificates")
-		return ctrl.Result{}, err
+		var isConflict bool
+		if tlsConflict, isConflict = asTLSMaterialConflict(err); !isConflict {
+			log.Error(err, "failed to reconcile cert-manager Certificates")
+			return ctrl.Result{}, err
+		}
 	}
 
 	memberList := &lll.EtcdMemberList{}
@@ -250,6 +259,23 @@ func (r *EtcdClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		}
 		log.Info("waiting for bootstrap member to form cluster")
 		return r.tryDiscoverCluster(ctx, cluster, running)
+	}
+
+	// ── TLS handover ───────────────────────────────────────────────────
+	// Ahead of any scale decision: if spec.tls has been handed over from
+	// user-provided Secrets to operator-managed cert-manager issuance, move
+	// the existing members onto the new material before doing anything
+	// else. Adding a member on the old material mid-handover would only
+	// create one more Pod to roll, and doing it while the CAs differ would
+	// mean the new member cannot authenticate to anyone.
+	//
+	// `active` rather than `running`: a dormant member has no Pod to roll,
+	// but its spec still has to be repointed so it comes back on the right
+	// material whenever it is resumed.
+	if res, err := r.reconcileTLSHandover(ctx, cluster, active, tlsConflict); err != nil {
+		return ctrl.Result{}, err
+	} else if res != nil {
+		return *res, nil
 	}
 
 	// ── Scale ──────────────────────────────────────────────────────────
@@ -1783,15 +1809,19 @@ type certificateSpec struct {
 // stable since cert-manager v1.0.
 //
 // Create-once rather than Create-or-Patch: the operator never has a
-// legitimate reason to mutate an existing Certificate. spec.tls is
-// CEL-immutable post-create; the SAN list is derived from immutable
-// identifiers (cluster name, namespace, cluster-domain); the issuer
-// is locked the same way. Reconciling drift on every loop would fight
-// cert-manager's webhook over its defaulted optional fields
+// legitimate reason to mutate an existing Certificate. The SAN list is
+// derived from immutable identifiers (cluster name, namespace, cluster-
+// domain) and the issuer is locked by CEL, so the shape we would patch
+// towards is the shape we created. Reconciling drift on every loop would
+// fight cert-manager's webhook over its defaulted optional fields
 // (revisionHistoryLimit, privateKey.rotationPolicy, …) — MergeFrom-
 // based patches null them out, cert-manager re-defaults them, the
 // audit log fills up. The simpler invariant is: we own the shape at
 // creation, after that the resource is cert-manager's territory.
+//
+// The one spec.tls change CEL does allow — the BYO→cert-manager handover
+// — only ever adds Certificates the operator did not previously emit, so
+// create-once still holds across it.
 //
 // A future operator version that needs to evolve emitted Certificate
 // shape (e.g. new SAN policy) should ship a one-off migration step
@@ -1806,9 +1836,25 @@ func (r *EtcdClusterReconciler) ensureCertificate(ctx context.Context, cluster *
 	err := r.Get(ctx, types.NamespacedName{Namespace: cluster.Namespace, Name: spec.name}, existing)
 	switch {
 	case err == nil:
-		// Already created in a previous reconcile (or by the same
-		// reconcile that's now retrying). Leave it alone.
-		return nil
+		if metav1.IsControlledBy(existing, cluster) {
+			// Ours, from a previous reconcile (or from the same reconcile
+			// now retrying). Leave it alone.
+			return nil
+		}
+		// Someone else's object sitting on the name we want. This is the
+		// realistic shape of the BYO→cert-manager handover: a chart that
+		// still emits its own Certificates, under names that collide with
+		// ours whenever the cluster is called `etcd` (chart `etcd-peer`
+		// vs our `<cluster>-peer`).
+		//
+		// Adopting it would mean mutating an object another controller
+		// reconciles — Helm/Flux drift correction and this operator would
+		// fight over it forever — and would silently repoint a live
+		// cluster at TLS material this operator never issued. Refuse, and
+		// name the object: dropping it from the chart unblocks the
+		// handover, and cert-manager leaves the Secret behind so the
+		// Certificate we then create reissues into it with no gap.
+		return &tlsMaterialConflictError{kind: "Certificate", name: spec.name}
 	case !errors.IsNotFound(err):
 		return err
 	}

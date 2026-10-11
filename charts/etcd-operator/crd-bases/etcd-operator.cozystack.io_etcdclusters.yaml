@@ -65,6 +65,18 @@ spec:
                 - storage.medium=Memory requires storage.size > 0. Without a SizeLimit
                   the tmpfs is unbounded against node memory, which defeats the whole
                   point of opting into memory backing.
+
+                - spec.tls is immutable post-create with exactly one exception: the
+                  one-way handover from user-provided Secrets to operator-managed
+                  cert-manager issuance (client.serverSecretRef → client.certManager,
+                  peer.secretRef → peer.certManager). Everything else about the TLS
+                  subtree stays frozen — the plaintext↔TLS flip, the reverse handover
+                  back to BYO Secrets, swapping one Secret ref for another, and
+                  toggling the client-mTLS posture. The handover is permitted because
+                  the operator can drive it safely end to end (issue the new material,
+                  wait for it, then roll every member onto it in one step); the
+                  others have no such path and still require delete-and-recreate.
+                  Progress is reported on the TLSHandover status condition.
             properties:
               additionalMetadata:
                 description: |-
@@ -1802,9 +1814,27 @@ spec:
             - message: spec.tls cannot be added to or removed from an existing cluster;
                 delete and recreate
               rule: has(self.tls) == has(oldSelf.tls)
-            - message: spec.tls is immutable post-create; delete and recreate the
-                cluster to change TLS configuration
-              rule: '!has(self.tls) || !has(oldSelf.tls) || self.tls == oldSelf.tls'
+            - message: spec.tls.client cannot be added to or removed from an existing
+                cluster; delete and recreate
+              rule: '!has(self.tls) || !has(oldSelf.tls) || has(self.tls.client) ==
+                has(oldSelf.tls.client)'
+            - message: spec.tls.peer cannot be added to or removed from an existing
+                cluster; delete and recreate
+              rule: '!has(self.tls) || !has(oldSelf.tls) || has(self.tls.peer) ==
+                has(oldSelf.tls.peer)'
+            - message: spec.tls.client is immutable post-create except for the one-way
+                handover from serverSecretRef to certManager, which must preserve
+                the mTLS posture (operatorClientSecretRef set iff certManager.operatorClientIssuerRef
+                is set)
+              rule: '!has(self.tls) || !has(oldSelf.tls) || !has(self.tls.client)
+                || self.tls.client == oldSelf.tls.client || (has(oldSelf.tls.client.serverSecretRef)
+                && has(self.tls.client.certManager) && has(oldSelf.tls.client.operatorClientSecretRef)
+                == has(self.tls.client.certManager.operatorClientIssuerRef))'
+            - message: spec.tls.peer is immutable post-create except for the one-way
+                handover from secretRef to certManager
+              rule: '!has(self.tls) || !has(oldSelf.tls) || !has(self.tls.peer) ||
+                self.tls.peer == oldSelf.tls.peer || (has(oldSelf.tls.peer.secretRef)
+                && has(self.tls.peer.certManager))'
             - message: spec.storage.storageClassName cannot be added to or removed
                 from an existing cluster; delete and recreate
               rule: has(self.storage.storageClassName) == has(oldSelf.storage.storageClassName)

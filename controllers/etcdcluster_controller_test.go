@@ -4301,6 +4301,12 @@ func TestReconcileTLSCertificates_ClusterIssuerKind(t *testing.T) {
 // Patch on every reconcile that would null those out. Pre-populate a
 // Certificate with extra spec keys and assert ensureCertificate
 // leaves it untouched.
+//
+// The pre-existing Certificate carries this cluster's controller ref,
+// because that is what the operator stamps on the ones it creates — and
+// ownership is what separates "ours, already created, leave it alone" from
+// the conflict case covered by
+// TestEnsureCertificate_RefusesForeignOwnedCertificate.
 func TestEnsureCertificate_DoesNotPatchExistingCertificate(t *testing.T) {
 	ctx := context.Background()
 	cluster := &lll.EtcdCluster{
@@ -4313,6 +4319,13 @@ func TestEnsureCertificate_DoesNotPatchExistingCertificate(t *testing.T) {
 	})
 	preExisting.SetName("etcd-server")
 	preExisting.SetNamespace("ns")
+	preExisting.SetOwnerReferences([]metav1.OwnerReference{{
+		APIVersion: lll.GroupVersion.String(),
+		Kind:       "EtcdCluster",
+		Name:       "etcd",
+		UID:        types.UID("cluster-uid"),
+		Controller: ptrBool(true),
+	}})
 	preExisting.Object["spec"] = map[string]any{
 		"secretName": "etcd-server-tls",
 		"commonName": "etcd-server",

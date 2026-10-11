@@ -292,8 +292,192 @@ func TestCEL_TLSSubfieldChangeRejected(t *testing.T) {
 	if err == nil {
 		t.Fatalf("apiserver accepted mTLS toggle (added operatorClientSecretRef); expected rejection")
 	}
-	if !strings.Contains(err.Error(), "spec.tls is immutable") {
+	if !strings.Contains(err.Error(), "spec.tls.client is immutable") {
 		t.Fatalf("error did not mention subtree immutability: %v", err)
+	}
+}
+
+// The one permitted spec.tls change: handing the material over from
+// user-provided Secrets to operator-managed cert-manager issuance, on both
+// planes at once.
+func TestCEL_TLSHandoverToCertManagerAccepted(t *testing.T) {
+	skipIfNoEnvtest(t)
+	ctx := context.Background()
+
+	c := validCluster("tls-handover-ok")
+	c.Spec.TLS = &lll.EtcdClusterTLS{
+		Client: &lll.ClientTLS{
+			ServerSecretRef: &corev1.LocalObjectReference{Name: "chart-server-tls"},
+		},
+		Peer: &lll.PeerTLS{
+			SecretRef: &corev1.LocalObjectReference{Name: "chart-peer-tls"},
+		},
+	}
+	if err := k8s.Create(ctx, c); err != nil {
+		t.Fatalf("Create BYO-TLS cluster: %v", err)
+	}
+	t.Cleanup(func() { _ = k8s.Delete(ctx, c) })
+
+	got := &lll.EtcdCluster{}
+	if err := k8s.Get(ctx, ctrlclient.ObjectKeyFromObject(c), got); err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	got.Spec.TLS.Client = &lll.ClientTLS{
+		CertManager: &lll.ClientCertManagerTLS{
+			ServerIssuerRef: lll.IssuerReference{Name: "etcd-issuer"},
+		},
+	}
+	got.Spec.TLS.Peer = &lll.PeerTLS{
+		CertManager: &lll.PeerCertManagerTLS{
+			IssuerRef: lll.IssuerReference{Name: "etcd-peer-issuer"},
+		},
+	}
+	if err := k8s.Update(ctx, got); err != nil {
+		t.Fatalf("apiserver rejected the BYO->cert-manager handover: %v", err)
+	}
+}
+
+// The handover is one-way. Going back to BYO Secrets would strand the
+// cluster on material the operator is about to GC.
+func TestCEL_TLSHandoverBackToSecretRefRejected(t *testing.T) {
+	skipIfNoEnvtest(t)
+	ctx := context.Background()
+
+	c := validCluster("tls-handover-reverse")
+	c.Spec.TLS = &lll.EtcdClusterTLS{
+		Peer: &lll.PeerTLS{
+			CertManager: &lll.PeerCertManagerTLS{
+				IssuerRef: lll.IssuerReference{Name: "etcd-peer-issuer"},
+			},
+		},
+	}
+	if err := k8s.Create(ctx, c); err != nil {
+		t.Fatalf("Create cert-manager cluster: %v", err)
+	}
+	t.Cleanup(func() { _ = k8s.Delete(ctx, c) })
+
+	got := &lll.EtcdCluster{}
+	if err := k8s.Get(ctx, ctrlclient.ObjectKeyFromObject(c), got); err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	got.Spec.TLS.Peer = &lll.PeerTLS{
+		SecretRef: &corev1.LocalObjectReference{Name: "chart-peer-tls"},
+	}
+
+	err := k8s.Update(ctx, got)
+	if err == nil {
+		t.Fatalf("apiserver accepted the reverse handover back to secretRef; expected rejection")
+	}
+	if !strings.Contains(err.Error(), "spec.tls.peer is immutable") {
+		t.Fatalf("error did not mention peer subtree immutability: %v", err)
+	}
+}
+
+// The handover must not be a vehicle for silently dropping client mTLS:
+// a cluster that presented an operator client cert has to keep presenting
+// one on the other side of the move.
+func TestCEL_TLSHandoverDroppingClientMTLSRejected(t *testing.T) {
+	skipIfNoEnvtest(t)
+	ctx := context.Background()
+
+	c := validCluster("tls-handover-mtls")
+	c.Spec.TLS = &lll.EtcdClusterTLS{
+		Client: &lll.ClientTLS{
+			ServerSecretRef:         &corev1.LocalObjectReference{Name: "chart-server-tls"},
+			OperatorClientSecretRef: &corev1.LocalObjectReference{Name: "chart-client-tls"},
+		},
+	}
+	if err := k8s.Create(ctx, c); err != nil {
+		t.Fatalf("Create mTLS cluster: %v", err)
+	}
+	t.Cleanup(func() { _ = k8s.Delete(ctx, c) })
+
+	got := &lll.EtcdCluster{}
+	if err := k8s.Get(ctx, ctrlclient.ObjectKeyFromObject(c), got); err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	// certManager without operatorClientIssuerRef == server-TLS only.
+	got.Spec.TLS.Client = &lll.ClientTLS{
+		CertManager: &lll.ClientCertManagerTLS{
+			ServerIssuerRef: lll.IssuerReference{Name: "etcd-issuer"},
+		},
+	}
+
+	err := k8s.Update(ctx, got)
+	if err == nil {
+		t.Fatalf("apiserver accepted a handover that silently disabled client mTLS; expected rejection")
+	}
+	if !strings.Contains(err.Error(), "mTLS posture") {
+		t.Fatalf("error did not mention the mTLS posture requirement: %v", err)
+	}
+}
+
+// The mTLS-preserving form of the same handover is accepted.
+func TestCEL_TLSHandoverPreservingClientMTLSAccepted(t *testing.T) {
+	skipIfNoEnvtest(t)
+	ctx := context.Background()
+
+	c := validCluster("tls-handover-mtls-ok")
+	c.Spec.TLS = &lll.EtcdClusterTLS{
+		Client: &lll.ClientTLS{
+			ServerSecretRef:         &corev1.LocalObjectReference{Name: "chart-server-tls"},
+			OperatorClientSecretRef: &corev1.LocalObjectReference{Name: "chart-client-tls"},
+		},
+	}
+	if err := k8s.Create(ctx, c); err != nil {
+		t.Fatalf("Create mTLS cluster: %v", err)
+	}
+	t.Cleanup(func() { _ = k8s.Delete(ctx, c) })
+
+	got := &lll.EtcdCluster{}
+	if err := k8s.Get(ctx, ctrlclient.ObjectKeyFromObject(c), got); err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	got.Spec.TLS.Client = &lll.ClientTLS{
+		CertManager: &lll.ClientCertManagerTLS{
+			ServerIssuerRef:         lll.IssuerReference{Name: "etcd-issuer"},
+			OperatorClientIssuerRef: &lll.IssuerReference{Name: "etcd-issuer"},
+		},
+	}
+	if err := k8s.Update(ctx, got); err != nil {
+		t.Fatalf("apiserver rejected an mTLS-preserving handover: %v", err)
+	}
+}
+
+// The TLS subtrees themselves still cannot appear or vanish — the handover
+// exception is about the source of the material, not about turning a plane
+// on or off.
+func TestCEL_TLSPeerSubtreeAddRejected(t *testing.T) {
+	skipIfNoEnvtest(t)
+	ctx := context.Background()
+
+	c := validCluster("tls-peer-add")
+	c.Spec.TLS = &lll.EtcdClusterTLS{
+		Client: &lll.ClientTLS{
+			ServerSecretRef: &corev1.LocalObjectReference{Name: "chart-server-tls"},
+		},
+	}
+	if err := k8s.Create(ctx, c); err != nil {
+		t.Fatalf("Create client-only TLS cluster: %v", err)
+	}
+	t.Cleanup(func() { _ = k8s.Delete(ctx, c) })
+
+	got := &lll.EtcdCluster{}
+	if err := k8s.Get(ctx, ctrlclient.ObjectKeyFromObject(c), got); err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	got.Spec.TLS.Peer = &lll.PeerTLS{
+		CertManager: &lll.PeerCertManagerTLS{
+			IssuerRef: lll.IssuerReference{Name: "etcd-peer-issuer"},
+		},
+	}
+
+	err := k8s.Update(ctx, got)
+	if err == nil {
+		t.Fatalf("apiserver accepted adding the peer TLS subtree post-create; expected rejection")
+	}
+	if !strings.Contains(err.Error(), "spec.tls.peer cannot be added") {
+		t.Fatalf("error did not mention peer subtree add/remove: %v", err)
 	}
 }
 
