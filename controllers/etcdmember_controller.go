@@ -226,13 +226,16 @@ func podInTerminalPhase(pod *corev1.Pod) bool {
 // Two shapes qualify:
 //   - a terminal phase, which the kubelet never restarts (a graceful node
 //     shutdown leaves etcd Succeeded);
-//   - an adopted legacy StatefulSet Pod with a container, init or main, stuck
-//     in CreateContainerConfigError on an env source buildPod does not emit.
+//   - an adopted legacy StatefulSet Pod whose etcd container is not running
+//     and whose etcd or init container is stuck in CreateContainerConfigError
+//     on an env source buildPod does not emit.
 //     Adoption deletes the legacy cluster-state ConfigMap those containers
 //     pull env from, so the next start after a reboot fails with RestartCount
 //     0 and a non-terminal phase, invisible to both the terminal-phase check
 //     and the crash-loop trigger. Recreating from buildPod drops the
-//     reference. Only legacy Pods qualify, because buildPod never sets the
+//     reference. A stuck sidecar never qualifies on its own: deleting a Pod
+//     whose etcd still serves would cost a member, and this branch is not
+//     quorum-gated. Only legacy Pods qualify, because buildPod never sets the
 //     StatefulSet label: a replacement is recreated at most once, even if a
 //     mutating webhook keeps injecting a missing source into it. A source
 //     buildPod itself emits is excluded, since a replacement would hit the
@@ -272,15 +275,25 @@ func (r *EtcdMemberReconciler) podToRecreate(ctx context.Context, member *lll.Et
 // it creates, so only Pods adopted from the legacy operator carry it.
 const legacyStatefulSetPodLabel = "statefulset.kubernetes.io/pod-name"
 
-// containerConfigErrors names the init and main containers waiting on
-// CreateContainerConfigError, sorted.
+// containerConfigErrors names the init containers and the etcd container
+// waiting on CreateContainerConfigError, sorted. It returns nil while etcd is
+// running, whatever state the other containers are in.
 func containerConfigErrors(pod *corev1.Pod) []string {
 	var out []string
-	for _, statuses := range [][]corev1.ContainerStatus{pod.Status.InitContainerStatuses, pod.Status.ContainerStatuses} {
-		for _, cs := range statuses {
-			if w := cs.State.Waiting; w != nil && w.Reason == "CreateContainerConfigError" {
-				out = append(out, cs.Name)
-			}
+	for _, cs := range pod.Status.ContainerStatuses {
+		if cs.Name != "etcd" {
+			continue
+		}
+		if cs.State.Running != nil {
+			return nil
+		}
+		if w := cs.State.Waiting; w != nil && w.Reason == "CreateContainerConfigError" {
+			out = append(out, cs.Name)
+		}
+	}
+	for _, cs := range pod.Status.InitContainerStatuses {
+		if w := cs.State.Waiting; w != nil && w.Reason == "CreateContainerConfigError" {
+			out = append(out, cs.Name)
 		}
 	}
 	sort.Strings(out)
@@ -844,6 +857,8 @@ func (r *EtcdMemberReconciler) buildPod(member *lll.EtcdMember, clusterFormed bo
 		labels[LabelRole] = RoleVoter
 	}
 	labels, annotations := applyAdditionalMetadata(labels, nil, member.Spec.AdditionalMetadata)
+	// podToRecreate treats this label as proof of an adopted legacy Pod.
+	delete(labels, legacyStatefulSetPodLabel)
 
 	// Data dir defaults to the volume root; adopted legacy members carry an
 	// AnnDataDirSubPath annotation (e.g. "default.etcd") so a replacement
