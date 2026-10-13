@@ -226,13 +226,17 @@ func podInTerminalPhase(pod *corev1.Pod) bool {
 // Two shapes qualify:
 //   - a terminal phase, which the kubelet never restarts (a graceful node
 //     shutdown leaves etcd Succeeded);
-//   - an etcd container stuck in CreateContainerConfigError on an env source
-//     buildPod does not emit. An adopted legacy Pod references the legacy
-//     cluster-state ConfigMap that adoption deletes, so its next container
-//     start fails with RestartCount 0 and a Running phase — invisible to both
-//     the terminal-phase check and the crash-loop trigger. Recreating from
-//     buildPod drops the reference; a source buildPod itself emits is
-//     excluded, since recreating would hit the same error forever.
+//   - an adopted legacy StatefulSet Pod with a container, init or main, stuck
+//     in CreateContainerConfigError on an env source buildPod does not emit.
+//     Adoption deletes the legacy cluster-state ConfigMap those containers
+//     pull env from, so the next start after a reboot fails with RestartCount
+//     0 and a non-terminal phase, invisible to both the terminal-phase check
+//     and the crash-loop trigger. Recreating from buildPod drops the
+//     reference. Only legacy Pods qualify, because buildPod never sets the
+//     StatefulSet label: a replacement is recreated at most once, even if a
+//     mutating webhook keeps injecting a missing source into it. A source
+//     buildPod itself emits is excluded, since a replacement would hit the
+//     same error.
 func (r *EtcdMemberReconciler) podToRecreate(ctx context.Context, member *lll.EtcdMember) (*corev1.Pod, string, error) {
 	pod := &corev1.Pod{}
 	err := r.Get(ctx, types.NamespacedName{Namespace: member.Namespace, Name: member.Name}, pod)
@@ -248,28 +252,43 @@ func (r *EtcdMemberReconciler) podToRecreate(ctx context.Context, member *lll.Et
 	if podInTerminalPhase(pod) {
 		return pod, terminalPodMessage(pod), nil
 	}
-	if !etcdContainerConfigError(pod) {
+	if pod.Labels[legacyStatefulSetPodLabel] == "" {
+		return nil, "", nil
+	}
+	stuck := containerConfigErrors(pod)
+	if len(stuck) == 0 {
 		return nil, "", nil
 	}
 	foreign := foreignEnvSources(pod, r.buildPod(member, false))
 	if len(foreign) == 0 {
 		return nil, "", nil
 	}
-	return pod, fmt.Sprintf("etcd container cannot be created (CreateContainerConfigError) and references "+
-		"env sources the operator does not manage: %s; deleted for recreation", strings.Join(foreign, ", ")), nil
+	return pod, fmt.Sprintf("adopted pod cannot create container %s (CreateContainerConfigError) and references "+
+		"env sources the operator does not manage: %s; deleted for recreation",
+		strings.Join(stuck, ", "), strings.Join(foreign, ", ")), nil
 }
 
-func etcdContainerConfigError(pod *corev1.Pod) bool {
-	for _, cs := range pod.Status.ContainerStatuses {
-		if cs.Name == "etcd" {
-			return cs.State.Waiting != nil && cs.State.Waiting.Reason == "CreateContainerConfigError"
+// legacyStatefulSetPodLabel is set by the StatefulSet controller on every Pod
+// it creates, so only Pods adopted from the legacy operator carry it.
+const legacyStatefulSetPodLabel = "statefulset.kubernetes.io/pod-name"
+
+// containerConfigErrors names the init and main containers waiting on
+// CreateContainerConfigError, sorted.
+func containerConfigErrors(pod *corev1.Pod) []string {
+	var out []string
+	for _, statuses := range [][]corev1.ContainerStatus{pod.Status.InitContainerStatuses, pod.Status.ContainerStatuses} {
+		for _, cs := range statuses {
+			if w := cs.State.Waiting; w != nil && w.Reason == "CreateContainerConfigError" {
+				out = append(out, cs.Name)
+			}
 		}
 	}
-	return false
+	sort.Strings(out)
+	return out
 }
 
-// foreignEnvSources lists the ConfigMaps and Secrets the live Pod's etcd
-// container pulls env from that the desired Pod's does not, sorted.
+// foreignEnvSources lists the ConfigMaps and Secrets the live Pod's init and
+// main containers pull env from that the desired Pod's do not, sorted.
 func foreignEnvSources(live, desired *corev1.Pod) []string {
 	want := envSources(desired)
 	var out []string
@@ -284,27 +303,26 @@ func foreignEnvSources(live, desired *corev1.Pod) []string {
 
 func envSources(pod *corev1.Pod) map[string]bool {
 	srcs := map[string]bool{}
-	for _, c := range pod.Spec.Containers {
-		if c.Name != "etcd" {
-			continue
-		}
-		for _, ef := range c.EnvFrom {
-			if ef.ConfigMapRef != nil {
-				srcs["ConfigMap/"+ef.ConfigMapRef.Name] = true
+	for _, containers := range [][]corev1.Container{pod.Spec.InitContainers, pod.Spec.Containers} {
+		for _, c := range containers {
+			for _, ef := range c.EnvFrom {
+				if ef.ConfigMapRef != nil {
+					srcs["ConfigMap/"+ef.ConfigMapRef.Name] = true
+				}
+				if ef.SecretRef != nil {
+					srcs["Secret/"+ef.SecretRef.Name] = true
+				}
 			}
-			if ef.SecretRef != nil {
-				srcs["Secret/"+ef.SecretRef.Name] = true
-			}
-		}
-		for _, e := range c.Env {
-			if e.ValueFrom == nil {
-				continue
-			}
-			if ref := e.ValueFrom.ConfigMapKeyRef; ref != nil {
-				srcs["ConfigMap/"+ref.Name] = true
-			}
-			if ref := e.ValueFrom.SecretKeyRef; ref != nil {
-				srcs["Secret/"+ref.Name] = true
+			for _, e := range c.Env {
+				if e.ValueFrom == nil {
+					continue
+				}
+				if ref := e.ValueFrom.ConfigMapKeyRef; ref != nil {
+					srcs["ConfigMap/"+ref.Name] = true
+				}
+				if ref := e.ValueFrom.SecretKeyRef; ref != nil {
+					srcs["Secret/"+ref.Name] = true
+				}
 			}
 		}
 	}

@@ -2474,9 +2474,9 @@ func TestPodToRecreate_SkipsPodOwnedByAnotherMember(t *testing.T) {
 	}
 }
 
-// adoptedLegacyFixture is a PVC-backed member whose Pod still carries the
-// legacy operator's envFrom on the cluster-state ConfigMap, with the etcd
-// container in the given state.
+// adoptedLegacyFixture is a PVC-backed member whose adopted StatefulSet Pod
+// still carries the legacy operator's envFrom on the cluster-state ConfigMap,
+// with the etcd container in the given state.
 func adoptedLegacyFixture(t *testing.T, state corev1.ContainerState) (*lll.EtcdMember, *corev1.Pod, *corev1.PersistentVolumeClaim) {
 	t.Helper()
 	tru := true
@@ -2497,12 +2497,13 @@ func adoptedLegacyFixture(t *testing.T, state corev1.ContainerState) (*lll.EtcdM
 		Status: lll.EtcdMemberStatus{PodName: "etcd-1", PodUID: "old-uid", PVCName: "data-etcd-1"},
 	}
 	pod := &corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{Name: "etcd-1", Namespace: "ns", UID: types.UID("old-uid"), OwnerReferences: owner},
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "etcd-1", Namespace: "ns", UID: types.UID("old-uid"), OwnerReferences: owner,
+			Labels: map[string]string{legacyStatefulSetPodLabel: "etcd-1"},
+		},
 		Spec: corev1.PodSpec{Containers: []corev1.Container{{
-			Name: "etcd",
-			EnvFrom: []corev1.EnvFromSource{{
-				ConfigMapRef: &corev1.ConfigMapEnvSource{LocalObjectReference: corev1.LocalObjectReference{Name: "etcd-cluster-state"}},
-			}},
+			Name:    "etcd",
+			EnvFrom: []corev1.EnvFromSource{legacyStateEnvFrom},
 		}}},
 		Status: corev1.PodStatus{
 			Phase:             corev1.PodRunning,
@@ -2515,10 +2516,30 @@ func adoptedLegacyFixture(t *testing.T, state corev1.ContainerState) (*lll.EtcdM
 	return member, pod, pvc
 }
 
-var createContainerConfigError = corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{
-	Reason:  "CreateContainerConfigError",
-	Message: `configmap "etcd-cluster-state" not found`,
-}}
+var (
+	legacyStateEnvFrom = corev1.EnvFromSource{
+		ConfigMapRef: &corev1.ConfigMapEnvSource{LocalObjectReference: corev1.LocalObjectReference{Name: "etcd-cluster-state"}},
+	}
+	createContainerConfigError = corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{
+		Reason:  "CreateContainerConfigError",
+		Message: `configmap "etcd-cluster-state" not found`,
+	}}
+	podInitializing = corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: "PodInitializing"}}
+)
+
+func assertPodToRecreate(t *testing.T, member *lll.EtcdMember, pod *corev1.Pod, pvc *corev1.PersistentVolumeClaim, want bool) string {
+	t.Helper()
+	c, _ := newTestClient(t, member, pod, pvc)
+	r := &EtcdMemberReconciler{Client: c, Scheme: testScheme(t)}
+	got, msg, err := r.podToRecreate(context.Background(), member)
+	if err != nil {
+		t.Fatalf("podToRecreate: %v", err)
+	}
+	if (got != nil) != want {
+		t.Fatalf("podToRecreate recreate = %v, want %v (msg %q)", got != nil, want, msg)
+	}
+	return msg
+}
 
 // An adopted Pod whose container cannot be created because of the legacy
 // ConfigMap reference is recreated from buildPod against the same PVC.
@@ -2549,72 +2570,110 @@ func TestReconcile_RecreatesPodStuckOnForeignEnvSource(t *testing.T) {
 	if fresh.UID == types.UID("old-uid") {
 		t.Fatalf("Pod must be recreated with a new UID; still old-uid")
 	}
-	for _, ctr := range fresh.Spec.Containers {
-		if len(ctr.EnvFrom) != 0 {
-			t.Fatalf("recreated Pod must not carry the legacy envFrom; got %+v", ctr.EnvFrom)
-		}
+	if len(envSources(fresh)) != 0 {
+		t.Fatalf("recreated Pod must not carry the legacy env sources; got %v", envSources(fresh))
+	}
+	if fresh.Labels[legacyStatefulSetPodLabel] != "" {
+		t.Fatalf("recreated Pod must not carry the StatefulSet label, or it could be recreated again")
 	}
 	if !pvcOwnedBy(mustGet(t, c, "data-etcd-1", "ns", &corev1.PersistentVolumeClaim{}), member) {
 		t.Fatalf("PVC must be preserved and still owned by the member")
 	}
 }
 
-// An adopted Pod that is running is left alone: the stale reference only
-// matters once the container has to be created again.
-func TestPodToRecreate_KeepsRunningAdoptedPod(t *testing.T) {
-	member, pod, pvc := adoptedLegacyFixture(t, corev1.ContainerState{Running: &corev1.ContainerStateRunning{}})
-	c, _ := newTestClient(t, member, pod, pvc)
-	r := &EtcdMemberReconciler{Client: c, Scheme: testScheme(t)}
+// A legacy Pod bootstrapped from a restore also runs a restore-agent init
+// container with the same envFrom; after a reboot that init container is the
+// one stuck, while etcd waits in PodInitializing.
+func TestPodToRecreate_StuckInitContainer(t *testing.T) {
+	member, pod, pvc := adoptedLegacyFixture(t, podInitializing)
+	pod.Spec.InitContainers = []corev1.Container{{Name: "restore-agent", EnvFrom: []corev1.EnvFromSource{legacyStateEnvFrom}}}
+	pod.Spec.Containers[0].EnvFrom = nil
+	pod.Status.Phase = corev1.PodPending
+	pod.Status.InitContainerStatuses = []corev1.ContainerStatus{{Name: "restore-agent", State: createContainerConfigError}}
 
-	got, _, err := r.podToRecreate(context.Background(), member)
-	if err != nil {
-		t.Fatalf("podToRecreate: %v", err)
-	}
-	if got != nil {
-		t.Fatalf("a running adopted Pod must not be recreated")
+	msg := assertPodToRecreate(t, member, pod, pvc, true)
+	if !strings.Contains(msg, "restore-agent") || !strings.Contains(msg, "ConfigMap/etcd-cluster-state") {
+		t.Fatalf("reason must name the stuck init container and the foreign source; got %q", msg)
 	}
 }
 
-// A config error on a Pod the operator itself would build again is not
-// recreated: the replacement would fail the same way, forever.
+func TestPodToRecreate_KeepsRunningAdoptedPod(t *testing.T) {
+	member, pod, pvc := adoptedLegacyFixture(t, corev1.ContainerState{Running: &corev1.ContainerStateRunning{}})
+	assertPodToRecreate(t, member, pod, pvc, false)
+}
+
+// Any other wait is left to the existing paths: a crash loop belongs to the
+// restart-count trigger.
+func TestPodToRecreate_KeepsAdoptedPodInOtherWait(t *testing.T) {
+	member, pod, pvc := adoptedLegacyFixture(t, corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: "CrashLoopBackOff"}})
+	assertPodToRecreate(t, member, pod, pvc, false)
+}
+
+// A Pod the operator built carries no StatefulSet label, so a mutating
+// webhook injecting a missing source cannot drive a recreate loop.
+func TestPodToRecreate_KeepsOperatorBuiltPod(t *testing.T) {
+	member, pod, pvc := adoptedLegacyFixture(t, createContainerConfigError)
+	pod.Labels = nil
+	assertPodToRecreate(t, member, pod, pvc, false)
+}
+
+// A config error on a source the operator itself emits is not recreated: the
+// replacement would fail the same way.
 func TestPodToRecreate_SkipsConfigErrorWithoutForeignEnvSource(t *testing.T) {
 	member, pod, pvc := adoptedLegacyFixture(t, createContainerConfigError)
 	pod.Spec.Containers[0].EnvFrom = nil
-	c, _ := newTestClient(t, member, pod, pvc)
-	r := &EtcdMemberReconciler{Client: c, Scheme: testScheme(t)}
-
-	got, _, err := r.podToRecreate(context.Background(), member)
-	if err != nil {
-		t.Fatalf("podToRecreate: %v", err)
-	}
-	if got != nil {
-		t.Fatalf("a config error with no foreign env source must not trigger recreation")
-	}
+	assertPodToRecreate(t, member, pod, pvc, false)
 }
 
 func TestForeignEnvSources(t *testing.T) {
-	cmRef := func(name string) corev1.EnvFromSource {
-		return corev1.EnvFromSource{ConfigMapRef: &corev1.ConfigMapEnvSource{LocalObjectReference: corev1.LocalObjectReference{Name: name}}}
+	ref := corev1.LocalObjectReference{Name: "x"}
+	cases := []struct {
+		name string
+		c    corev1.Container
+		want []string
+	}{
+		{"envFrom ConfigMap", corev1.Container{EnvFrom: []corev1.EnvFromSource{{ConfigMapRef: &corev1.ConfigMapEnvSource{LocalObjectReference: ref}}}}, []string{"ConfigMap/x"}},
+		{"envFrom Secret", corev1.Container{EnvFrom: []corev1.EnvFromSource{{SecretRef: &corev1.SecretEnvSource{LocalObjectReference: ref}}}}, []string{"Secret/x"}},
+		{"ConfigMap key", corev1.Container{Env: []corev1.EnvVar{{Name: "V", ValueFrom: &corev1.EnvVarSource{
+			ConfigMapKeyRef: &corev1.ConfigMapKeySelector{LocalObjectReference: ref, Key: "k"}}}}}, []string{"ConfigMap/x"}},
+		{"Secret key", corev1.Container{Env: []corev1.EnvVar{{Name: "V", ValueFrom: &corev1.EnvVarSource{
+			SecretKeyRef: &corev1.SecretKeySelector{LocalObjectReference: ref, Key: "k"}}}}}, []string{"Secret/x"}},
+		{"plain value", corev1.Container{Env: []corev1.EnvVar{{Name: "V", Value: "v"}}}, nil},
 	}
-	secretKey := func(name string) corev1.EnvVar {
-		return corev1.EnvVar{Name: "V", ValueFrom: &corev1.EnvVarSource{SecretKeyRef: &corev1.SecretKeySelector{
-			LocalObjectReference: corev1.LocalObjectReference{Name: name}, Key: "k",
-		}}}
+	for _, tc := range cases {
+		for _, init := range []bool{false, true} {
+			live := &corev1.Pod{}
+			if init {
+				live.Spec.InitContainers = []corev1.Container{tc.c}
+			} else {
+				live.Spec.Containers = []corev1.Container{tc.c}
+			}
+			if got := foreignEnvSources(live, &corev1.Pod{}); !equality.Semantic.DeepEqual(got, tc.want) {
+				t.Fatalf("%s (init=%v): foreignEnvSources = %v, want %v", tc.name, init, got, tc.want)
+			}
+			if got := foreignEnvSources(live, live); len(got) != 0 {
+				t.Fatalf("%s (init=%v): a source the desired Pod also uses is not foreign; got %v", tc.name, init, got)
+			}
+		}
 	}
-	podWith := func(name string, envFrom []corev1.EnvFromSource, env []corev1.EnvVar) *corev1.Pod {
-		return &corev1.Pod{Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: name, EnvFrom: envFrom, Env: env}}}}
-	}
+}
 
-	live := podWith("etcd", []corev1.EnvFromSource{cmRef("legacy"), cmRef("shared")}, []corev1.EnvVar{secretKey("creds")})
-	desired := podWith("etcd", []corev1.EnvFromSource{cmRef("shared")}, nil)
-	got := foreignEnvSources(live, desired)
-	want := []string{"ConfigMap/legacy", "Secret/creds"}
-	if !equality.Semantic.DeepEqual(got, want) {
-		t.Fatalf("foreignEnvSources = %v, want %v", got, want)
+// The restore init container buildPod emits pulls S3 credentials from a
+// Secret; a live Pod with the same container must not count it as foreign.
+func TestForeignEnvSources_RestoreSeedIsNotForeign(t *testing.T) {
+	member, _, _ := adoptedLegacyFixture(t, createContainerConfigError)
+	member.Spec.Bootstrap = true
+	member.Spec.Restore = &lll.RestoreSpec{Source: lll.SnapshotLocation{S3: &lll.S3SnapshotLocation{
+		Endpoint: "https://s3", Bucket: "b", Key: "k",
+		CredentialsSecretRef: corev1.LocalObjectReference{Name: "s3-creds"},
+	}}}
+	r := &EtcdMemberReconciler{OperatorImage: "op:img"}
+	desired := r.buildPod(member, false)
+	if !envSources(desired)["Secret/s3-creds"] {
+		t.Fatalf("fixture must exercise a restore Pod whose init container uses the S3 Secret; got %v", envSources(desired))
 	}
-
-	if got := foreignEnvSources(podWith("sidecar", []corev1.EnvFromSource{cmRef("legacy")}, nil), desired); len(got) != 0 {
-		t.Fatalf("only the etcd container counts; got %v", got)
+	if got := foreignEnvSources(r.buildPod(member, false), desired); len(got) != 0 {
+		t.Fatalf("buildPod's own sources must not be foreign; got %v", got)
 	}
 }
 
