@@ -22,6 +22,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -2409,7 +2410,7 @@ func TestReconcile_MemoryMemberTerminalPodTriggersReplacement(t *testing.T) {
 }
 
 // A Pod already terminating is left to finish.
-func TestTerminalPod_SkipsPodBeingDeleted(t *testing.T) {
+func TestPodToRecreate_SkipsPodBeingDeleted(t *testing.T) {
 	ctx := context.Background()
 	tru := true
 
@@ -2434,9 +2435,9 @@ func TestTerminalPod_SkipsPodBeingDeleted(t *testing.T) {
 	}
 	r := &EtcdMemberReconciler{Client: c, Scheme: testScheme(t)}
 
-	got, err := r.terminalPod(ctx, member)
+	got, _, err := r.podToRecreate(ctx, member)
 	if err != nil {
-		t.Fatalf("terminalPod: %v", err)
+		t.Fatalf("podToRecreate: %v", err)
 	}
 	if got != nil {
 		t.Fatalf("a Pod already terminating must not be reported as terminal")
@@ -2444,7 +2445,7 @@ func TestTerminalPod_SkipsPodBeingDeleted(t *testing.T) {
 }
 
 // A same-name terminal Pod owned by another EtcdMember is not ours.
-func TestTerminalPod_SkipsPodOwnedByAnotherMember(t *testing.T) {
+func TestPodToRecreate_SkipsPodOwnedByAnotherMember(t *testing.T) {
 	ctx := context.Background()
 	tru := true
 
@@ -2464,12 +2465,156 @@ func TestTerminalPod_SkipsPodOwnedByAnotherMember(t *testing.T) {
 	c, _ := newTestClient(t, member, pod)
 	r := &EtcdMemberReconciler{Client: c, Scheme: testScheme(t)}
 
-	got, err := r.terminalPod(ctx, member)
+	got, _, err := r.podToRecreate(ctx, member)
 	if err != nil {
-		t.Fatalf("terminalPod: %v", err)
+		t.Fatalf("podToRecreate: %v", err)
 	}
 	if got != nil {
 		t.Fatalf("a terminal Pod owned by another EtcdMember must not be reported")
+	}
+}
+
+// adoptedLegacyFixture is a PVC-backed member whose Pod still carries the
+// legacy operator's envFrom on the cluster-state ConfigMap, with the etcd
+// container in the given state.
+func adoptedLegacyFixture(t *testing.T, state corev1.ContainerState) (*lll.EtcdMember, *corev1.Pod, *corev1.PersistentVolumeClaim) {
+	t.Helper()
+	tru := true
+	owner := []metav1.OwnerReference{{
+		APIVersion: "etcd-operator.cozystack.io/v1alpha2", Kind: "EtcdMember",
+		Name: "etcd-1", UID: types.UID("member-uid"), Controller: &tru, BlockOwnerDeletion: &tru,
+	}}
+	member := &lll.EtcdMember{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "etcd-1", Namespace: "ns", UID: types.UID("member-uid"),
+			Labels:     memberLabels("etcd", "etcd-1"),
+			Finalizers: []string{MemberFinalizer},
+		},
+		Spec: lll.EtcdMemberSpec{
+			ClusterName: "etcd", Version: "3.5.12", Storage: lll.StorageSpec{Size: quickQty(t, "1Gi")},
+			InitialCluster: "x", ClusterToken: "ns-etcd",
+		},
+		Status: lll.EtcdMemberStatus{PodName: "etcd-1", PodUID: "old-uid", PVCName: "data-etcd-1"},
+	}
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "etcd-1", Namespace: "ns", UID: types.UID("old-uid"), OwnerReferences: owner},
+		Spec: corev1.PodSpec{Containers: []corev1.Container{{
+			Name: "etcd",
+			EnvFrom: []corev1.EnvFromSource{{
+				ConfigMapRef: &corev1.ConfigMapEnvSource{LocalObjectReference: corev1.LocalObjectReference{Name: "etcd-cluster-state"}},
+			}},
+		}}},
+		Status: corev1.PodStatus{
+			Phase:             corev1.PodRunning,
+			ContainerStatuses: []corev1.ContainerStatus{{Name: "etcd", State: state}},
+		},
+	}
+	pvc := &corev1.PersistentVolumeClaim{
+		ObjectMeta: metav1.ObjectMeta{Name: "data-etcd-1", Namespace: "ns", OwnerReferences: owner},
+	}
+	return member, pod, pvc
+}
+
+var createContainerConfigError = corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{
+	Reason:  "CreateContainerConfigError",
+	Message: `configmap "etcd-cluster-state" not found`,
+}}
+
+// An adopted Pod whose container cannot be created because of the legacy
+// ConfigMap reference is recreated from buildPod against the same PVC.
+func TestReconcile_RecreatesPodStuckOnForeignEnvSource(t *testing.T) {
+	ctx := context.Background()
+	member, pod, pvc := adoptedLegacyFixture(t, createContainerConfigError)
+	c, _ := newTestClient(t, member, pod, pvc)
+	r := &EtcdMemberReconciler{Client: c, Scheme: testScheme(t), EtcdClientFactory: factoryReturning(newFakeEtcd(0xdead))}
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "etcd-1", Namespace: "ns"}}
+
+	if _, err := r.Reconcile(ctx, req); err != nil {
+		t.Fatalf("Reconcile (pass 1): %v", err)
+	}
+	if err := c.Get(ctx, types.NamespacedName{Namespace: "ns", Name: "etcd-1"}, &corev1.Pod{}); !apierrors.IsNotFound(err) {
+		t.Fatalf("stuck adopted Pod must be deleted; got err=%v", err)
+	}
+	got := mustGet(t, c, "etcd-1", "ns", &lll.EtcdMember{})
+	cond := meta.FindStatusCondition(got.Status.Conditions, lll.MemberReady)
+	if cond == nil || cond.Status != metav1.ConditionFalse || cond.Reason != "PodReplacing" ||
+		!strings.Contains(cond.Message, "ConfigMap/etcd-cluster-state") {
+		t.Fatalf("MemberReady must be False/PodReplacing naming the foreign source; got %+v", cond)
+	}
+
+	if _, err := r.Reconcile(ctx, req); err != nil {
+		t.Fatalf("Reconcile (pass 2): %v", err)
+	}
+	fresh := mustGet(t, c, "etcd-1", "ns", &corev1.Pod{})
+	if fresh.UID == types.UID("old-uid") {
+		t.Fatalf("Pod must be recreated with a new UID; still old-uid")
+	}
+	for _, ctr := range fresh.Spec.Containers {
+		if len(ctr.EnvFrom) != 0 {
+			t.Fatalf("recreated Pod must not carry the legacy envFrom; got %+v", ctr.EnvFrom)
+		}
+	}
+	if !pvcOwnedBy(mustGet(t, c, "data-etcd-1", "ns", &corev1.PersistentVolumeClaim{}), member) {
+		t.Fatalf("PVC must be preserved and still owned by the member")
+	}
+}
+
+// An adopted Pod that is running is left alone: the stale reference only
+// matters once the container has to be created again.
+func TestPodToRecreate_KeepsRunningAdoptedPod(t *testing.T) {
+	member, pod, pvc := adoptedLegacyFixture(t, corev1.ContainerState{Running: &corev1.ContainerStateRunning{}})
+	c, _ := newTestClient(t, member, pod, pvc)
+	r := &EtcdMemberReconciler{Client: c, Scheme: testScheme(t)}
+
+	got, _, err := r.podToRecreate(context.Background(), member)
+	if err != nil {
+		t.Fatalf("podToRecreate: %v", err)
+	}
+	if got != nil {
+		t.Fatalf("a running adopted Pod must not be recreated")
+	}
+}
+
+// A config error on a Pod the operator itself would build again is not
+// recreated: the replacement would fail the same way, forever.
+func TestPodToRecreate_SkipsConfigErrorWithoutForeignEnvSource(t *testing.T) {
+	member, pod, pvc := adoptedLegacyFixture(t, createContainerConfigError)
+	pod.Spec.Containers[0].EnvFrom = nil
+	c, _ := newTestClient(t, member, pod, pvc)
+	r := &EtcdMemberReconciler{Client: c, Scheme: testScheme(t)}
+
+	got, _, err := r.podToRecreate(context.Background(), member)
+	if err != nil {
+		t.Fatalf("podToRecreate: %v", err)
+	}
+	if got != nil {
+		t.Fatalf("a config error with no foreign env source must not trigger recreation")
+	}
+}
+
+func TestForeignEnvSources(t *testing.T) {
+	cmRef := func(name string) corev1.EnvFromSource {
+		return corev1.EnvFromSource{ConfigMapRef: &corev1.ConfigMapEnvSource{LocalObjectReference: corev1.LocalObjectReference{Name: name}}}
+	}
+	secretKey := func(name string) corev1.EnvVar {
+		return corev1.EnvVar{Name: "V", ValueFrom: &corev1.EnvVarSource{SecretKeyRef: &corev1.SecretKeySelector{
+			LocalObjectReference: corev1.LocalObjectReference{Name: name}, Key: "k",
+		}}}
+	}
+	podWith := func(name string, envFrom []corev1.EnvFromSource, env []corev1.EnvVar) *corev1.Pod {
+		return &corev1.Pod{Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: name, EnvFrom: envFrom, Env: env}}}}
+	}
+
+	live := podWith("etcd", []corev1.EnvFromSource{cmRef("legacy"), cmRef("shared")}, []corev1.EnvVar{secretKey("creds")})
+	desired := podWith("etcd", []corev1.EnvFromSource{cmRef("shared")}, nil)
+	got := foreignEnvSources(live, desired)
+	want := []string{"ConfigMap/legacy", "Secret/creds"}
+	if !equality.Semantic.DeepEqual(got, want) {
+		t.Fatalf("foreignEnvSources = %v, want %v", got, want)
+	}
+
+	if got := foreignEnvSources(podWith("sidecar", []corev1.EnvFromSource{cmRef("legacy")}, nil), desired); len(got) != 0 {
+		t.Fatalf("only the etcd container counts; got %v", got)
 	}
 }
 

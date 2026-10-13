@@ -20,7 +20,9 @@ import (
 	"context"
 	"crypto/tls"
 	"fmt"
+	"sort"
 	"strconv"
+	"strings"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -161,24 +163,22 @@ func (r *EtcdMemberReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		}
 	}
 
-	// The kubelet never restarts a Pod in a terminal phase (a graceful node
-	// shutdown leaves etcd Succeeded) and nothing else replaces a bare Pod.
-	// Delete it so the next pass recreates it: PVC-backed resumes with the
-	// same member ID, memory-backed takes the pod-loss path above. Not
-	// quorum-gated: a whole-cluster reboot lands every member here at once.
-	// Ready=False is written before the delete so a failed write leaves the
-	// Pod in place as the retry trigger; PodUID stays for the pod-loss gate.
-	if pod, err := r.terminalPod(ctx, member); err != nil {
+	// Some Pods can never run again as they are, and nothing else replaces a
+	// bare Pod: see podToRecreate. Delete it so the next pass recreates it:
+	// PVC-backed resumes with the same member ID, memory-backed takes the
+	// pod-loss path above. Not quorum-gated: a whole-cluster reboot lands
+	// every member here at once. Ready=False is written before the delete so
+	// a failed write leaves the Pod in place as the retry trigger; PodUID
+	// stays for the pod-loss gate.
+	if pod, msg, err := r.podToRecreate(ctx, member); err != nil {
 		return ctrl.Result{}, err
 	} else if pod != nil {
-		if setMemberCondition(member, lll.MemberReady, metav1.ConditionFalse, "PodReplacing",
-			terminalPodMessage(pod)) {
+		if setMemberCondition(member, lll.MemberReady, metav1.ConditionFalse, "PodReplacing", msg) {
 			if err := r.Status().Update(ctx, member); err != nil {
 				return ctrl.Result{}, err
 			}
 		}
-		log.Info("deleting terminal-phase pod for recreation",
-			"phase", pod.Status.Phase, "reason", pod.Status.Reason, "podUID", pod.UID)
+		log.Info("deleting pod for recreation", "why", msg, "podUID", pod.UID)
 		if err := r.Delete(ctx, pod); err != nil && !errors.IsNotFound(err) {
 			return ctrl.Result{}, err
 		}
@@ -219,21 +219,96 @@ func podInTerminalPhase(pod *corev1.Pod) bool {
 	return pod.Status.Phase == corev1.PodSucceeded || pod.Status.Phase == corev1.PodFailed
 }
 
-// terminalPod returns the member's own Pod when it sits in a terminal phase
-// and is not already terminating (drain, eviction, manual delete), else nil.
-func (r *EtcdMemberReconciler) terminalPod(ctx context.Context, member *lll.EtcdMember) (*corev1.Pod, error) {
+// podToRecreate returns the member's own Pod, with the reason, when the
+// kubelet can never get it running as it is, else nil. A Pod already
+// terminating (drain, eviction, manual delete) is left to finish.
+//
+// Two shapes qualify:
+//   - a terminal phase, which the kubelet never restarts (a graceful node
+//     shutdown leaves etcd Succeeded);
+//   - an etcd container stuck in CreateContainerConfigError on an env source
+//     buildPod does not emit. An adopted legacy Pod references the legacy
+//     cluster-state ConfigMap that adoption deletes, so its next container
+//     start fails with RestartCount 0 and a Running phase — invisible to both
+//     the terminal-phase check and the crash-loop trigger. Recreating from
+//     buildPod drops the reference; a source buildPod itself emits is
+//     excluded, since recreating would hit the same error forever.
+func (r *EtcdMemberReconciler) podToRecreate(ctx context.Context, member *lll.EtcdMember) (*corev1.Pod, string, error) {
 	pod := &corev1.Pod{}
 	err := r.Get(ctx, types.NamespacedName{Namespace: member.Namespace, Name: member.Name}, pod)
 	if errors.IsNotFound(err) {
-		return nil, nil
+		return nil, "", nil
 	}
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
-	if !podOwnedBy(pod, member) || pod.DeletionTimestamp != nil || !podInTerminalPhase(pod) {
-		return nil, nil
+	if !podOwnedBy(pod, member) || pod.DeletionTimestamp != nil {
+		return nil, "", nil
 	}
-	return pod, nil
+	if podInTerminalPhase(pod) {
+		return pod, terminalPodMessage(pod), nil
+	}
+	if !etcdContainerConfigError(pod) {
+		return nil, "", nil
+	}
+	foreign := foreignEnvSources(pod, r.buildPod(member, false))
+	if len(foreign) == 0 {
+		return nil, "", nil
+	}
+	return pod, fmt.Sprintf("etcd container cannot be created (CreateContainerConfigError) and references "+
+		"env sources the operator does not manage: %s; deleted for recreation", strings.Join(foreign, ", ")), nil
+}
+
+func etcdContainerConfigError(pod *corev1.Pod) bool {
+	for _, cs := range pod.Status.ContainerStatuses {
+		if cs.Name == "etcd" {
+			return cs.State.Waiting != nil && cs.State.Waiting.Reason == "CreateContainerConfigError"
+		}
+	}
+	return false
+}
+
+// foreignEnvSources lists the ConfigMaps and Secrets the live Pod's etcd
+// container pulls env from that the desired Pod's does not, sorted.
+func foreignEnvSources(live, desired *corev1.Pod) []string {
+	want := envSources(desired)
+	var out []string
+	for src := range envSources(live) {
+		if !want[src] {
+			out = append(out, src)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+func envSources(pod *corev1.Pod) map[string]bool {
+	srcs := map[string]bool{}
+	for _, c := range pod.Spec.Containers {
+		if c.Name != "etcd" {
+			continue
+		}
+		for _, ef := range c.EnvFrom {
+			if ef.ConfigMapRef != nil {
+				srcs["ConfigMap/"+ef.ConfigMapRef.Name] = true
+			}
+			if ef.SecretRef != nil {
+				srcs["Secret/"+ef.SecretRef.Name] = true
+			}
+		}
+		for _, e := range c.Env {
+			if e.ValueFrom == nil {
+				continue
+			}
+			if ref := e.ValueFrom.ConfigMapKeyRef; ref != nil {
+				srcs["ConfigMap/"+ref.Name] = true
+			}
+			if ref := e.ValueFrom.SecretKeyRef; ref != nil {
+				srcs["Secret/"+ref.Name] = true
+			}
+		}
+	}
+	return srcs
 }
 
 // terminalPodMessage keeps the phase and reason the Pod died with; the
