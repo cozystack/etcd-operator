@@ -20,7 +20,9 @@ import (
 	"context"
 	"crypto/tls"
 	"fmt"
+	"sort"
 	"strconv"
+	"strings"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -161,24 +163,22 @@ func (r *EtcdMemberReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		}
 	}
 
-	// The kubelet never restarts a Pod in a terminal phase (a graceful node
-	// shutdown leaves etcd Succeeded) and nothing else replaces a bare Pod.
-	// Delete it so the next pass recreates it: PVC-backed resumes with the
-	// same member ID, memory-backed takes the pod-loss path above. Not
-	// quorum-gated: a whole-cluster reboot lands every member here at once.
-	// Ready=False is written before the delete so a failed write leaves the
-	// Pod in place as the retry trigger; PodUID stays for the pod-loss gate.
-	if pod, err := r.terminalPod(ctx, member); err != nil {
+	// Some Pods can never run again as they are, and nothing else replaces a
+	// bare Pod: see podToRecreate. Delete it so the next pass recreates it:
+	// PVC-backed resumes with the same member ID, memory-backed takes the
+	// pod-loss path above. Not quorum-gated: a whole-cluster reboot lands
+	// every member here at once. Ready=False is written before the delete so
+	// a failed write leaves the Pod in place as the retry trigger; PodUID
+	// stays for the pod-loss gate.
+	if pod, msg, err := r.podToRecreate(ctx, member); err != nil {
 		return ctrl.Result{}, err
 	} else if pod != nil {
-		if setMemberCondition(member, lll.MemberReady, metav1.ConditionFalse, "PodReplacing",
-			terminalPodMessage(pod)) {
+		if setMemberCondition(member, lll.MemberReady, metav1.ConditionFalse, "PodReplacing", msg) {
 			if err := r.Status().Update(ctx, member); err != nil {
 				return ctrl.Result{}, err
 			}
 		}
-		log.Info("deleting terminal-phase pod for recreation",
-			"phase", pod.Status.Phase, "reason", pod.Status.Reason, "podUID", pod.UID)
+		log.Info("deleting pod for recreation", "why", msg, "podUID", pod.UID)
 		if err := r.Delete(ctx, pod); err != nil && !errors.IsNotFound(err) {
 			return ctrl.Result{}, err
 		}
@@ -219,21 +219,127 @@ func podInTerminalPhase(pod *corev1.Pod) bool {
 	return pod.Status.Phase == corev1.PodSucceeded || pod.Status.Phase == corev1.PodFailed
 }
 
-// terminalPod returns the member's own Pod when it sits in a terminal phase
-// and is not already terminating (drain, eviction, manual delete), else nil.
-func (r *EtcdMemberReconciler) terminalPod(ctx context.Context, member *lll.EtcdMember) (*corev1.Pod, error) {
+// podToRecreate returns the member's own Pod, with the reason, when the
+// kubelet can never get it running as it is, else nil. A Pod already
+// terminating (drain, eviction, manual delete) is left to finish.
+//
+// Two shapes qualify:
+//   - a terminal phase, which the kubelet never restarts (a graceful node
+//     shutdown leaves etcd Succeeded);
+//   - an adopted legacy StatefulSet Pod whose etcd container is not running
+//     and whose etcd or init container is stuck in CreateContainerConfigError
+//     on an env source buildPod does not emit.
+//     Adoption deletes the legacy cluster-state ConfigMap those containers
+//     pull env from, so the next start after a reboot fails with RestartCount
+//     0 and a non-terminal phase, invisible to both the terminal-phase check
+//     and the crash-loop trigger. Recreating from buildPod drops the
+//     reference. A stuck sidecar never qualifies on its own: deleting a Pod
+//     whose etcd still serves would cost a member, and this branch is not
+//     quorum-gated. Only legacy Pods qualify, because buildPod never sets the
+//     StatefulSet label: a replacement is recreated at most once, even if a
+//     mutating webhook keeps injecting a missing source into it. A source
+//     buildPod itself emits is excluded, since a replacement would hit the
+//     same error.
+func (r *EtcdMemberReconciler) podToRecreate(ctx context.Context, member *lll.EtcdMember) (*corev1.Pod, string, error) {
 	pod := &corev1.Pod{}
 	err := r.Get(ctx, types.NamespacedName{Namespace: member.Namespace, Name: member.Name}, pod)
 	if errors.IsNotFound(err) {
-		return nil, nil
+		return nil, "", nil
 	}
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
-	if !podOwnedBy(pod, member) || pod.DeletionTimestamp != nil || !podInTerminalPhase(pod) {
-		return nil, nil
+	if !podOwnedBy(pod, member) || pod.DeletionTimestamp != nil {
+		return nil, "", nil
 	}
-	return pod, nil
+	if podInTerminalPhase(pod) {
+		return pod, terminalPodMessage(pod), nil
+	}
+	if pod.Labels[legacyStatefulSetPodLabel] == "" {
+		return nil, "", nil
+	}
+	stuck := containerConfigErrors(pod)
+	if len(stuck) == 0 {
+		return nil, "", nil
+	}
+	foreign := foreignEnvSources(pod, r.buildPod(member, false))
+	if len(foreign) == 0 {
+		return nil, "", nil
+	}
+	return pod, fmt.Sprintf("adopted pod cannot create container %s (CreateContainerConfigError) and references "+
+		"env sources the operator does not manage: %s; deleted for recreation",
+		strings.Join(stuck, ", "), strings.Join(foreign, ", ")), nil
+}
+
+// legacyStatefulSetPodLabel is set by the StatefulSet controller on every Pod
+// it creates, so only Pods adopted from the legacy operator carry it.
+const legacyStatefulSetPodLabel = "statefulset.kubernetes.io/pod-name"
+
+// containerConfigErrors names the init containers and the etcd container
+// waiting on CreateContainerConfigError, sorted. It returns nil while etcd is
+// running, whatever state the other containers are in.
+func containerConfigErrors(pod *corev1.Pod) []string {
+	var out []string
+	for _, cs := range pod.Status.ContainerStatuses {
+		if cs.Name != "etcd" {
+			continue
+		}
+		if cs.State.Running != nil {
+			return nil
+		}
+		if w := cs.State.Waiting; w != nil && w.Reason == "CreateContainerConfigError" {
+			out = append(out, cs.Name)
+		}
+	}
+	for _, cs := range pod.Status.InitContainerStatuses {
+		if w := cs.State.Waiting; w != nil && w.Reason == "CreateContainerConfigError" {
+			out = append(out, cs.Name)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// foreignEnvSources lists the ConfigMaps and Secrets the live Pod's init and
+// main containers pull env from that the desired Pod's do not, sorted.
+func foreignEnvSources(live, desired *corev1.Pod) []string {
+	want := envSources(desired)
+	var out []string
+	for src := range envSources(live) {
+		if !want[src] {
+			out = append(out, src)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+func envSources(pod *corev1.Pod) map[string]bool {
+	srcs := map[string]bool{}
+	for _, containers := range [][]corev1.Container{pod.Spec.InitContainers, pod.Spec.Containers} {
+		for _, c := range containers {
+			for _, ef := range c.EnvFrom {
+				if ef.ConfigMapRef != nil {
+					srcs["ConfigMap/"+ef.ConfigMapRef.Name] = true
+				}
+				if ef.SecretRef != nil {
+					srcs["Secret/"+ef.SecretRef.Name] = true
+				}
+			}
+			for _, e := range c.Env {
+				if e.ValueFrom == nil {
+					continue
+				}
+				if ref := e.ValueFrom.ConfigMapKeyRef; ref != nil {
+					srcs["ConfigMap/"+ref.Name] = true
+				}
+				if ref := e.ValueFrom.SecretKeyRef; ref != nil {
+					srcs["Secret/"+ref.Name] = true
+				}
+			}
+		}
+	}
+	return srcs
 }
 
 // terminalPodMessage keeps the phase and reason the Pod died with; the
@@ -751,6 +857,8 @@ func (r *EtcdMemberReconciler) buildPod(member *lll.EtcdMember, clusterFormed bo
 		labels[LabelRole] = RoleVoter
 	}
 	labels, annotations := applyAdditionalMetadata(labels, nil, member.Spec.AdditionalMetadata)
+	// podToRecreate treats this label as proof of an adopted legacy Pod.
+	delete(labels, legacyStatefulSetPodLabel)
 
 	// Data dir defaults to the volume root; adopted legacy members carry an
 	// AnnDataDirSubPath annotation (e.g. "default.etcd") so a replacement
