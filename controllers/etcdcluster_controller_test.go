@@ -2281,7 +2281,7 @@ func TestEnsureService_ReconcilesOwnedFields(t *testing.T) {
 	c, _ := newTestClient(t, cluster, preexisting)
 	r := &EtcdClusterReconciler{Client: c, Scheme: testScheme(t), EtcdClientFactory: factoryReturning(newFakeEtcd(0xdead))}
 
-	if err := r.ensureService(ctx, cluster, "test", corev1.ServiceSpec{
+	if _, err := r.ensureService(ctx, cluster, "test", corev1.ServiceSpec{
 		ClusterIP:                corev1.ClusterIPNone,
 		PublishNotReadyAddresses: true,
 		Selector:                 map[string]string{LabelCluster: "test"},
@@ -3689,7 +3689,7 @@ func TestAdditionalMetadata_AppliedToServiceAndPDB(t *testing.T) {
 		t.Errorf("PDB annotation example.com/note = %q, want bar", pdb.Annotations["example.com/note"])
 	}
 
-	if err := r.ensureService(ctx, cluster, "test-svc", corev1.ServiceSpec{}); err != nil {
+	if _, err := r.ensureService(ctx, cluster, "test-svc", corev1.ServiceSpec{}); err != nil {
 		t.Fatalf("ensureService: %v", err)
 	}
 	svc := &corev1.Service{}

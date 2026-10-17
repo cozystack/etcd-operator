@@ -300,7 +300,7 @@ Semantics:
 - **Owned only when set.** With the field set, the operator writes it on create and reconciles any drift back to it. With it unset (no `clientService`, or no `trafficDistribution` in it), the operator does not touch the field — a value patched onto the Service by hand survives.
 - **Client Service only.** The headless Service is never given a traffic distribution.
 - **Not latched.** The Service carries no consensus state, so unlike the member-level fields a change is applied on the next reconcile rather than waiting for the current `status.observed` target.
-- **Apiserver support.** `PreferClose` needs Kubernetes 1.31+ (beta, on by default; GA in 1.33). `PreferSameZone` and `PreferSameNode` need 1.34+, where the `PreferSameTrafficDistribution` feature gate is beta and on by default. An apiserver that does not know the field drops it silently (the setting has no effect); one that knows the field but not the value rejects the Service write, which surfaces as a reconcile error for that cluster.
+- **Apiserver support.** `PreferClose` needs Kubernetes 1.31+ (beta, on by default; GA in 1.33). `PreferSameZone` and `PreferSameNode` need 1.34+, where the `PreferSameTrafficDistribution` feature gate is beta and on by default. On an older apiserver the setting never blocks the cluster: if the apiserver rejects the value, or does not know the field and drops it, the operator reconciles the Service without it, emits a Warning Event on the `EtcdCluster` (`TrafficDistributionRejected` or `TrafficDistributionNotPersisted`) and tries the value again an hour later, so it lands on its own once the apiserver is upgraded. Changing the value in the spec retries at once.
 
 ## etcd tuning options
 

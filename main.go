@@ -229,6 +229,7 @@ func main() {
 		Scheme:               mgr.GetScheme(),
 		CertManagerAvailable: certManagerAvailable,
 		ClusterDomain:        clusterDomain,
+		Recorder:             mgr.GetEventRecorderFor("etcd-operator"),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "EtcdCluster")
 		os.Exit(1)

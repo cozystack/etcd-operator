@@ -16,6 +16,7 @@ import (
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -79,5 +80,41 @@ func TestClientService_ApiserverPersistsTrafficDistribution(t *testing.T) {
 	}
 	if got.Spec.TrafficDistribution == nil || *got.Spec.TrafficDistribution != td {
 		t.Fatalf("apiserver did not persist trafficDistribution: %v", got.Spec.TrafficDistribution)
+	}
+}
+
+// Before Kubernetes 1.34 the apiserver refuses PreferSameZone on a Service.
+// The cluster controller recognises that refusal by its shape (Invalid, every
+// cause on spec.trafficDistribution) and reconciles the client Service
+// without the field instead of failing; this pins the shape against a real
+// apiserver. On 1.34+ the value is accepted and there is nothing to check.
+func TestClientService_ApiserverRejectionNamesTrafficDistribution(t *testing.T) {
+	skipIfNoEnvtest(t)
+	ctx := context.Background()
+
+	td := corev1.ServiceTrafficDistributionPreferSameZone
+	svc := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{Name: "td-reject-probe", Namespace: "default"},
+		Spec: corev1.ServiceSpec{
+			Ports:               []corev1.ServicePort{{Name: "client", Port: 2379}},
+			TrafficDistribution: &td,
+		},
+	}
+	err := k8s.Create(ctx, svc)
+	if err == nil {
+		_ = k8s.Delete(ctx, svc)
+		t.Skipf("apiserver accepts trafficDistribution=%q (1.34+)", td)
+	}
+	if !apierrors.IsInvalid(err) {
+		t.Fatalf("Create error = %v, want Invalid", err)
+	}
+	status, ok := err.(apierrors.APIStatus)
+	if !ok || status.Status().Details == nil || len(status.Status().Details.Causes) == 0 {
+		t.Fatalf("Invalid error carries no causes: %v", err)
+	}
+	for _, c := range status.Status().Details.Causes {
+		if c.Field != "spec.trafficDistribution" {
+			t.Fatalf("cause on %q, want spec.trafficDistribution: %v", c.Field, err)
+		}
 	}
 }
