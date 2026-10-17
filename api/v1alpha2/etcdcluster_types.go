@@ -600,7 +600,9 @@ type ClientServiceSpec struct {
 	// Requires an apiserver that serves the field: Kubernetes 1.31+ for
 	// "PreferClose" (beta, on by default; GA in 1.33), and 1.34+ for
 	// "PreferSameZone" and "PreferSameNode" (PreferSameTrafficDistribution
-	// feature gate, beta and on by default from 1.34).
+	// feature gate, beta and on by default from 1.34). A value the apiserver
+	// rejects or drops is reported with a Warning Event, left off the
+	// Service and retried hourly; it does not block the reconcile.
 	// +kubebuilder:validation:Enum=PreferClose;PreferSameZone;PreferSameNode
 	// +optional
 	TrafficDistribution *string `json:"trafficDistribution,omitempty"`
