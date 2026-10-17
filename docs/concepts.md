@@ -281,26 +281,57 @@ Merge semantics:
 - **Apply-on-create.** Objects are stamped when created; editing the field re-stamps nothing retroactively. Newly-created objects (scale-up members and their PVCs, replacements) pick up the latest latched value.
 - **Latched.** A mid-flight edit only takes effect once the current `status.observed` target is reached, like every other latched field.
 
-## Client Service
+## Client Service traffic distribution
 
-The operator creates two Services per cluster: the headless `<cluster>` (per-Pod DNS for peers, publishes not-ready addresses) and `<cluster>-client` (a ClusterIP over ready members, the stable endpoint for applications). On both it reconciles drift only on the fields it owns — the selector, `publishNotReadyAddresses`, and its named ports — and leaves everything else (labels, annotations, extra ports, type) to whoever set it.
-
-`spec.clientService` configures `<cluster>-client` further. Today it carries one field:
+The operator creates two Services per cluster: the headless `<cluster>` (per-Pod DNS for peers, publishes not-ready addresses) and `<cluster>-client` (a ClusterIP over ready members, the stable endpoint for applications). In a cluster stretched across zones, clients of `<cluster>-client` can be kept on a member in their own zone by setting the Service's [`spec.trafficDistribution`](https://kubernetes.io/docs/concepts/services-networking/service/#traffic-distribution). The operator manages that field from an annotation on the `EtcdCluster`:
 
 ```yaml
+apiVersion: etcd-operator.cozystack.io/v1alpha2
+kind: EtcdCluster
+metadata:
+  name: my-etcd
+  annotations:
+    etcd-operator.cozystack.io/client-service-traffic-distribution: PreferClose
 spec:
-  clientService:
-    trafficDistribution: PreferClose   # PreferClose | PreferSameZone | PreferSameNode
+  replicas: 3
+  topologySpreadConstraints:          # one member per zone
+    - maxSkew: 1
+      topologyKey: topology.kubernetes.io/zone
+      whenUnsatisfiable: DoNotSchedule
+      labelSelector:
+        matchLabels:
+          etcd-operator.cozystack.io/cluster: my-etcd
 ```
 
-`trafficDistribution` is copied to the Service's `spec.trafficDistribution`. The main use is a cluster stretched across zones (for example two sites plus a witness): with `PreferClose`, the EndpointSlice controller writes zone hints on the client Service's endpoints and a proxy that honours them (kube-proxy, Cilium) sends each client to a ready member in its own zone, falling back to the others when its zone has none. Clients stop paying cross-zone latency on every request, and a site keeps serving reads locally.
+or, on an existing cluster, `kubectl annotate etcdcluster my-etcd etcd-operator.cozystack.io/client-service-traffic-distribution=PreferClose`.
+
+The annotation is a stopgap until the setting gets a typed field in the `EtcdCluster` spec. When that field lands it will take precedence, and the annotation will be deprecated.
+
+Accepted values, and the Kubernetes version whose apiserver serves each:
+
+| Value | Routes to | Kubernetes |
+|---|---|---|
+| `PreferClose` | a ready member in the client's zone | 1.31+ (beta, on by default; GA in 1.33). From 1.34 an alias of `PreferSameZone`. |
+| `PreferSameZone` | a ready member in the client's zone | 1.34+ (beta, on by default) |
+| `PreferSameNode` | a ready member on the client's node | 1.34+ (beta, on by default) |
+
+In every case the proxy falls back to all ready members when none matches.
 
 Semantics:
 
-- **Owned only when set.** With the field set, the operator writes it on create and reconciles any drift back to it. With it unset (no `clientService`, or no `trafficDistribution` in it), the operator does not touch the field — a value patched onto the Service by hand survives.
-- **Client Service only.** The headless Service is never given a traffic distribution.
-- **Not latched.** The Service carries no consensus state, so unlike the member-level fields a change is applied on the next reconcile rather than waiting for the current `status.observed` target.
-- **Apiserver support.** `PreferClose` needs Kubernetes 1.31+ (beta, on by default; GA in 1.33). `PreferSameZone` and `PreferSameNode` need 1.34+, where the `PreferSameTrafficDistribution` feature gate is beta and on by default. An apiserver that does not know the field drops it silently (the setting has no effect); one that knows the field but not the value rejects the Service write, which surfaces as a reconcile error for that cluster.
+- **Set or changed:** applied to `<cluster>-client` on the next reconcile. It is not latched through `status.observed`: the Service carries no consensus state.
+- **Removed:** the field is cleared from the Service.
+- **Owned via server-side apply.** The operator writes only this one field, with field manager `etcd-operator-traffic-distribution`, and reconciles drift back while the annotation is set. Removing the annotation releases the field: it is cleared unless another field manager also set it. A value set on the Service by someone else while there is no annotation is left alone.
+- **Invalid values never block the cluster.** A value outside the table (typos, wrong case, empty) leaves the field unset and emits a `Warning` Event `InvalidTrafficDistribution` on the `EtcdCluster`. A value the apiserver rejects (`PreferSameZone` / `PreferSameNode` before 1.34) emits `TrafficDistributionRejected` and also leaves the field unset. An apiserver that doesn't serve the field at all (before 1.31) drops it; the operator notices and emits `TrafficDistributionNotPersisted`. In all three cases the rest of the reconcile carries on. Check with `kubectl describe etcdcluster my-etcd`.
+- **Client Service only.** The headless Service is never given a traffic distribution: it has no ClusterIP, so no proxy routes through it.
+
+Prerequisites for zone-local routing (`PreferClose` / `PreferSameZone`):
+
+- Every node that runs etcd members **or their clients** carries the [`topology.kubernetes.io/zone`](https://kubernetes.io/docs/reference/labels-annotations-taints/#topologykubernetesiozone) label. Cloud providers set it; on bare metal, label nodes yourself (`kubectl label node <node> topology.kubernetes.io/zone=<zone>`). The EndpointSlice controller derives each endpoint's zone hint from its node's label, and kube-proxy ignores hints altogether (routing cluster-wide) when an endpoint has none or the client's node has no zone.
+- Members are spread across the zones, e.g. with the `topologySpreadConstraints` above. A zone without a ready member sends its clients cluster-wide.
+- The Service proxy honours EndpointSlice hints: kube-proxy does; for a kube-proxy replacement such as Cilium, check that its service-topology support is enabled.
+
+`PreferSameNode` needs no labels; it only helps when clients run on the same nodes as members.
 
 ## etcd tuning options
 

@@ -34,6 +34,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
+	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -55,6 +56,9 @@ type EtcdClusterReconciler struct {
 	// EtcdClientFactory builds an etcd client. Tests inject a fake;
 	// production wiring uses DefaultEtcdClientFactory.
 	EtcdClientFactory EtcdClientFactory
+
+	// Recorder emits events on the EtcdCluster. Tests may leave it nil.
+	Recorder record.EventRecorder
 
 	// CertManagerAvailable reports whether the cert-manager.io/v1 API
 	// is registered on this cluster. Detected once at operator startup
@@ -84,6 +88,7 @@ type EtcdClusterReconciler struct {
 //+kubebuilder:rbac:groups="",resources=services,verbs=get;list;watch;create;update;patch
 //+kubebuilder:rbac:groups=policy,resources=poddisruptionbudgets,verbs=get;list;watch;create;update;patch;delete
 //+kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch
+//+kubebuilder:rbac:groups="",resources=events,verbs=create;patch
 // `delete` is intentionally omitted from the certificates verb list:
 // each Certificate is owned by the EtcdCluster via SetControllerReference,
 // and spec.tls is CEL-immutable post-create, so the only Certificate
@@ -1917,25 +1922,22 @@ func (r *EtcdClusterReconciler) ensureServices(ctx context.Context, cluster *lll
 	}
 
 	// Client service — stable endpoint for applications.
-	clientSpec := corev1.ServiceSpec{
+	if err := r.ensureService(ctx, cluster, clientServiceName(cluster), corev1.ServiceSpec{
 		Selector: map[string]string{LabelCluster: cluster.Name},
 		Ports: []corev1.ServicePort{
 			{Name: "client", Port: 2379},
 		},
+	}); err != nil {
+		return err
 	}
-	if cs := cluster.Spec.ClientService; cs != nil {
-		clientSpec.TrafficDistribution = cs.TrafficDistribution
-	}
-	return r.ensureService(ctx, cluster, cluster.Name+"-client", clientSpec)
+	return r.reconcileClientTrafficDistribution(ctx, cluster)
 }
 
 // ensureService creates the Service if absent and reconciles drift on the
 // fields the operator actually owns: Selector, PublishNotReadyAddresses,
-// the named Ports it requires, and TrafficDistribution when the desired
-// spec sets it. Everything else (labels, annotations, user-added ports,
-// type, a hand-set TrafficDistribution the spec doesn't ask for) is
-// preserved — admission webhooks routinely inject these and we don't want
-// to fight them.
+// and the named Ports it requires. Everything else (labels, annotations,
+// user-added ports, type) is preserved — admission webhooks routinely
+// inject these and we don't want to fight them.
 func (r *EtcdClusterReconciler) ensureService(
 	ctx context.Context,
 	cluster *lll.EtcdCluster,
@@ -1974,14 +1976,6 @@ func (r *EtcdClusterReconciler) ensureService(
 	}
 	if svc.Spec.PublishNotReadyAddresses != desired.PublishNotReadyAddresses {
 		svc.Spec.PublishNotReadyAddresses = desired.PublishNotReadyAddresses
-		changed = true
-	}
-	// TrafficDistribution is owned only when asked for: nil leaves whatever
-	// is on the Service, including a value set by hand.
-	if desired.TrafficDistribution != nil &&
-		(svc.Spec.TrafficDistribution == nil || *svc.Spec.TrafficDistribution != *desired.TrafficDistribution) {
-		td := *desired.TrafficDistribution
-		svc.Spec.TrafficDistribution = &td
 		changed = true
 	}
 	// Required ports must be present with correct values. Extra ports the
@@ -2025,6 +2019,12 @@ func upsertPortByName(ports *[]corev1.ServicePort, want corev1.ServicePort) bool
 	}
 	*ports = append(*ports, want)
 	return true
+}
+
+func (r *EtcdClusterReconciler) event(obj client.Object, eventType, reason, msg string) {
+	if r.Recorder != nil {
+		r.Recorder.Event(obj, eventType, reason, msg)
+	}
 }
 
 // ── Manager wiring ───────────────────────────────────────────────────────

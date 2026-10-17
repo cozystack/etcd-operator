@@ -82,6 +82,12 @@ const (
 	// footgun. Superseded by an explicit spec.tls.peer.secretRef/certManager
 	// (real mTLS wins; precedence lives in clusterPeerAutoTLS).
 	AnnPeerAutoTLS = ReservedAnnotationPrefix + "peer-auto-tls"
+
+	// AnnClientServiceTrafficDistribution, set on an EtcdCluster, is copied
+	// to spec.trafficDistribution of the "<cluster>-client" Service. A
+	// stopgap until the setting gets a typed spec field; see
+	// reconcileClientTrafficDistribution.
+	AnnClientServiceTrafficDistribution = ReservedAnnotationPrefix + "client-service-traffic-distribution"
 )
 
 // etcdDataDirRoot is the mount path of every member's data volume; --data-dir

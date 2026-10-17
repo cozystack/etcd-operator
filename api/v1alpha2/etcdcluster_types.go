@@ -569,41 +569,6 @@ type EtcdClusterSpec struct {
 	// status.observed.
 	// +optional
 	ImagePullSecrets []corev1.LocalObjectReference `json:"imagePullSecrets,omitempty"`
-
-	// ClientService configures the "<cluster>-client" Service the operator
-	// creates for applications. Absent means the operator manages only the
-	// fields it always owns (selector and the client port) and leaves the
-	// rest of the Service alone. Does not affect the headless Service.
-	//
-	// Unlike the member-level fields above, this is not latched through
-	// status.observed: the Service carries no consensus state, so a change
-	// is applied on the next reconcile.
-	// +optional
-	ClientService *ClientServiceSpec `json:"clientService,omitempty"`
-}
-
-// ClientServiceSpec configures the "<cluster>-client" Service. Grouped in its
-// own struct so further Service-level knobs land next to TrafficDistribution
-// rather than as loose fields on EtcdClusterSpec.
-type ClientServiceSpec struct {
-	// TrafficDistribution sets the client Service's spec.trafficDistribution,
-	// a hint to the Service proxy (kube-proxy, Cilium, ...) on how to route
-	// traffic across the ready etcd members. The common use is a cluster
-	// stretched across zones: "PreferClose" (or "PreferSameZone") keeps
-	// clients talking to a member in their own zone while one is ready.
-	// The values mirror corev1.ServiceSpec.TrafficDistribution.
-	//
-	// When set, the operator writes it on create and reconciles drift back
-	// to it. When absent, the operator does not touch the field, so a value
-	// set on the Service by hand is preserved.
-	//
-	// Requires an apiserver that serves the field: Kubernetes 1.31+ for
-	// "PreferClose" (beta, on by default; GA in 1.33), and 1.34+ for
-	// "PreferSameZone" and "PreferSameNode" (PreferSameTrafficDistribution
-	// feature gate, beta and on by default from 1.34).
-	// +kubebuilder:validation:Enum=PreferClose;PreferSameZone;PreferSameNode
-	// +optional
-	TrafficDistribution *string `json:"trafficDistribution,omitempty"`
 }
 
 // AdditionalMetadata is a set of labels and annotations the operator merges
