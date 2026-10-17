@@ -7,3 +7,7 @@
 # because the area is theirs, others because the role carries the repository.
 
 * @lllamnyp @androndo @sircthulhu
+
+# API surface: the Go types and the CRDs generated from them.
+/api/ @lllamnyp
+/charts/etcd-operator/crd-bases/ @lllamnyp
