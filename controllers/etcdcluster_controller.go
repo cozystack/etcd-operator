@@ -1917,25 +1917,19 @@ func (r *EtcdClusterReconciler) ensureServices(ctx context.Context, cluster *lll
 	}
 
 	// Client service — stable endpoint for applications.
-	clientSpec := corev1.ServiceSpec{
+	return r.ensureService(ctx, cluster, cluster.Name+"-client", corev1.ServiceSpec{
 		Selector: map[string]string{LabelCluster: cluster.Name},
 		Ports: []corev1.ServicePort{
 			{Name: "client", Port: 2379},
 		},
-	}
-	if cs := cluster.Spec.ClientService; cs != nil {
-		clientSpec.TrafficDistribution = cs.TrafficDistribution
-	}
-	return r.ensureService(ctx, cluster, cluster.Name+"-client", clientSpec)
+	})
 }
 
 // ensureService creates the Service if absent and reconciles drift on the
 // fields the operator actually owns: Selector, PublishNotReadyAddresses,
-// the named Ports it requires, and TrafficDistribution when the desired
-// spec sets it. Everything else (labels, annotations, user-added ports,
-// type, a hand-set TrafficDistribution the spec doesn't ask for) is
-// preserved — admission webhooks routinely inject these and we don't want
-// to fight them.
+// and the named Ports it requires. Everything else (labels, annotations,
+// user-added ports, type) is preserved — admission webhooks routinely
+// inject these and we don't want to fight them.
 func (r *EtcdClusterReconciler) ensureService(
 	ctx context.Context,
 	cluster *lll.EtcdCluster,
@@ -1974,14 +1968,6 @@ func (r *EtcdClusterReconciler) ensureService(
 	}
 	if svc.Spec.PublishNotReadyAddresses != desired.PublishNotReadyAddresses {
 		svc.Spec.PublishNotReadyAddresses = desired.PublishNotReadyAddresses
-		changed = true
-	}
-	// TrafficDistribution is owned only when asked for: nil leaves whatever
-	// is on the Service, including a value set by hand.
-	if desired.TrafficDistribution != nil &&
-		(svc.Spec.TrafficDistribution == nil || *svc.Spec.TrafficDistribution != *desired.TrafficDistribution) {
-		td := *desired.TrafficDistribution
-		svc.Spec.TrafficDistribution = &td
 		changed = true
 	}
 	// Required ports must be present with correct values. Extra ports the

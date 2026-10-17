@@ -281,27 +281,6 @@ Merge semantics:
 - **Apply-on-create.** Objects are stamped when created; editing the field re-stamps nothing retroactively. Newly-created objects (scale-up members and their PVCs, replacements) pick up the latest latched value.
 - **Latched.** A mid-flight edit only takes effect once the current `status.observed` target is reached, like every other latched field.
 
-## Client Service
-
-The operator creates two Services per cluster: the headless `<cluster>` (per-Pod DNS for peers, publishes not-ready addresses) and `<cluster>-client` (a ClusterIP over ready members, the stable endpoint for applications). On both it reconciles drift only on the fields it owns — the selector, `publishNotReadyAddresses`, and its named ports — and leaves everything else (labels, annotations, extra ports, type) to whoever set it.
-
-`spec.clientService` configures `<cluster>-client` further. Today it carries one field:
-
-```yaml
-spec:
-  clientService:
-    trafficDistribution: PreferClose   # PreferClose | PreferSameZone | PreferSameNode
-```
-
-`trafficDistribution` is copied to the Service's `spec.trafficDistribution`. The main use is a cluster stretched across zones (for example two sites plus a witness): with `PreferClose`, the EndpointSlice controller writes zone hints on the client Service's endpoints and a proxy that honours them (kube-proxy, Cilium) sends each client to a ready member in its own zone, falling back to the others when its zone has none. Clients stop paying cross-zone latency on every request, and a site keeps serving reads locally.
-
-Semantics:
-
-- **Owned only when set.** With the field set, the operator writes it on create and reconciles any drift back to it. With it unset (no `clientService`, or no `trafficDistribution` in it), the operator does not touch the field — a value patched onto the Service by hand survives.
-- **Client Service only.** The headless Service is never given a traffic distribution.
-- **Not latched.** The Service carries no consensus state, so unlike the member-level fields a change is applied on the next reconcile rather than waiting for the current `status.observed` target.
-- **Apiserver support.** `PreferClose` needs Kubernetes 1.31+ (beta, on by default; GA in 1.33). `PreferSameZone` and `PreferSameNode` need 1.34+, where the `PreferSameTrafficDistribution` feature gate is beta and on by default. An apiserver that does not know the field drops it silently (the setting has no effect); one that knows the field but not the value rejects the Service write, which surfaces as a reconcile error for that cluster.
-
 ## etcd tuning options
 
 `spec.options` carries the etcd server tuning flags the operator renders onto each member's command line:
