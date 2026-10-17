@@ -34,6 +34,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
+	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -74,6 +75,18 @@ type EtcdClusterReconciler struct {
 	// Defaults to "cluster.local" when empty. Override at operator
 	// startup with the --cluster-domain flag.
 	ClusterDomain string
+
+	// Recorder emits Events on the EtcdCluster. Optional: a nil Recorder
+	// drops them, which unit tests that don't assert on Events rely on.
+	Recorder record.EventRecorder
+
+	// Now returns the current time; nil means time.Now. Tests inject a
+	// clock to step past backoff windows.
+	Now func() time.Time
+
+	// tdBackoff holds client-Service trafficDistribution values the
+	// apiserver would not keep, so they are not rewritten every reconcile.
+	tdBackoff trafficDistributionBackoff
 }
 
 //+kubebuilder:rbac:groups=etcd-operator.cozystack.io,resources=etcdclusters,verbs=get;list;watch
@@ -82,6 +95,7 @@ type EtcdClusterReconciler struct {
 //+kubebuilder:rbac:groups=etcd-operator.cozystack.io,resources=etcdmembers,verbs=get;list;watch;create;delete
 //+kubebuilder:rbac:groups=etcd-operator.cozystack.io,resources=etcdmembers/status,verbs=get;update;patch
 //+kubebuilder:rbac:groups="",resources=services,verbs=get;list;watch;create;update;patch
+//+kubebuilder:rbac:groups="",resources=events,verbs=create;patch
 //+kubebuilder:rbac:groups=policy,resources=poddisruptionbudgets,verbs=get;list;watch;create;update;patch;delete
 //+kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch
 // `delete` is intentionally omitted from the certificates verb list:
@@ -1904,7 +1918,7 @@ func (r *EtcdClusterReconciler) ensureServices(ctx context.Context, cluster *lll
 	// self-GCs as they roll) for the adopted pods, which carry the legacy
 	// name in their AnnHeadlessServiceName annotation; the operator does not
 	// manage that one.
-	if err := r.ensureService(ctx, cluster, cluster.Name, corev1.ServiceSpec{
+	if _, err := r.ensureService(ctx, cluster, cluster.Name, corev1.ServiceSpec{
 		ClusterIP:                corev1.ClusterIPNone,
 		PublishNotReadyAddresses: true,
 		Selector:                 map[string]string{LabelCluster: cluster.Name},
@@ -1917,16 +1931,53 @@ func (r *EtcdClusterReconciler) ensureServices(ctx context.Context, cluster *lll
 	}
 
 	// Client service — stable endpoint for applications.
+	clientName := cluster.Name + "-client"
+	clientKey := types.NamespacedName{Namespace: cluster.Namespace, Name: clientName}
 	clientSpec := corev1.ServiceSpec{
 		Selector: map[string]string{LabelCluster: cluster.Name},
 		Ports: []corev1.ServicePort{
 			{Name: "client", Port: 2379},
 		},
+		TrafficDistribution: r.clientServiceTrafficDistribution(cluster, clientKey),
 	}
-	if cs := cluster.Spec.ClientService; cs != nil {
-		clientSpec.TrafficDistribution = cs.TrafficDistribution
+	svc, err := r.ensureService(ctx, cluster, clientName, clientSpec)
+	td := clientSpec.TrafficDistribution
+	if td == nil {
+		return err
 	}
-	return r.ensureService(ctx, cluster, cluster.Name+"-client", clientSpec)
+	// trafficDistribution is a routing hint, and the apiserver's support
+	// for it depends on its version: before 1.34 it refuses PreferSameZone
+	// and PreferSameNode, and an apiserver that does not know the field
+	// drops it. Neither may stop the reconcile (ensureServices runs ahead
+	// of bootstrap, scaling and member replacement) or turn it into a
+	// write on every pass, so the value is reported, backed off and the
+	// Service reconciled without it.
+	if err != nil {
+		if !isTrafficDistributionRejected(err) {
+			return err
+		}
+		r.tdBackoff.suppress(clientKey, *td, r.now())
+		r.eventf(cluster, corev1.EventTypeWarning, EventReasonTrafficDistributionRejected,
+			"Service %s: apiserver rejected trafficDistribution %q, reconciling the Service without it and retrying in %s: %v",
+			clientName, *td, trafficDistributionRetryInterval, err)
+		clientSpec.TrafficDistribution = nil
+		_, err = r.ensureService(ctx, cluster, clientName, clientSpec)
+		return err
+	}
+	if !trafficDistributionPersisted(svc, *td) {
+		r.tdBackoff.suppress(clientKey, *td, r.now())
+		r.eventf(cluster, corev1.EventTypeWarning, EventReasonTrafficDistributionNotPersisted,
+			"Service %s: apiserver did not persist trafficDistribution %q (it does not support the field), retrying in %s",
+			clientName, *td, trafficDistributionRetryInterval)
+	}
+	return nil
+}
+
+func (r *EtcdClusterReconciler) eventf(obj runtime.Object, eventType, reason, format string, args ...any) {
+	if r.Recorder == nil {
+		return
+	}
+	r.Recorder.Eventf(obj, eventType, reason, format, args...)
 }
 
 // ensureService creates the Service if absent and reconciles drift on the
@@ -1936,12 +1987,15 @@ func (r *EtcdClusterReconciler) ensureServices(ctx context.Context, cluster *lll
 // type, a hand-set TrafficDistribution the spec doesn't ask for) is
 // preserved — admission webhooks routinely inject these and we don't want
 // to fight them.
+//
+// It returns the Service as the apiserver last reported it: the created or
+// patched object, or the existing one when nothing needed to change.
 func (r *EtcdClusterReconciler) ensureService(
 	ctx context.Context,
 	cluster *lll.EtcdCluster,
 	name string,
 	desired corev1.ServiceSpec,
-) error {
+) (*corev1.Service, error) {
 	svc := &corev1.Service{}
 	err := r.Get(ctx, types.NamespacedName{Namespace: cluster.Namespace, Name: name}, svc)
 	if errors.IsNotFound(err) {
@@ -1956,12 +2010,15 @@ func (r *EtcdClusterReconciler) ensureService(
 			Spec: desired,
 		}
 		if err := controllerutil.SetControllerReference(cluster, svc, r.Scheme); err != nil {
-			return err
+			return nil, err
 		}
-		return r.Create(ctx, svc)
+		if err := r.Create(ctx, svc); err != nil {
+			return nil, err
+		}
+		return svc, nil
 	}
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	// Drift reconcile on owned fields only.
@@ -1992,9 +2049,12 @@ func (r *EtcdClusterReconciler) ensureService(
 		}
 	}
 	if !changed {
-		return nil
+		return svc, nil
 	}
-	return r.Patch(ctx, svc, client.MergeFrom(original))
+	if err := r.Patch(ctx, svc, client.MergeFrom(original)); err != nil {
+		return nil, err
+	}
+	return svc, nil
 }
 
 func equalSelectors(a, b map[string]string) bool {
