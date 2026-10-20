@@ -382,9 +382,9 @@ its name.
 
 The legacy operator's `spec.options` was a free-form `map[string]string` passed
 through as etcd flags. This operator keeps the `spec.options` path but types it
-as a closed struct covering exactly the keys Cozystack's etcd package set —
-arbitrary flag injection is no longer possible (see
-[concepts: etcd tuning options](concepts.md#etcd-tuning-options) for why).
+as a struct covering exactly the keys Cozystack's etcd package set; other
+flags move to `spec.extraArgs`, which rejects the flags the operator manages
+(see [concepts: etcd tuning options](concepts.md#etcd-tuning-options) for why).
 
 The key mapping, using Cozystack's actual legacy values:
 
@@ -404,8 +404,9 @@ The key mapping, using Cozystack's actual legacy values:
 Note the value types: `quotaBackendBytes` and `snapshotCount` are integers, not
 quoted strings. `etcd-migrate` performs this mapping automatically. Any other
 key the legacy map accepted has no typed equivalent — the tool drops it with a
-warning; if you relied on one, file an issue: the flag gets a typed field, not
-a pass-through.
+warning. If you relied on one, set it under `spec.extraArgs` after the
+migration (see [concepts: extra etcd flags](concepts.md#extra-etcd-flags));
+flags the operator manages itself are rejected there.
 
 ## Authentication: root credentials are BYO and required
 

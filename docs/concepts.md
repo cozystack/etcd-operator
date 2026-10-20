@@ -348,9 +348,40 @@ spec:
 
 Every field is optional; an unset field emits no flag, leaving etcd's built-in default in force.
 
-The set is deliberately **closed and typed**. The legacy aenix operator exposed `spec.options` as a free-form `map[string]string`, which let users inject arbitrary flags — including ones that conflict with flags the operator itself manages (listen URLs, initial-cluster wiring, TLS paths). This operator types exactly the keys Cozystack's etcd package actually used; a new tuning knob lands as a new typed field with validation, not via an escape hatch.
+The typed set covers the knobs worth validating. The legacy aenix operator exposed `spec.options` as a free-form `map[string]string`, which let users inject flags that conflict with the ones the operator itself manages (listen URLs, initial-cluster wiring, TLS paths); this operator types exactly the keys Cozystack's etcd package actually used. Any other flag goes through [`spec.extraArgs`](#extra-etcd-flags).
 
 Like `spec.resources`, options are latched through `status.observed` and apply **to newly-created members only** (scale-up, replacement) — the operator does not roll existing Pods when they change. To apply a tuning change to an existing cluster, delete one Pod at a time and let the operator recreate it with the new flags. A transient mix of old- and new-flag members is harmless: these are per-member settings (backend quota, compaction cadence, raft snapshot interval), the same heterogeneity any manual rolling flag change passes through.
+
+## Extra etcd flags
+
+`spec.extraArgs` passes flags the typed `spec.options` does not cover — an etcd flag no field exists for yet, or flags for an image that wraps etcd and reads options of its own:
+
+```yaml
+spec:
+  extraArgs:
+    log-level: debug                          # --log-level=debug
+    experimental-initial-corrupt-check: "true"
+```
+
+Keys are flag names without the leading dashes (lowercase words joined by `-`); each entry renders as `--key=value` with the value passed as is. The entries come after the operator's own flags, sorted by key, so the rendered Pod does not change between reconciles. Values are strings: quote `"true"` and numbers in YAML.
+
+Flags the operator manages are rejected at admission, with a message naming the flag:
+
+| Flags | Managed through |
+|---|---|
+| `name`, `data-dir`, `wal-dir` | member identity and data placement |
+| `listen-peer-urls`, `listen-client-urls`, `listen-client-http-urls`, `listen-metrics-urls`, `advertise-client-urls`, `initial-advertise-peer-urls` | listeners and member URLs |
+| `initial-cluster`, `initial-cluster-token`, `initial-cluster-state`, `force-new-cluster`, `discovery`, `discovery-srv`, `discovery-endpoints` | cluster bootstrap and membership |
+| `config-file` | would make etcd ignore the operator's command line |
+| `auto-tls`, `cert-file`, `key-file`, `client-cert-file`, `client-key-file`, `client-cert-auth`, `trusted-ca-file` | `spec.tls.client` |
+| `peer-auto-tls`, `peer-cert-file`, `peer-key-file`, `peer-client-cert-file`, `peer-client-key-file`, `peer-trusted-ca-file`, `peer-client-cert-auth` | `spec.tls.peer` |
+| `quota-backend-bytes`, `auto-compaction-mode`, `auto-compaction-retention`, `snapshot-count` | `spec.options` |
+
+The member controller applies the same denylist when it builds a Pod and refuses to create one that carries a denied key.
+
+Anything else passes through unchecked. A flag etcd does not recognise, or a malformed value, makes the member fail to start — the operator does not know etcd's flag set. Prefer a typed field where one exists.
+
+`extraArgs` follow the same rule as `spec.options`: latched through `status.observed`, applied **to newly-created members only**. Delete one Pod at a time to roll a change onto existing members.
 
 ## Member DNS identity (adoption annotations)
 
