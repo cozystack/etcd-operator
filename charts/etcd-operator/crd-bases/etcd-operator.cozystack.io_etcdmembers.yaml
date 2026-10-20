@@ -1023,6 +1023,16 @@ spec:
                   the same ClusterID and member ID. While dormant, the member does
                   not count toward the EtcdCluster's `current` replica accounting.
                 type: boolean
+              extraArgs:
+                additionalProperties:
+                  type: string
+                description: |-
+                  ExtraArgs mirrors EtcdCluster.spec.extraArgs at the time this member
+                  was created. The member controller renders each entry as --key=value
+                  after its own flags, sorted by key, and refuses to create the Pod if
+                  a key collides with a flag it manages. Existing members are not
+                  re-templated when the cluster spec changes.
+                type: object
               imagePullSecrets:
                 description: |-
                   ImagePullSecrets mirrors EtcdCluster.spec.imagePullSecrets at the time

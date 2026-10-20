@@ -297,6 +297,13 @@ func (in *EtcdClusterSpec) DeepCopyInto(out *EtcdClusterSpec) {
 		*out = new(EtcdOptions)
 		(*in).DeepCopyInto(*out)
 	}
+	if in.ExtraArgs != nil {
+		in, out := &in.ExtraArgs, &out.ExtraArgs
+		*out = make(map[string]string, len(*in))
+		for key, val := range *in {
+			(*out)[key] = val
+		}
+	}
 	if in.ImagePullSecrets != nil {
 		in, out := &in.ImagePullSecrets, &out.ImagePullSecrets
 		*out = make([]v1.LocalObjectReference, len(*in))
@@ -714,6 +721,13 @@ func (in *EtcdMemberSpec) DeepCopyInto(out *EtcdMemberSpec) {
 		*out = new(EtcdOptions)
 		(*in).DeepCopyInto(*out)
 	}
+	if in.ExtraArgs != nil {
+		in, out := &in.ExtraArgs, &out.ExtraArgs
+		*out = make(map[string]string, len(*in))
+		for key, val := range *in {
+			(*out)[key] = val
+		}
+	}
 	if in.ImagePullSecrets != nil {
 		in, out := &in.ImagePullSecrets, &out.ImagePullSecrets
 		*out = make([]v1.LocalObjectReference, len(*in))
@@ -981,6 +995,13 @@ func (in *ObservedClusterSpec) DeepCopyInto(out *ObservedClusterSpec) {
 		in, out := &in.ImagePullSecrets, &out.ImagePullSecrets
 		*out = make([]v1.LocalObjectReference, len(*in))
 		copy(*out, *in)
+	}
+	if in.ExtraArgs != nil {
+		in, out := &in.ExtraArgs, &out.ExtraArgs
+		*out = make(map[string]string, len(*in))
+		for key, val := range *in {
+			(*out)[key] = val
+		}
 	}
 }
 

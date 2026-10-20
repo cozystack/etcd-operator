@@ -253,11 +253,16 @@ const (
 )
 
 // EtcdOptions carries the etcd server tuning flags the operator passes to
-// each member's `etcd` command line. Deliberately a closed, typed set — the
-// legacy aenix operator exposed a free-form `spec.options` map[string]string,
-// which let users inject arbitrary (and operator-conflicting) flags; this
-// port types exactly the keys Cozystack's etcd package actually used. New
-// flags land here as new typed fields, not as an escape hatch.
+// each member's `etcd` command line, typed and validated. The legacy aenix
+// operator exposed a free-form `spec.options` map[string]string, which let
+// users inject flags that conflict with the ones the operator itself manages
+// (listen URLs, initial-cluster wiring, TLS paths); this port types exactly
+// the keys Cozystack's etcd package actually used. A tuning knob worth
+// validating lands here as a new typed field.
+//
+// Flags outside this set go through spec.extraArgs, which rejects every flag
+// the operator manages — including the ones typed here, so each flag has one
+// source. See EtcdClusterSpec.ExtraArgs.
 //
 // Like spec.resources, options are latched through status.observed and take
 // effect on newly-created members (scale-up, replacement) only; the operator
@@ -550,14 +555,45 @@ type EtcdClusterSpec struct {
 
 	// Options carries etcd server tuning flags (backend quota,
 	// auto-compaction, raft snapshot count) passed to each member's
-	// command line. A closed typed set — see EtcdOptions for why there
-	// is deliberately no free-form flag map.
+	// command line, typed and validated. See EtcdOptions.
 	//
 	// Updates take effect on newly-created members (scale-up,
 	// replacement); the operator does not roll existing Pods to apply a
 	// tuning change in place.
 	// +optional
 	Options *EtcdOptions `json:"options,omitempty"`
+
+	// ExtraArgs passes additional flags to each member's etcd command line.
+	// Keys are flag names without the leading dashes; each entry renders as
+	// --key=value, with the value passed as is. Entries are appended after
+	// the operator's own flags, sorted by key so the rendered Pod is
+	// deterministic.
+	//
+	// The operator owns a set of flags and rejects them here: member
+	// identity and data placement (--name, --data-dir), the listen,
+	// advertise and initial-cluster wiring, the TLS material it mounts from
+	// spec.tls, alternative bootstrap mechanisms (--discovery*,
+	// --config-file), and the flags typed by spec.options. The apiserver
+	// rejects such a key on admission, naming the flag; the member
+	// controller refuses to render one as a second guard. That denylist is
+	// what made the original free-form map unsafe — it let a user break the
+	// operator's own wiring — so with it in place a free-form map is safe
+	// to offer. It is still needed next to spec.options: a typed set only
+	// grows with the operator's releases, while a cluster may run an image
+	// that wraps etcd and takes flags of its own, or need an etcd flag no
+	// field covers yet. Prefer a typed field where one exists; this map is
+	// not validated beyond the denylist, and a flag etcd does not know
+	// makes the member fail to start.
+	//
+	// Like spec.options, extraArgs are latched through status.observed and
+	// take effect on newly-created members (scale-up, replacement) only;
+	// the operator does not roll existing Pods to apply a change in place.
+	// +kubebuilder:validation:MaxProperties=64
+	// +kubebuilder:validation:XValidation:rule="self.all(k, k.matches('^[a-z0-9]+(-[a-z0-9]+)*$'))",messageExpression="'spec.extraArgs keys are etcd flag names without the leading dashes (for example log-level); invalid key: ' + self.filter(k, !k.matches('^[a-z0-9]+(-[a-z0-9]+)*$'))[0]"
+	// +kubebuilder:validation:XValidation:rule="self.all(k, !(k in ['name', 'data-dir', 'wal-dir', 'listen-peer-urls', 'listen-client-urls', 'listen-client-http-urls', 'listen-metrics-urls', 'advertise-client-urls', 'initial-advertise-peer-urls', 'initial-cluster', 'initial-cluster-token', 'initial-cluster-state', 'force-new-cluster', 'discovery', 'discovery-srv', 'discovery-endpoints', 'config-file', 'auto-tls', 'cert-file', 'key-file', 'client-cert-file', 'client-key-file', 'client-cert-auth', 'trusted-ca-file', 'peer-auto-tls', 'peer-cert-file', 'peer-key-file', 'peer-client-cert-file', 'peer-client-key-file', 'peer-trusted-ca-file', 'peer-client-cert-auth']))",messageExpression="'spec.extraArgs: --' + self.filter(k, k in ['name', 'data-dir', 'wal-dir', 'listen-peer-urls', 'listen-client-urls', 'listen-client-http-urls', 'listen-metrics-urls', 'advertise-client-urls', 'initial-advertise-peer-urls', 'initial-cluster', 'initial-cluster-token', 'initial-cluster-state', 'force-new-cluster', 'discovery', 'discovery-srv', 'discovery-endpoints', 'config-file', 'auto-tls', 'cert-file', 'key-file', 'client-cert-file', 'client-key-file', 'client-cert-auth', 'trusted-ca-file', 'peer-auto-tls', 'peer-cert-file', 'peer-key-file', 'peer-client-cert-file', 'peer-client-key-file', 'peer-trusted-ca-file', 'peer-client-cert-auth'])[0] + ' is managed by the operator and cannot be set here'"
+	// +kubebuilder:validation:XValidation:rule="self.all(k, !(k in ['quota-backend-bytes', 'auto-compaction-mode', 'auto-compaction-retention', 'snapshot-count']))",messageExpression="'spec.extraArgs: --' + self.filter(k, k in ['quota-backend-bytes', 'auto-compaction-mode', 'auto-compaction-retention', 'snapshot-count'])[0] + ' is a typed option; set spec.options.' + {'quota-backend-bytes': 'quotaBackendBytes', 'auto-compaction-mode': 'autoCompactionMode', 'auto-compaction-retention': 'autoCompactionRetention', 'snapshot-count': 'snapshotCount'}[self.filter(k, k in ['quota-backend-bytes', 'auto-compaction-mode', 'auto-compaction-retention', 'snapshot-count'])[0]] + ' instead'"
+	// +optional
+	ExtraArgs map[string]string `json:"extraArgs,omitempty"`
 
 	// ImagePullSecrets is a list of Secret references in the cluster's
 	// namespace used to pull the etcd (and restore initContainer) image from
@@ -640,6 +676,13 @@ type ObservedClusterSpec struct {
 	// Pods. Latched with the rest of the target spec.
 	// +optional
 	ImagePullSecrets []corev1.LocalObjectReference `json:"imagePullSecrets,omitempty"`
+
+	// ExtraArgs is the locked target set of additional etcd flags for
+	// member Pods. Latched with the rest of the target spec so a mid-flight
+	// edit only applies to members created once the current target is
+	// reached.
+	// +optional
+	ExtraArgs map[string]string `json:"extraArgs,omitempty"`
 }
 
 // EtcdClusterStatus defines the observed state of an etcd cluster.

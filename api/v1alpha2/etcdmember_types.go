@@ -122,6 +122,14 @@ type EtcdMemberSpec struct {
 	// +optional
 	Options *EtcdOptions `json:"options,omitempty"`
 
+	// ExtraArgs mirrors EtcdCluster.spec.extraArgs at the time this member
+	// was created. The member controller renders each entry as --key=value
+	// after its own flags, sorted by key, and refuses to create the Pod if
+	// a key collides with a flag it manages. Existing members are not
+	// re-templated when the cluster spec changes.
+	// +optional
+	ExtraArgs map[string]string `json:"extraArgs,omitempty"`
+
 	// ImagePullSecrets mirrors EtcdCluster.spec.imagePullSecrets at the time
 	// this member was created. Passed straight to the Pod's
 	// spec.imagePullSecrets at build time.
