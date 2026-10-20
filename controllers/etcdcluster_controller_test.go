@@ -3174,7 +3174,8 @@ func TestSpecEqualsObserved_OptionsMatter(t *testing.T) {
 }
 
 // TestBootstrap_PropagatesOptionsToSeed verifies the wiring of
-// spec.options onto the seed EtcdMember at cluster creation. The member
+// spec.options and spec.extraArgs onto the seed EtcdMember at cluster
+// creation. The member
 // controller reads its own Spec.Options at buildPod time, so any
 // propagation gap shows up as the seed's etcd running with built-in
 // defaults instead of the user's tuning (e.g. no backend quota).
@@ -3188,13 +3189,15 @@ func TestBootstrap_PropagatesOptionsToSeed(t *testing.T) {
 		AutoCompactionRetention: "5m",
 		SnapshotCount:           &snapCount,
 	}
+	extra := map[string]string{"log-level": "debug"}
 	cluster := &lll.EtcdCluster{
 		ObjectMeta: metav1.ObjectMeta{Name: "test", Namespace: "ns"},
 		Spec: lll.EtcdClusterSpec{
-			Replicas: ptrInt32(3),
-			Version:  "3.5.17",
-			Storage:  lll.StorageSpec{Size: quickQty(t, "1Gi")},
-			Options:  opts,
+			Replicas:  ptrInt32(3),
+			Version:   "3.5.17",
+			Storage:   lll.StorageSpec{Size: quickQty(t, "1Gi")},
+			Options:   opts,
+			ExtraArgs: extra,
 		},
 	}
 	c, _ := newTestClient(t, cluster)
@@ -3209,6 +3212,9 @@ func TestBootstrap_PropagatesOptionsToSeed(t *testing.T) {
 	if !equality.Semantic.DeepEqual(got.Status.Observed.Options, opts) {
 		t.Errorf("Observed.Options = %+v; want %+v", got.Status.Observed.Options, opts)
 	}
+	if !equality.Semantic.DeepEqual(got.Status.Observed.ExtraArgs, extra) {
+		t.Errorf("Observed.ExtraArgs = %v; want %v", got.Status.Observed.ExtraArgs, extra)
+	}
 
 	members := &lll.EtcdMemberList{}
 	if err := c.List(ctx, members, client.InNamespace("ns")); err != nil {
@@ -3219,6 +3225,9 @@ func TestBootstrap_PropagatesOptionsToSeed(t *testing.T) {
 	}
 	if !equality.Semantic.DeepEqual(members.Items[0].Spec.Options, opts) {
 		t.Fatalf("seed Spec.Options = %+v; want %+v", members.Items[0].Spec.Options, opts)
+	}
+	if !equality.Semantic.DeepEqual(members.Items[0].Spec.ExtraArgs, extra) {
+		t.Fatalf("seed Spec.ExtraArgs = %v; want %v", members.Items[0].Spec.ExtraArgs, extra)
 	}
 }
 
@@ -3471,9 +3480,10 @@ func TestScaleUp_PropagatesResourcesToNewMember(t *testing.T) {
 }
 
 // TestScaleUp_PropagatesOptionsToNewMember covers the second member-
-// creation site for spec.options: scaleUp's fresh-CR path. Bootstrap is
-// covered by TestBootstrap_PropagatesOptionsToSeed; this one makes sure
-// a member added later runs with the same tuning as the seed.
+// creation site for spec.options and spec.extraArgs: scaleUp's fresh-CR
+// path. Bootstrap is covered by TestBootstrap_PropagatesOptionsToSeed;
+// this one makes sure a member added later runs with the same flags as
+// the seed.
 func TestScaleUp_PropagatesOptionsToNewMember(t *testing.T) {
 	ctx := context.Background()
 	now := metav1.Now()
@@ -3483,6 +3493,7 @@ func TestScaleUp_PropagatesOptionsToNewMember(t *testing.T) {
 		AutoCompactionMode:      lll.AutoCompactionModePeriodic,
 		AutoCompactionRetention: "5m",
 	}
+	extra := map[string]string{"log-level": "debug"}
 
 	// Cluster targets 2 replicas; 1 ready voter already exists. scaleUp
 	// must create a fresh second member carrying Observed.Options.
@@ -3498,10 +3509,11 @@ func TestScaleUp_PropagatesOptionsToNewMember(t *testing.T) {
 			ClusterToken: "ns-test-x",
 			ClusterID:    "deadbeef",
 			Observed: &lll.ObservedClusterSpec{
-				Replicas: 2,
-				Version:  "3.5.17",
-				Storage:  lll.StorageSpec{Size: quickQty(t, "1Gi")},
-				Options:  opts,
+				Replicas:  2,
+				Version:   "3.5.17",
+				Storage:   lll.StorageSpec{Size: quickQty(t, "1Gi")},
+				Options:   opts,
+				ExtraArgs: extra,
 			},
 			ProgressDeadline: &metav1.Time{Time: metav1.Now().Add(time.Hour)},
 		},
@@ -3538,6 +3550,9 @@ func TestScaleUp_PropagatesOptionsToNewMember(t *testing.T) {
 	}
 	if !equality.Semantic.DeepEqual(fresh.Spec.Options, opts) {
 		t.Fatalf("scaled-up member Spec.Options = %+v; want %+v", fresh.Spec.Options, opts)
+	}
+	if !equality.Semantic.DeepEqual(fresh.Spec.ExtraArgs, extra) {
+		t.Fatalf("scaled-up member Spec.ExtraArgs = %v; want %v", fresh.Spec.ExtraArgs, extra)
 	}
 }
 

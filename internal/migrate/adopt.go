@@ -279,6 +279,7 @@ func BuildAdoption(name, namespace string, spec legacy.EtcdClusterSpec, facts Cl
 				Affinity:                  cluster.Spec.Affinity,
 				TopologySpreadConstraints: cluster.Spec.TopologySpreadConstraints,
 				Options:                   cluster.Spec.Options,
+				ExtraArgs:                 cluster.Spec.ExtraArgs,
 				ImagePullSecrets:          cluster.Spec.ImagePullSecrets,
 				Bootstrap:                 false,
 				InitialCluster:            initialCluster,
@@ -312,6 +313,7 @@ func BuildAdoption(name, namespace string, spec legacy.EtcdClusterSpec, facts Cl
 			TopologySpreadConstraints: cluster.Spec.TopologySpreadConstraints,
 			AdditionalMetadata:        cluster.Spec.AdditionalMetadata,
 			Options:                   cluster.Spec.Options,
+			ExtraArgs:                 cluster.Spec.ExtraArgs,
 			ImagePullSecrets:          cluster.Spec.ImagePullSecrets,
 		},
 	}

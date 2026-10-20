@@ -20,6 +20,7 @@ import (
 	"context"
 	"crypto/tls"
 	"fmt"
+	"slices"
 	"strconv"
 	"time"
 
@@ -542,6 +543,10 @@ func (r *EtcdMemberReconciler) ensurePod(ctx context.Context, member *lll.EtcdMe
 		clusterFormed = cluster.Status.ClusterID != ""
 	}
 
+	if err := checkExtraArgs(member.Spec.ExtraArgs); err != nil {
+		return fmt.Errorf("member %q: refusing to create the Pod: %w", member.Name, err)
+	}
+
 	pod = r.buildPod(member, clusterFormed)
 	if err := controllerutil.SetControllerReference(member, pod, r.Scheme); err != nil {
 		return err
@@ -679,6 +684,91 @@ func optionFlags(o *lll.EtcdOptions) []string {
 		flags = append(flags, fmt.Sprintf("--snapshot-count=%d", *o.SnapshotCount))
 	}
 	return flags
+}
+
+// deniedExtraArgs is every etcd flag spec.extraArgs may not set, with the
+// reason it is reserved. It covers each flag buildPod and optionFlags render,
+// plus the flags that would quietly override them (--config-file makes etcd
+// ignore the command line; --discovery* replaces --initial-cluster; the client
+// cert flags replace the identity mounted from spec.tls). A flag added to
+// buildPod or optionFlags goes here too, and into the matching CEL rule on
+// EtcdClusterSpec.ExtraArgs, which rejects the key at admission:
+// TestDeniedExtraArgsCoverRenderedFlags fails until it is listed here, and
+// TestExtraArgsAdmission_Envtest until the CEL rule rejects it.
+var deniedExtraArgs = map[string]string{
+	"name":                        "member identity is managed by the operator",
+	"data-dir":                    "data placement is managed by the operator",
+	"wal-dir":                     "data placement is managed by the operator",
+	"listen-peer-urls":            "listeners are managed by the operator",
+	"listen-client-urls":          "listeners are managed by the operator",
+	"listen-client-http-urls":     "listeners are managed by the operator",
+	"listen-metrics-urls":         "listeners are managed by the operator",
+	"advertise-client-urls":       "member URLs are managed by the operator",
+	"initial-advertise-peer-urls": "member URLs are managed by the operator",
+	"initial-cluster":             "cluster bootstrap is managed by the operator",
+	"initial-cluster-token":       "cluster bootstrap is managed by the operator",
+	"initial-cluster-state":       "cluster bootstrap is managed by the operator",
+	"force-new-cluster":           "membership is managed by the operator",
+	"discovery":                   "cluster bootstrap is managed by the operator",
+	"discovery-srv":               "cluster bootstrap is managed by the operator",
+	"discovery-endpoints":         "cluster bootstrap is managed by the operator",
+	"config-file":                 "a config file makes etcd ignore the operator's flags",
+	"auto-tls":                    "client TLS is configured through spec.tls.client",
+	"cert-file":                   "client TLS is configured through spec.tls.client",
+	"key-file":                    "client TLS is configured through spec.tls.client",
+	"client-cert-file":            "client TLS is configured through spec.tls.client",
+	"client-key-file":             "client TLS is configured through spec.tls.client",
+	"client-cert-auth":            "client TLS is configured through spec.tls.client",
+	"trusted-ca-file":             "client TLS is configured through spec.tls.client",
+	"peer-auto-tls":               "peer TLS is configured through spec.tls.peer",
+	"peer-cert-file":              "peer TLS is configured through spec.tls.peer",
+	"peer-key-file":               "peer TLS is configured through spec.tls.peer",
+	"peer-client-cert-file":       "peer TLS is configured through spec.tls.peer",
+	"peer-client-key-file":        "peer TLS is configured through spec.tls.peer",
+	"peer-trusted-ca-file":        "peer TLS is configured through spec.tls.peer",
+	"peer-client-cert-auth":       "peer TLS is configured through spec.tls.peer",
+	"quota-backend-bytes":         "set it through spec.options.quotaBackendBytes",
+	"auto-compaction-mode":        "set it through spec.options.autoCompactionMode",
+	"auto-compaction-retention":   "set it through spec.options.autoCompactionRetention",
+	"snapshot-count":              "set it through spec.options.snapshotCount",
+}
+
+// checkExtraArgs reports the first extraArgs key (in sorted order) that is
+// on the denylist. Admission already rejects such a key on the EtcdCluster,
+// so this only fires for an EtcdMember written around the cluster
+// controller; ensurePod refuses to create the Pod rather than letting a
+// user flag override the operator's own.
+func checkExtraArgs(args map[string]string) error {
+	for _, k := range sortedKeys(args) {
+		if reason, denied := deniedExtraArgs[k]; denied {
+			return fmt.Errorf("extraArgs: --%s cannot be set: %s", k, reason)
+		}
+	}
+	return nil
+}
+
+// extraArgFlags renders the member's extraArgs (mirrored from
+// EtcdCluster.spec.extraArgs) as --key=value flags, sorted by key so the
+// rendered Pod does not depend on map iteration order. Denied keys never
+// render, even if checkExtraArgs was bypassed.
+func extraArgFlags(args map[string]string) []string {
+	var flags []string
+	for _, k := range sortedKeys(args) {
+		if _, denied := deniedExtraArgs[k]; denied {
+			continue
+		}
+		flags = append(flags, "--"+k+"="+args[k])
+	}
+	return flags
+}
+
+func sortedKeys(m map[string]string) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	slices.Sort(keys)
+	return keys
 }
 
 // buildPod renders a member's Pod. clusterFormed reports whether the parent
@@ -833,6 +923,9 @@ func (r *EtcdMemberReconciler) buildPod(member *lll.EtcdMember, clusterFormed bo
 			Name: "tls-peer", MountPath: "/etc/etcd/tls/peer", ReadOnly: true,
 		})
 	}
+
+	// User flags go last, after every flag the operator renders.
+	cmd = append(cmd, extraArgFlags(member.Spec.ExtraArgs)...)
 
 	etcdImage := resolveEtcdImage(member, r.EtcdImageRepository)
 

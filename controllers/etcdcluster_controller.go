@@ -450,6 +450,7 @@ func (r *EtcdClusterReconciler) bootstrap(
 				Affinity:                  cluster.Status.Observed.Affinity,
 				TopologySpreadConstraints: cluster.Status.Observed.TopologySpreadConstraints,
 				Options:                   cluster.Status.Observed.Options,
+				ExtraArgs:                 cluster.Status.Observed.ExtraArgs,
 				ImagePullSecrets:          cluster.Status.Observed.ImagePullSecrets,
 				Bootstrap:                 true,
 				ClusterToken:              cluster.Status.ClusterToken,
@@ -855,6 +856,7 @@ func (r *EtcdClusterReconciler) scaleUp(
 			Affinity:                  cluster.Status.Observed.Affinity,
 			TopologySpreadConstraints: cluster.Status.Observed.TopologySpreadConstraints,
 			Options:                   cluster.Status.Observed.Options,
+			ExtraArgs:                 cluster.Status.Observed.ExtraArgs,
 			ImagePullSecrets:          cluster.Status.Observed.ImagePullSecrets,
 			Bootstrap:                 false,
 			ClusterToken:              cluster.Status.ClusterToken,
@@ -2141,6 +2143,7 @@ func snapshotSpecIntoObserved(cluster *lll.EtcdCluster) {
 		AdditionalMetadata:        cluster.Spec.AdditionalMetadata,
 		Options:                   cluster.Spec.Options,
 		ImagePullSecrets:          cluster.Spec.ImagePullSecrets,
+		ExtraArgs:                 cluster.Spec.ExtraArgs,
 	}
 }
 
@@ -2162,7 +2165,8 @@ func specEqualsObserved(cluster *lll.EtcdCluster) bool {
 		equality.Semantic.DeepEqual(o.TopologySpreadConstraints, cluster.Spec.TopologySpreadConstraints) &&
 		equality.Semantic.DeepEqual(o.AdditionalMetadata, cluster.Spec.AdditionalMetadata) &&
 		equality.Semantic.DeepEqual(o.Options, cluster.Spec.Options) &&
-		equality.Semantic.DeepEqual(o.ImagePullSecrets, cluster.Spec.ImagePullSecrets)
+		equality.Semantic.DeepEqual(o.ImagePullSecrets, cluster.Spec.ImagePullSecrets) &&
+		equality.Semantic.DeepEqual(o.ExtraArgs, cluster.Spec.ExtraArgs)
 }
 
 // observedAdditionalMetadata returns the latched additionalMetadata target
