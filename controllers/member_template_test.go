@@ -32,6 +32,9 @@ func steadyCluster(t *testing.T, observed *lll.ObservedClusterSpec) []client.Obj
 		Resources: observed.Resources,
 		Options:   observed.Options,
 		ExtraArgs: observed.ExtraArgs,
+
+		ImageRepository: observed.ImageRepository,
+		ImageTagSuffix:  observed.ImageTagSuffix,
 	}
 	objs := []client.Object{&lll.EtcdCluster{
 		ObjectMeta: metav1.ObjectMeta{Name: "test", Namespace: "ns"},

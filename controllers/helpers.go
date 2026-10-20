@@ -122,18 +122,23 @@ func memberDataDir(member *lll.EtcdMember) string {
 	return path.Join(etcdDataDirRoot, sub)
 }
 
-// resolveEtcdImage resolves a member's etcd container image from the
-// operator-wide repository default (defaultRepo, from the operator's
-// --etcd-image-repository flag) or the EtcdImage built-in when that is empty,
-// tagged with "v"+spec.version. The operator keys every version-dependent
-// behaviour off spec.version, so the image is always pinned to that version —
-// there is no per-cluster tag override that could disagree with it.
+// resolveEtcdImage resolves a member's etcd container image. The repository
+// is the cluster's spec.imageRepository, else the operator-wide default
+// (defaultRepo, from the operator's --etcd-image-repository flag), else the
+// EtcdImage built-in. The tag is "v"+spec.version followed by the cluster's
+// spec.imageTagSuffix. The operator keys every version-dependent behaviour
+// off spec.version, so the tag always begins with that version — admission
+// rejects a repository carrying its own tag and a suffix not starting with
+// '-'.
 func resolveEtcdImage(member *lll.EtcdMember, defaultRepo string) string {
-	repo := defaultRepo
+	repo := member.Spec.ImageRepository
+	if repo == "" {
+		repo = defaultRepo
+	}
 	if repo == "" {
 		repo = EtcdImage
 	}
-	return repo + ":v" + member.Spec.Version
+	return repo + ":v" + member.Spec.Version + member.Spec.ImageTagSuffix
 }
 
 // peerURL returns the etcd peer URL for a member, using the headless Service

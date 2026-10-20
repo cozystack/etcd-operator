@@ -409,7 +409,8 @@ func (r *EtcdClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 // ── Member templates ─────────────────────────────────────────────────────
 
 // syncMemberTemplates copies the latched Pod-template fields (options,
-// extraArgs, resources) onto existing members. Running Pods are left alone;
+// extraArgs, resources, image repository and tag suffix) onto existing
+// members. Running Pods are left alone;
 // a Pod recreated for any reason, including a deliberate delete to roll a
 // change, picks the new template up. Storage, version, scheduling and
 // metadata stay as they were at member creation: they are bound to the
@@ -420,13 +421,17 @@ func (r *EtcdClusterReconciler) syncMemberTemplates(ctx context.Context, cluster
 		m := &members[i]
 		if equality.Semantic.DeepEqual(m.Spec.Options, o.Options) &&
 			equality.Semantic.DeepEqual(m.Spec.ExtraArgs, o.ExtraArgs) &&
-			equality.Semantic.DeepEqual(m.Spec.Resources, o.Resources) {
+			equality.Semantic.DeepEqual(m.Spec.Resources, o.Resources) &&
+			m.Spec.ImageRepository == o.ImageRepository &&
+			m.Spec.ImageTagSuffix == o.ImageTagSuffix {
 			continue
 		}
 		patch := client.MergeFrom(m.DeepCopy())
 		m.Spec.Options = o.Options.DeepCopy()
 		m.Spec.ExtraArgs = maps.Clone(o.ExtraArgs)
 		m.Spec.Resources = *o.Resources.DeepCopy()
+		m.Spec.ImageRepository = o.ImageRepository
+		m.Spec.ImageTagSuffix = o.ImageTagSuffix
 		if err := r.Patch(ctx, m, patch); err != nil {
 			return fmt.Errorf("sync template of member %s: %w", m.Name, err)
 		}
@@ -488,6 +493,8 @@ func (r *EtcdClusterReconciler) bootstrap(
 				Options:                   cluster.Status.Observed.Options,
 				ExtraArgs:                 cluster.Status.Observed.ExtraArgs,
 				ImagePullSecrets:          cluster.Status.Observed.ImagePullSecrets,
+				ImageRepository:           cluster.Status.Observed.ImageRepository,
+				ImageTagSuffix:            cluster.Status.Observed.ImageTagSuffix,
 				Bootstrap:                 true,
 				ClusterToken:              cluster.Status.ClusterToken,
 				TLS:                       deriveMemberTLS(cluster),
@@ -894,6 +901,8 @@ func (r *EtcdClusterReconciler) scaleUp(
 			Options:                   cluster.Status.Observed.Options,
 			ExtraArgs:                 cluster.Status.Observed.ExtraArgs,
 			ImagePullSecrets:          cluster.Status.Observed.ImagePullSecrets,
+			ImageRepository:           cluster.Status.Observed.ImageRepository,
+			ImageTagSuffix:            cluster.Status.Observed.ImageTagSuffix,
 			Bootstrap:                 false,
 			ClusterToken:              cluster.Status.ClusterToken,
 			TLS:                       deriveMemberTLS(cluster),
@@ -2180,6 +2189,8 @@ func snapshotSpecIntoObserved(cluster *lll.EtcdCluster) {
 		Options:                   cluster.Spec.Options,
 		ImagePullSecrets:          cluster.Spec.ImagePullSecrets,
 		ExtraArgs:                 cluster.Spec.ExtraArgs,
+		ImageRepository:           cluster.Spec.ImageRepository,
+		ImageTagSuffix:            cluster.Spec.ImageTagSuffix,
 	}
 }
 
@@ -2202,7 +2213,9 @@ func specEqualsObserved(cluster *lll.EtcdCluster) bool {
 		equality.Semantic.DeepEqual(o.AdditionalMetadata, cluster.Spec.AdditionalMetadata) &&
 		equality.Semantic.DeepEqual(o.Options, cluster.Spec.Options) &&
 		equality.Semantic.DeepEqual(o.ImagePullSecrets, cluster.Spec.ImagePullSecrets) &&
-		equality.Semantic.DeepEqual(o.ExtraArgs, cluster.Spec.ExtraArgs)
+		equality.Semantic.DeepEqual(o.ExtraArgs, cluster.Spec.ExtraArgs) &&
+		o.ImageRepository == cluster.Spec.ImageRepository &&
+		o.ImageTagSuffix == cluster.Spec.ImageTagSuffix
 }
 
 // observedAdditionalMetadata returns the latched additionalMetadata target

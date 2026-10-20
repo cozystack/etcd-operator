@@ -281,6 +281,8 @@ func BuildAdoption(name, namespace string, spec legacy.EtcdClusterSpec, facts Cl
 				Options:                   cluster.Spec.Options,
 				ExtraArgs:                 cluster.Spec.ExtraArgs,
 				ImagePullSecrets:          cluster.Spec.ImagePullSecrets,
+				ImageRepository:           cluster.Spec.ImageRepository,
+				ImageTagSuffix:            cluster.Spec.ImageTagSuffix,
 				Bootstrap:                 false,
 				InitialCluster:            initialCluster,
 				ClusterToken:              token,
@@ -315,6 +317,8 @@ func BuildAdoption(name, namespace string, spec legacy.EtcdClusterSpec, facts Cl
 			Options:                   cluster.Spec.Options,
 			ExtraArgs:                 cluster.Spec.ExtraArgs,
 			ImagePullSecrets:          cluster.Spec.ImagePullSecrets,
+			ImageRepository:           cluster.Spec.ImageRepository,
+			ImageTagSuffix:            cluster.Spec.ImageTagSuffix,
 		},
 	}
 	plan.Adoption.StatefulSetName = name
