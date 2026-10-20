@@ -152,7 +152,8 @@ metadata) is reported as a warning — review them before `--apply`.
 (it used to be dropped) — so an air-gapped cluster keeps its credentials to pull
 from its mirror after the operator rolls a replacement Pod. (The etcd image's
 registry/tag is not carried; repoint the mirror operator-wide via
-`--etcd-image-repository`, since the operator pins the image to `spec.version`.)
+`--etcd-image-repository`, or per cluster via `spec.imageRepository`, since
+the operator pins the image to `spec.version`.)
 Hard
 blockers (`emptyDir` storage — nothing to adopt, an unparsable etcd image tag
 without `--version`, `enableAuth` without server TLS, a non-integer
