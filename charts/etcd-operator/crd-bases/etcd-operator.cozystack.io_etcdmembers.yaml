@@ -1056,6 +1056,18 @@ spec:
                   type: object
                   x-kubernetes-map-type: atomic
                 type: array
+              imageRepository:
+                description: |-
+                  ImageRepository mirrors the latched EtcdCluster.spec.imageRepository.
+                  The cluster controller copies it onto each member at creation and
+                  keeps it in sync afterwards; a running Pod picks a change up only
+                  when it is recreated.
+                type: string
+              imageTagSuffix:
+                description: |-
+                  ImageTagSuffix mirrors the latched EtcdCluster.spec.imageTagSuffix,
+                  with the same sync rule as ImageRepository.
+                type: string
               initialCluster:
                 description: |-
                   InitialCluster is the value passed to etcd's --initial-cluster flag.

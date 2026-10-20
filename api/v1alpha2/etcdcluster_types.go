@@ -605,6 +605,31 @@ type EtcdClusterSpec struct {
 	// status.observed.
 	// +optional
 	ImagePullSecrets []corev1.LocalObjectReference `json:"imagePullSecrets,omitempty"`
+
+	// ImageRepository overrides the operator-wide etcd image repository
+	// (--etcd-image-repository) for this cluster: registry host and path,
+	// without a tag or digest. The tag stays v<spec.version> plus
+	// ImageTagSuffix, so the image always runs the version the operator
+	// manages.
+	//
+	// Latched through status.observed and copied onto every member; a
+	// running member switches to it when its Pod is recreated.
+	// +kubebuilder:validation:MaxLength=255
+	// +kubebuilder:validation:XValidation:rule="!self.contains('@') && !self.substring(self.lastIndexOf('/') + 1).contains(':')",message="spec.imageRepository is a repository without a tag or digest; the tag is v<spec.version> followed by spec.imageTagSuffix"
+	// +optional
+	ImageRepository string `json:"imageRepository,omitempty"`
+
+	// ImageTagSuffix is appended to the v<spec.version> image tag, for
+	// images published with a suffix such as -fips or the version of an
+	// etcd wrapper. It starts with '-' so the tag still begins with the
+	// etcd version.
+	//
+	// Latched through status.observed and copied onto every member; a
+	// running member switches to it when its Pod is recreated.
+	// +kubebuilder:validation:MaxLength=100
+	// +kubebuilder:validation:XValidation:rule="self.matches('^-[A-Za-z0-9_.-]+$')",message="spec.imageTagSuffix starts with '-' and contains only letters, digits, '_', '.' and '-', so the image tag still begins with v<spec.version>"
+	// +optional
+	ImageTagSuffix string `json:"imageTagSuffix,omitempty"`
 }
 
 // AdditionalMetadata is a set of labels and annotations the operator merges
@@ -683,6 +708,14 @@ type ObservedClusterSpec struct {
 	// reached.
 	// +optional
 	ExtraArgs map[string]string `json:"extraArgs,omitempty"`
+
+	// ImageRepository is the locked target etcd image repository override.
+	// +optional
+	ImageRepository string `json:"imageRepository,omitempty"`
+
+	// ImageTagSuffix is the locked target etcd image tag suffix.
+	// +optional
+	ImageTagSuffix string `json:"imageTagSuffix,omitempty"`
 }
 
 // EtcdClusterStatus defines the observed state of an etcd cluster.

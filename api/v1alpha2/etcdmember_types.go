@@ -137,6 +137,18 @@ type EtcdMemberSpec struct {
 	// +optional
 	ImagePullSecrets []corev1.LocalObjectReference `json:"imagePullSecrets,omitempty"`
 
+	// ImageRepository mirrors the latched EtcdCluster.spec.imageRepository.
+	// The cluster controller copies it onto each member at creation and
+	// keeps it in sync afterwards; a running Pod picks a change up only
+	// when it is recreated.
+	// +optional
+	ImageRepository string `json:"imageRepository,omitempty"`
+
+	// ImageTagSuffix mirrors the latched EtcdCluster.spec.imageTagSuffix,
+	// with the same sync rule as ImageRepository.
+	// +optional
+	ImageTagSuffix string `json:"imageTagSuffix,omitempty"`
+
 	// Bootstrap indicates this member is part of the initial cluster formation.
 	// When true the member starts with --initial-cluster-state=new.
 	// +optional
