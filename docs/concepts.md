@@ -350,7 +350,7 @@ Every field is optional; an unset field emits no flag, leaving etcd's built-in d
 
 The typed set covers the knobs worth validating. The legacy aenix operator exposed `spec.options` as a free-form `map[string]string`, which let users inject flags that conflict with the ones the operator itself manages (listen URLs, initial-cluster wiring, TLS paths); this operator types exactly the keys Cozystack's etcd package actually used. Any other flag goes through [`spec.extraArgs`](#extra-etcd-flags).
 
-Like `spec.resources`, options are latched through `status.observed` and apply **to newly-created members only** (scale-up, replacement) — the operator does not roll existing Pods when they change. To apply a tuning change to an existing cluster, delete one Pod at a time and let the operator recreate it with the new flags. A transient mix of old- and new-flag members is harmless: these are per-member settings (backend quota, compaction cadence, raft snapshot interval), the same heterogeneity any manual rolling flag change passes through.
+Like `spec.resources`, options are latched through `status.observed`. New members get them at creation, and the operator copies them onto existing `EtcdMember` objects without touching their running Pods — it does not roll Pods. To apply a tuning change to an existing cluster, delete one Pod at a time and let the operator recreate it with the new flags. A transient mix of old- and new-flag members is harmless: these are per-member settings (backend quota, compaction cadence, raft snapshot interval), the same heterogeneity any manual rolling flag change passes through.
 
 ## Extra etcd flags
 
@@ -381,7 +381,7 @@ The member controller applies the same denylist when it builds a Pod and refuses
 
 Anything else passes through unchecked. A flag etcd does not recognise, or a malformed value, makes the member fail to start — the operator does not know etcd's flag set. Prefer a typed field where one exists.
 
-`extraArgs` follow the same rule as `spec.options`: latched through `status.observed`, applied **to newly-created members only**. Delete one Pod at a time to roll a change onto existing members.
+`extraArgs` follow the same rule as `spec.options`: latched through `status.observed` and copied onto every member, applied to a running member only when its Pod is recreated. Delete one Pod at a time to roll a change onto existing members.
 
 ## Member DNS identity (adoption annotations)
 

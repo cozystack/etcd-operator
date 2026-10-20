@@ -88,12 +88,11 @@ type EtcdMemberSpec struct {
 	// immutable per-member spec.
 	Storage StorageSpec `json:"storage"`
 
-	// Resources mirrors EtcdCluster.spec.resources at the time this
-	// member was created. The cluster controller copies it onto each
-	// member at creation. The member controller passes the value
+	// Resources mirrors the latched EtcdCluster.spec.resources. The
+	// cluster controller copies it onto each member at creation and keeps
+	// it in sync afterwards. The member controller passes the value
 	// straight to the etcd container's resources field at Pod-build
-	// time; existing members are not re-templated when the cluster
-	// spec changes.
+	// time, so a running Pod picks a change up only when it is recreated.
 	// +optional
 	Resources corev1.ResourceRequirements `json:"resources,omitempty"`
 
@@ -115,18 +114,20 @@ type EtcdMemberSpec struct {
 	// +optional
 	TopologySpreadConstraints []corev1.TopologySpreadConstraint `json:"topologySpreadConstraints,omitempty"`
 
-	// Options mirrors EtcdCluster.spec.options at the time this member
-	// was created. The member controller renders the set fields as etcd
-	// command-line flags at Pod-build time; existing members are not
-	// re-templated when the cluster spec changes.
+	// Options mirrors the latched EtcdCluster.spec.options. The cluster
+	// controller copies it onto each member at creation and keeps it in
+	// sync afterwards. The member controller renders the set fields as
+	// etcd command-line flags at Pod-build time, so a running Pod picks a
+	// change up only when it is recreated.
 	// +optional
 	Options *EtcdOptions `json:"options,omitempty"`
 
-	// ExtraArgs mirrors EtcdCluster.spec.extraArgs at the time this member
-	// was created. The member controller renders each entry as --key=value
-	// after its own flags, sorted by key, and refuses to create the Pod if
-	// a key collides with a flag it manages. Existing members are not
-	// re-templated when the cluster spec changes.
+	// ExtraArgs mirrors the latched EtcdCluster.spec.extraArgs. The
+	// cluster controller copies it onto each member at creation and keeps
+	// it in sync afterwards. The member controller renders each entry as
+	// --key=value after its own flags, sorted by key, and refuses to
+	// create the Pod if a key collides with a flag it manages. A running
+	// Pod picks a change up only when it is recreated.
 	// +optional
 	ExtraArgs map[string]string `json:"extraArgs,omitempty"`
 
