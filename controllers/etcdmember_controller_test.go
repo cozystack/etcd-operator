@@ -2597,6 +2597,17 @@ func TestPodToRecreate_StuckInitContainer(t *testing.T) {
 	}
 }
 
+// Any other init wait is left to the existing paths too.
+func TestPodToRecreate_KeepsAdoptedPodInOtherInitWait(t *testing.T) {
+	member, pod, pvc := adoptedLegacyFixture(t, podInitializing)
+	pod.Spec.InitContainers = []corev1.Container{{Name: "restore-agent", EnvFrom: []corev1.EnvFromSource{legacyStateEnvFrom}}}
+	pod.Spec.Containers[0].EnvFrom = nil
+	pod.Status.Phase = corev1.PodPending
+	pod.Status.InitContainerStatuses = []corev1.ContainerStatus{{Name: "restore-agent",
+		State: corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: "CrashLoopBackOff"}}}}
+	assertPodToRecreate(t, member, pod, pvc, false)
+}
+
 func TestPodToRecreate_KeepsRunningAdoptedPod(t *testing.T) {
 	member, pod, pvc := adoptedLegacyFixture(t, corev1.ContainerState{Running: &corev1.ContainerStateRunning{}})
 	assertPodToRecreate(t, member, pod, pvc, false)
