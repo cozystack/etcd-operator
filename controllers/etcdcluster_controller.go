@@ -19,6 +19,7 @@ package controllers
 import (
 	"context"
 	"fmt"
+	"maps"
 	"math"
 	"sort"
 	"strings"
@@ -271,6 +272,12 @@ func (r *EtcdClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		}
 	}
 
+	// Before any scale step: waking a dormant member creates its Pod from
+	// the member's own template, so the template must already be current.
+	if err := r.syncMemberTemplates(ctx, cluster, active); err != nil {
+		return ctrl.Result{}, err
+	}
+
 	// If a half-baked scale-up CR is present (Spec.InitialCluster empty),
 	// route through scaleUp regardless of replica accounting. Two reasons:
 	//
@@ -397,6 +404,35 @@ func (r *EtcdClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	// `running` internally for its accounting, so passing `active`
 	// here is the correct shape.
 	return r.updateStatus(ctx, cluster, active, pending)
+}
+
+// ── Member templates ─────────────────────────────────────────────────────
+
+// syncMemberTemplates copies the latched Pod-template fields (options,
+// extraArgs, resources) onto existing members. Running Pods are left alone;
+// a Pod recreated for any reason, including a deliberate delete to roll a
+// change, picks the new template up. Storage, version, scheduling and
+// metadata stay as they were at member creation: they are bound to the
+// member's volume or are upgrades, not per-Pod settings.
+func (r *EtcdClusterReconciler) syncMemberTemplates(ctx context.Context, cluster *lll.EtcdCluster, members []lll.EtcdMember) error {
+	o := cluster.Status.Observed
+	for i := range members {
+		m := &members[i]
+		if equality.Semantic.DeepEqual(m.Spec.Options, o.Options) &&
+			equality.Semantic.DeepEqual(m.Spec.ExtraArgs, o.ExtraArgs) &&
+			equality.Semantic.DeepEqual(m.Spec.Resources, o.Resources) {
+			continue
+		}
+		patch := client.MergeFrom(m.DeepCopy())
+		m.Spec.Options = o.Options.DeepCopy()
+		m.Spec.ExtraArgs = maps.Clone(o.ExtraArgs)
+		m.Spec.Resources = *o.Resources.DeepCopy()
+		if err := r.Patch(ctx, m, patch); err != nil {
+			return fmt.Errorf("sync template of member %s: %w", m.Name, err)
+		}
+		log.FromContext(ctx).Info("synced member template with the cluster spec; applies when the Pod is recreated", "member", m.Name)
+	}
+	return nil
 }
 
 // ── Bootstrap ────────────────────────────────────────────────────────────
