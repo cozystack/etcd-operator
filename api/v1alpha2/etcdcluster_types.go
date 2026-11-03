@@ -464,6 +464,13 @@ type EtcdClusterSpec struct {
 	// +optional
 	Storage StorageSpec `json:"storage,omitempty"`
 
+	// PreserveMembersOnSleep prevents deletion of etcdmembers and their PVCs when
+	// putting a cluster to sleep (replicas set to 0). Instead the operator
+	// flips spec.dormant=true on all existing members.
+	// +kubebuilder:default=false
+	// +optional
+	PreserveMembersOnSleep bool `json:"preserveMembersOnSleep,omitempty"`
+
 	// ProgressDeadlineSeconds bounds the time the operator spends trying to
 	// reach a desired state before abandoning the in-flight target and
 	// adopting whatever the user has set as the new spec. Defaults to 600
