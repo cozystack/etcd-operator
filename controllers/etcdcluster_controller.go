@@ -1298,6 +1298,7 @@ func isAuthFailedErr(err error) bool {
 // scaleUp by Patching Spec.Dormant back to false. The CR is never
 // deleted across the pause cycle, so no name lookup / Create-by-fixed-
 // name / PVC reparenting is needed.
+// Same logic applies to X→0 transistion when PreserveMembersOnSleep is true
 func (r *EtcdClusterReconciler) scaleDown(
 	ctx context.Context,
 	cluster *lll.EtcdCluster,
@@ -1319,6 +1320,7 @@ func (r *EtcdClusterReconciler) scaleDown(
 	// false. Keeping the CR across the pause means no Create-by-fixed-
 	// name on resume, no PVC reparenting, no cross-resource annotation
 	// dance, and no stale status field to sweep.
+	// Same logic applies to X→0 transistion when PreserveMembersOnSleep is true
 	if cluster.Status.Observed != nil && cluster.Status.Observed.Replicas == 0 && (len(members) == 1 || cluster.Spec.PreserveMembersOnSleep) {
 		if !victim.Spec.Dormant {
 			original := victim.DeepCopy()
