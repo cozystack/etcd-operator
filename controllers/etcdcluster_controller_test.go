@@ -1504,6 +1504,77 @@ func TestScaleDown_OneToZeroPatchesDormant(t *testing.T) {
 	}
 }
 
+// TestScaleDown_ManyToZeroPatchesDormant covers the scale-to-zero
+// "pause" path with etcdmember preservation. When desired=0 and
+// PreserveMembersOnSleep=true, scaleDown must Patch Spec.Dormant=true
+// on the all existing members rather than delete them. The members CRs
+// (and their PVCs owner-refs) stay in place; the
+// member controller's dormant gate handles deleting the Pod.
+func TestScaleDown_ManyToZeroPatchesDormant(t *testing.T) {
+	ctx := context.Background()
+	now := metav1.Now()
+	oldT := metav1.NewTime(now.Add(-2 * time.Hour))
+	midT := metav1.NewTime(now.Add(-1 * time.Hour))
+	cluster := &lll.EtcdCluster{
+		ObjectMeta: metav1.ObjectMeta{Name: "test", Namespace: "ns"},
+		Spec: lll.EtcdClusterSpec{
+			Replicas:               ptrInt32(0),
+			Version:                "3.5.17",
+			Storage:                lll.StorageSpec{Size: quickQty(t, "1Gi")},
+			PreserveMembersOnSleep: true,
+		},
+		Status: lll.EtcdClusterStatus{
+			ClusterToken: "ns-test-x",
+			ClusterID:    "deadbeef",
+			Observed: &lll.ObservedClusterSpec{
+				Replicas: 0, Version: "3.5.17", Storage: lll.StorageSpec{Size: quickQty(t, "1Gi")},
+			},
+			ProgressDeadline: &metav1.Time{Time: metav1.Now().Add(time.Hour)},
+		},
+	}
+	members := []lll.EtcdMember{
+		{
+			ObjectMeta: metav1.ObjectMeta{Name: "test-0", Namespace: "ns", CreationTimestamp: oldT, Labels: memberLabels("test", "test-0")},
+			Spec:       lll.EtcdMemberSpec{ClusterName: "test", InitialCluster: "x", Bootstrap: true},
+		},
+		{
+			ObjectMeta: metav1.ObjectMeta{Name: "test-1", Namespace: "ns", CreationTimestamp: midT, Labels: memberLabels("test", "test-1")},
+			Spec:       lll.EtcdMemberSpec{ClusterName: "test", InitialCluster: "x"},
+		},
+		{
+			ObjectMeta: metav1.ObjectMeta{Name: "test-2", Namespace: "ns", CreationTimestamp: now, Labels: memberLabels("test", "test-2")},
+			Spec:       lll.EtcdMemberSpec{ClusterName: "test", InitialCluster: "x"},
+		},
+	}
+	objs := []client.Object{cluster}
+	for i := range members {
+		m := members[i]
+		objs = append(objs, &m)
+	}
+	c, _ := newTestClient(t, objs...)
+	r := &EtcdClusterReconciler{Client: c, Scheme: testScheme(t), EtcdClientFactory: factoryReturning(newFakeEtcd(0xdead))}
+
+	// scaleDown handles the most recent member first, therfore we go in
+	// decreasing order to check test-2 then test-1 and finally test-0
+	for i := 2; i >= 0; i-- {
+		if _, err := r.scaleDown(ctx, cluster, members); err != nil {
+			t.Fatalf("scaleDown: %v", err)
+		}
+		// remove the member that was put to sleep
+		members = members[1:]
+
+		// The CRs must still exist (no Delete on X→0), with Spec.Dormant=true.
+		got := mustGet(t, c, fmt.Sprintf("test-%d", i), "ns", &lll.EtcdMember{})
+
+		if !got.Spec.Dormant {
+			t.Fatalf("scaleDown X→0 must Patch Spec.Dormant=true; got Dormant=%v on member test-%d.", got.Spec.Dormant, i)
+		}
+		if !got.DeletionTimestamp.IsZero() {
+			t.Fatalf("CRs must NOT have a DeletionTimestamp after X→0; the pause keeps the CRs alive")
+		}
+	}
+}
+
 // TestScaleUp_WakesFromDormant covers the scale-back-up path. When a
 // dormant member exists and scaleUp runs, it must Patch
 // Spec.Dormant=false on that member rather than create anything. The

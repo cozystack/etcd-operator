@@ -1244,6 +1244,13 @@ spec:
                     minimum: 1
                     type: integer
                 type: object
+              preserveMembersOnSleep:
+                default: false
+                description: |-
+                  PreserveMembersOnSleep prevents deletion of etcdmembers and their PVCs when
+                  putting a cluster to sleep (replicas set to 0). Instead the operator
+                  flips spec.dormant=true on all existing members.
+                type: boolean
               progressDeadlineSeconds:
                 default: 600
                 description: |-
