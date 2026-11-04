@@ -241,7 +241,7 @@ Required SANs on the per-cluster peer cert: both `*.<cluster>.<ns>.svc` AND `*.<
 
 Server cert EKU **must include `serverAuth` AND `clientAuth`** (the etcd grpc-gateway loopback presents the server cert as a client cert when self-dialing; the server's `--trusted-ca-file` then verifies it with `ExtKeyUsageClientAuth`). Peer cert EKU must include both because peer is symmetric. Operator-client cert needs only `clientAuth`.
 
-The `spec.tls` subtree is immutable post-create — flipping TLS on or off on an existing cluster is delete-and-recreate.
+The `spec.tls` subtree is immutable post-create — flipping TLS on or off on an existing cluster is delete-and-recreate. The one permitted change is handing the material over from these Secrets to operator-managed cert-manager issuance; see [Handing TLS over to the operator](operations.md#handing-tls-over-to-the-operator).
 
 ## Image versions
 
