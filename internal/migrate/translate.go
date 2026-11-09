@@ -289,6 +289,7 @@ func translatePodTemplate(pt legacy.PodTemplate, out *lll.EtcdCluster, plan *Res
 	ps := pt.Spec
 	out.Spec.Affinity = ps.Affinity
 	out.Spec.TopologySpreadConstraints = ps.TopologySpreadConstraints
+	out.Spec.Tolerations = ps.Tolerations
 
 	// Carry pull secrets so the new operator can still pull from a private
 	// (e.g. air-gapped) registry. v1alpha2 grew spec.imagePullSecrets, so
@@ -332,7 +333,6 @@ func translatePodTemplate(pt legacy.PodTemplate, out *lll.EtcdCluster, plan *Res
 		"initContainers":                len(ps.InitContainers) > 0,
 		"volumes":                       len(ps.Volumes) > 0,
 		"nodeSelector":                  len(ps.NodeSelector) > 0,
-		"tolerations":                   len(ps.Tolerations) > 0,
 		"serviceAccountName":            ps.ServiceAccountName != "",
 		"securityContext":               ps.SecurityContext != nil && !equality.Semantic.DeepEqual(*ps.SecurityContext, corev1.PodSecurityContext{}),
 		"priorityClassName":             ps.PriorityClassName != "",

@@ -858,6 +858,7 @@ func (r *EtcdMemberReconciler) buildPod(member *lll.EtcdMember, clusterFormed bo
 			Subdomain:                 memberServiceName(member),
 			Affinity:                  member.Spec.Affinity,
 			TopologySpreadConstraints: member.Spec.TopologySpreadConstraints,
+			Tolerations:               member.Spec.Tolerations,
 			ImagePullSecrets:          member.Spec.ImagePullSecrets,
 			InitContainers:            initContainers,
 			// etcd and the restore agent never call the Kubernetes API, so

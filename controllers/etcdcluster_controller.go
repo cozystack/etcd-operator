@@ -449,6 +449,7 @@ func (r *EtcdClusterReconciler) bootstrap(
 				AdditionalMetadata:        cluster.Status.Observed.AdditionalMetadata,
 				Affinity:                  cluster.Status.Observed.Affinity,
 				TopologySpreadConstraints: cluster.Status.Observed.TopologySpreadConstraints,
+				Tolerations:               cluster.Status.Observed.Tolerations,
 				Options:                   cluster.Status.Observed.Options,
 				ImagePullSecrets:          cluster.Status.Observed.ImagePullSecrets,
 				Bootstrap:                 true,
@@ -854,6 +855,7 @@ func (r *EtcdClusterReconciler) scaleUp(
 			AdditionalMetadata:        cluster.Status.Observed.AdditionalMetadata,
 			Affinity:                  cluster.Status.Observed.Affinity,
 			TopologySpreadConstraints: cluster.Status.Observed.TopologySpreadConstraints,
+			Tolerations:               cluster.Status.Observed.Tolerations,
 			Options:                   cluster.Status.Observed.Options,
 			ImagePullSecrets:          cluster.Status.Observed.ImagePullSecrets,
 			Bootstrap:                 false,
@@ -2138,6 +2140,7 @@ func snapshotSpecIntoObserved(cluster *lll.EtcdCluster) {
 		Resources:                 cluster.Spec.Resources,
 		Affinity:                  cluster.Spec.Affinity,
 		TopologySpreadConstraints: cluster.Spec.TopologySpreadConstraints,
+		Tolerations:               cluster.Spec.Tolerations,
 		AdditionalMetadata:        cluster.Spec.AdditionalMetadata,
 		Options:                   cluster.Spec.Options,
 		ImagePullSecrets:          cluster.Spec.ImagePullSecrets,
@@ -2160,6 +2163,7 @@ func specEqualsObserved(cluster *lll.EtcdCluster) bool {
 		equality.Semantic.DeepEqual(o.Resources, cluster.Spec.Resources) &&
 		equality.Semantic.DeepEqual(o.Affinity, cluster.Spec.Affinity) &&
 		equality.Semantic.DeepEqual(o.TopologySpreadConstraints, cluster.Spec.TopologySpreadConstraints) &&
+		equality.Semantic.DeepEqual(o.Tolerations, cluster.Spec.Tolerations) &&
 		equality.Semantic.DeepEqual(o.AdditionalMetadata, cluster.Spec.AdditionalMetadata) &&
 		equality.Semantic.DeepEqual(o.Options, cluster.Spec.Options) &&
 		equality.Semantic.DeepEqual(o.ImagePullSecrets, cluster.Spec.ImagePullSecrets)

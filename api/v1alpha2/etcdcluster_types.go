@@ -548,6 +548,16 @@ type EtcdClusterSpec struct {
 	// +optional
 	TopologySpreadConstraints []corev1.TopologySpreadConstraint `json:"topologySpreadConstraints,omitempty"`
 
+	// Tolerations lets member Pods schedule onto tainted nodes (for example
+	// a dedicated platform node pool). Passed straight through to each
+	// member Pod's spec.tolerations. Tolerations only permit scheduling onto
+	// tainted nodes; pair them with affinity to steer members there.
+	//
+	// Updates take effect on newly-created members (scale-up, replacement);
+	// the operator does not roll existing Pods to apply a change in place.
+	// +optional
+	Tolerations []corev1.Toleration `json:"tolerations,omitempty"`
+
 	// Options carries etcd server tuning flags (backend quota,
 	// auto-compaction, raft snapshot count) passed to each member's
 	// command line. A closed typed set — see EtcdOptions for why there
@@ -621,6 +631,11 @@ type ObservedClusterSpec struct {
 	// for member Pods. Latched with the rest of the target spec.
 	// +optional
 	TopologySpreadConstraints []corev1.TopologySpreadConstraint `json:"topologySpreadConstraints,omitempty"`
+
+	// Tolerations is the locked target tolerations for member Pods.
+	// Latched with the rest of the target spec.
+	// +optional
+	Tolerations []corev1.Toleration `json:"tolerations,omitempty"`
 
 	// AdditionalMetadata is the locked target extra labels/annotations
 	// stamped onto objects created for this cluster. Latched with the rest

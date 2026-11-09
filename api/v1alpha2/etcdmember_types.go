@@ -115,6 +115,12 @@ type EtcdMemberSpec struct {
 	// +optional
 	TopologySpreadConstraints []corev1.TopologySpreadConstraint `json:"topologySpreadConstraints,omitempty"`
 
+	// Tolerations mirrors EtcdCluster.spec.tolerations at the time this
+	// member was created. Passed straight to the Pod's spec.tolerations at
+	// build time.
+	// +optional
+	Tolerations []corev1.Toleration `json:"tolerations,omitempty"`
+
 	// Options mirrors EtcdCluster.spec.options at the time this member
 	// was created. The member controller renders the set fields as etcd
 	// command-line flags at Pod-build time; existing members are not
