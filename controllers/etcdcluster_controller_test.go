@@ -3340,6 +3340,12 @@ func TestBootstrap_PropagatesSchedulingAndMetadataToSeed(t *testing.T) {
 		TopologyKey:       "topology.kubernetes.io/zone",
 		WhenUnsatisfiable: corev1.DoNotSchedule,
 	}}
+	tols := []corev1.Toleration{{
+		Key:      "feature.node.kubernetes.io/dedicated-node",
+		Operator: corev1.TolerationOpEqual,
+		Value:    "platform",
+		Effect:   corev1.TaintEffectNoSchedule,
+	}}
 	cluster := &lll.EtcdCluster{
 		ObjectMeta: metav1.ObjectMeta{Name: "test", Namespace: "ns"},
 		Spec: lll.EtcdClusterSpec{
@@ -3348,6 +3354,7 @@ func TestBootstrap_PropagatesSchedulingAndMetadataToSeed(t *testing.T) {
 			Storage:                   lll.StorageSpec{Size: quickQty(t, "1Gi")},
 			Affinity:                  aff,
 			TopologySpreadConstraints: tsc,
+			Tolerations:               tols,
 			AdditionalMetadata: &lll.AdditionalMetadata{
 				Labels:      map[string]string{"cozystack.io/tenant": "foo"},
 				Annotations: map[string]string{"example.com/note": "bar"},
@@ -3369,6 +3376,9 @@ func TestBootstrap_PropagatesSchedulingAndMetadataToSeed(t *testing.T) {
 	if !equality.Semantic.DeepEqual(got.Status.Observed.TopologySpreadConstraints, tsc) {
 		t.Errorf("Observed.TopologySpreadConstraints = %+v; want %+v", got.Status.Observed.TopologySpreadConstraints, tsc)
 	}
+	if !equality.Semantic.DeepEqual(got.Status.Observed.Tolerations, tols) {
+		t.Errorf("Observed.Tolerations = %+v; want %+v", got.Status.Observed.Tolerations, tols)
+	}
 	if got.Status.Observed.AdditionalMetadata == nil ||
 		got.Status.Observed.AdditionalMetadata.Labels["cozystack.io/tenant"] != "foo" {
 		t.Errorf("Observed.AdditionalMetadata not latched: %+v", got.Status.Observed.AdditionalMetadata)
@@ -3387,6 +3397,9 @@ func TestBootstrap_PropagatesSchedulingAndMetadataToSeed(t *testing.T) {
 	}
 	if !equality.Semantic.DeepEqual(seed.Spec.TopologySpreadConstraints, tsc) {
 		t.Errorf("seed Spec.TopologySpreadConstraints = %+v; want %+v", seed.Spec.TopologySpreadConstraints, tsc)
+	}
+	if !equality.Semantic.DeepEqual(seed.Spec.Tolerations, tols) {
+		t.Errorf("seed Spec.Tolerations = %+v; want %+v", seed.Spec.Tolerations, tols)
 	}
 	if seed.Spec.AdditionalMetadata == nil || seed.Spec.AdditionalMetadata.Labels["cozystack.io/tenant"] != "foo" {
 		t.Errorf("seed Spec.AdditionalMetadata not propagated: %+v", seed.Spec.AdditionalMetadata)

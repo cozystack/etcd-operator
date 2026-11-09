@@ -1339,6 +1339,12 @@ func TestBuildPod_AppliesSchedulingAndMetadata(t *testing.T) {
 		TopologyKey:       "topology.kubernetes.io/zone",
 		WhenUnsatisfiable: corev1.DoNotSchedule,
 	}}
+	tols := []corev1.Toleration{{
+		Key:      "feature.node.kubernetes.io/dedicated-node",
+		Operator: corev1.TolerationOpEqual,
+		Value:    "platform",
+		Effect:   corev1.TaintEffectNoSchedule,
+	}}
 	pod := r.buildPod(&lll.EtcdMember{
 		ObjectMeta: metav1.ObjectMeta{Name: "test-0", Namespace: "ns"},
 		Spec: lll.EtcdMemberSpec{
@@ -1346,6 +1352,7 @@ func TestBuildPod_AppliesSchedulingAndMetadata(t *testing.T) {
 			Version:                   "3.5.17",
 			Affinity:                  aff,
 			TopologySpreadConstraints: tsc,
+			Tolerations:               tols,
 			AdditionalMetadata: &lll.AdditionalMetadata{
 				Labels: map[string]string{
 					"cozystack.io/tenant": "foo",
@@ -1362,6 +1369,9 @@ func TestBuildPod_AppliesSchedulingAndMetadata(t *testing.T) {
 	}
 	if !equality.Semantic.DeepEqual(pod.Spec.TopologySpreadConstraints, tsc) {
 		t.Errorf("pod topologySpreadConstraints = %+v, want %+v", pod.Spec.TopologySpreadConstraints, tsc)
+	}
+	if !equality.Semantic.DeepEqual(pod.Spec.Tolerations, tols) {
+		t.Errorf("pod tolerations = %+v, want %+v", pod.Spec.Tolerations, tols)
 	}
 	if got := pod.Labels["cozystack.io/tenant"]; got != "foo" {
 		t.Errorf("additional label not merged: cozystack.io/tenant = %q, want foo", got)

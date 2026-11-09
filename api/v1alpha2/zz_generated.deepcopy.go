@@ -292,6 +292,13 @@ func (in *EtcdClusterSpec) DeepCopyInto(out *EtcdClusterSpec) {
 			(*in)[i].DeepCopyInto(&(*out)[i])
 		}
 	}
+	if in.Tolerations != nil {
+		in, out := &in.Tolerations, &out.Tolerations
+		*out = make([]v1.Toleration, len(*in))
+		for i := range *in {
+			(*in)[i].DeepCopyInto(&(*out)[i])
+		}
+	}
 	if in.Options != nil {
 		in, out := &in.Options, &out.Options
 		*out = new(EtcdOptions)
@@ -709,6 +716,13 @@ func (in *EtcdMemberSpec) DeepCopyInto(out *EtcdMemberSpec) {
 			(*in)[i].DeepCopyInto(&(*out)[i])
 		}
 	}
+	if in.Tolerations != nil {
+		in, out := &in.Tolerations, &out.Tolerations
+		*out = make([]v1.Toleration, len(*in))
+		for i := range *in {
+			(*in)[i].DeepCopyInto(&(*out)[i])
+		}
+	}
 	if in.Options != nil {
 		in, out := &in.Options, &out.Options
 		*out = new(EtcdOptions)
@@ -963,6 +977,13 @@ func (in *ObservedClusterSpec) DeepCopyInto(out *ObservedClusterSpec) {
 	if in.TopologySpreadConstraints != nil {
 		in, out := &in.TopologySpreadConstraints, &out.TopologySpreadConstraints
 		*out = make([]v1.TopologySpreadConstraint, len(*in))
+		for i := range *in {
+			(*in)[i].DeepCopyInto(&(*out)[i])
+		}
+	}
+	if in.Tolerations != nil {
+		in, out := &in.Tolerations, &out.Tolerations
+		*out = make([]v1.Toleration, len(*in))
 		for i := range *in {
 			(*in)[i].DeepCopyInto(&(*out)[i])
 		}

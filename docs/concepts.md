@@ -252,7 +252,7 @@ These rules live in the CRD itself; the apiserver enforces them with no separate
 
 ## Pod scheduling and additional metadata
 
-Three spec fields shape where member Pods land and what metadata the operator's child objects carry. All three are latched through `status.observed` like the rest of the target spec (see [Locking pattern](#locking-pattern)) and apply **at object creation only** — the operator does not roll existing Pods or re-stamp existing objects when they change.
+Four spec fields shape where member Pods land and what metadata the operator's child objects carry. All four are latched through `status.observed` like the rest of the target spec (see [Locking pattern](#locking-pattern)) and apply **at object creation only** — the operator does not roll existing Pods or re-stamp existing objects when they change.
 
 ### `spec.affinity` and `spec.topologySpreadConstraints`
 
@@ -270,6 +270,21 @@ spec:
 ```
 
 Changes take effect on newly-created members (scale-up, replacement). To apply a scheduling change to an existing cluster, delete one Pod at a time and let the operator recreate it with the new constraints.
+
+### `spec.tolerations`
+
+Passed through verbatim to each member Pod's `spec.tolerations`, so members can run on tainted nodes (for example a dedicated platform node pool). Tolerations only *permit* scheduling onto a tainted node; pair them with `spec.affinity` to steer members there:
+
+```yaml
+spec:
+  tolerations:
+    - key: dedicated
+      operator: Equal
+      value: platform
+      effect: NoSchedule
+```
+
+As with the other scheduling fields, a change applies to newly-created members (scale-up, replacement); existing Pods are not rolled.
 
 ### `spec.additionalMetadata`
 
